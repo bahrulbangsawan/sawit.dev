@@ -1,5 +1,6 @@
 //! The server's tools as a whole: every one routed with a description, the diagram tools' names,
-//! the tool count README and the site give, and what the server says when an agent connects.
+//! the tool count README and the site give, and what the server says when an agent connects, in
+//! the room a client keeps for it.
 
 use rmcp::ServerHandler;
 use sawit_core::instances::AppPaths;
@@ -133,6 +134,7 @@ fn every_tool_is_routed() {
         "terminal_read",
         "terminal_input",
         "terminal_close",
+        "canvas_design_guide",
         "canvas_get",
         "canvas_add_elements",
         "canvas_add_diagram",
@@ -219,7 +221,7 @@ fn the_diagram_tools_list_every_type_and_the_old_names_are_deprecated() {
 fn the_readme_and_the_site_give_the_tool_count() {
     let tools = Sawit::router().list_all().len();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    // "117 tools", and the site's stat: "Tools for agents</dt>", then "<dd>117</dd>".
+    // "134 tools", and the site's stat: "Tools for agents</dt>", then "<dd>134</dd>".
     let counts = |text: &str| -> Vec<usize> {
         let mut found = Vec::new();
         for (at, _) in text.match_indices(" tools") {
@@ -269,6 +271,64 @@ fn the_readme_and_the_site_give_the_tool_count() {
         assert!(
             found.iter().all(|&n| n == tools),
             "{place} counts {found:?} tools; sawit-mcp has {tools}"
+        );
+    }
+}
+
+/// Claude Code keeps only the first 4,096 characters of an MCP server's instructions and drops the
+/// rest unseen: a session's copy of Sawit 0.0.8's 4,920-character instructions ended exactly at
+/// character 4,096, and they had since grown to 7,264, so everything from their middle on was
+/// lost. They stay at 4,000 at most, the details being each tool's own description. The one step
+/// an agent must take before designing UI on the canvas, reading canvas_design_guide, is said
+/// within their first 700 characters, where a client that keeps even less still has it.
+#[test]
+fn the_instructions_fit_what_clients_keep_and_name_the_design_guide_first() {
+    let chars = INSTRUCTIONS.chars().count();
+    assert!(
+        chars <= 4000,
+        "the instructions are {chars} characters; Claude Code keeps the first 4,096"
+    );
+    let pointer = "Before you design, build or review UI on the Sawit canvas, read \
+                   canvas_design_guide and follow it.";
+    let at = INSTRUCTIONS
+        .find(pointer)
+        .expect("the design guide's sentence");
+    let ends = INSTRUCTIONS[..at].chars().count() + pointer.chars().count();
+    assert!(
+        ends <= 700,
+        "the design guide's sentence ends at character {ends}"
+    );
+    let named = INSTRUCTIONS.matches("canvas_design_guide").count();
+    assert_eq!(named, 1, "{INSTRUCTIONS}");
+}
+
+/// The instructions' databases line gives D1 and SQLite only what their tools take: creating,
+/// dropping, truncating, refreshing, backing up and importing CSV refuse them (PostgreSQL only).
+#[test]
+fn the_instructions_say_what_d1_and_sqlite_take() {
+    let line = INSTRUCTIONS
+        .lines()
+        .find(|line| line.starts_with("- Databases:"))
+        .expect("the databases line");
+    let (postgres, rest) = line
+        .split_once("D1 and SQLite:")
+        .expect("D1 and SQLite's part");
+    let lite = rest.split(';').next().unwrap();
+    for only in [
+        "create",
+        "drop",
+        "truncate",
+        "refresh",
+        "back up",
+        "import CSV",
+    ] {
+        assert!(postgres.contains(only), "{only}: {line}");
+        assert!(!lite.contains(only), "{only}: {line}");
+    }
+    for both in ["list", "describe", "export"] {
+        assert!(
+            postgres.contains(both) && lite.contains(both),
+            "{both}: {line}"
         );
     }
 }

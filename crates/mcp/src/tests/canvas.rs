@@ -1,7 +1,61 @@
 //! What agents are told of the canvas tools: that the canvas is the native one, the page each acts
-//! on, the project whose canvas they use, and the canvas file they take.
+//! on, the project whose canvas they use, the canvas file they take, and that Sawit's design
+//! standard comes first.
 
 use crate::{INSTRUCTIONS, Sawit};
+
+/// The canvas tools that work on a canvas: every one but canvas_design_guide, which reads Sawit's
+/// design standard and no canvas.
+fn on_a_canvas(name: &str) -> bool {
+    name.starts_with("canvas_") && name != "canvas_design_guide"
+}
+
+/// The canvas tools that make UI end by pointing at Sawit's design standard, and the guide says
+/// when to read it, to follow it and to run its checklist. It reads no canvas, so it takes no
+/// `file` or `project`, and it only reads.
+#[test]
+fn the_tools_that_make_ui_point_at_the_design_guide() {
+    let tools = Sawit::router().list_all();
+    let tool = |name: &str| tools.iter().find(|tool| tool.name == name).expect(name);
+    let said = |name: &str| {
+        tool(name)
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .to_string()
+    };
+    for name in [
+        "canvas_add_elements",
+        "canvas_add_diagram",
+        "canvas_add_mermaid",
+        "canvas_update",
+        "canvas_command",
+        "canvas_commands",
+    ] {
+        let text = said(name);
+        let points = text.ends_with(". Designing UI? Read canvas_design_guide first and follow it");
+        assert!(points, "{name} doesn't point at the guide: {text}");
+    }
+    let guide = said("canvas_design_guide");
+    for words in [
+        "Read it before you design, build or review any UI on the canvas",
+        "follow it",
+        "run its checklist before you say a design is done",
+        "`section`",
+    ] {
+        assert!(guide.contains(words), "no {words:?} in {guide}");
+    }
+    let guide = tool("canvas_design_guide");
+    let properties = guide
+        .input_schema
+        .get("properties")
+        .and_then(|p| p.as_object());
+    let names: Vec<&String> = properties.map(|p| p.keys().collect()).unwrap_or_default();
+    assert_eq!(names, ["section"]);
+    let hints = guide.annotations.as_ref().expect("its hints");
+    assert_eq!(hints.read_only_hint, Some(true));
+    assert_eq!(hints.open_world_hint, Some(false));
+}
 
 /// The canvas the tools draw on is the native one, and what an agent is sent says so. Nothing
 /// in it names the web canvas that this one replaced: not a tool's description, not the
@@ -213,7 +267,7 @@ fn agents_are_told_the_canvas_is_their_own_projects() {
         assert!(line.contains(said), "no {said:?} in {line}");
     }
     let tools = Sawit::router().list_all();
-    for tool in tools.iter().filter(|tool| tool.name.starts_with("canvas_")) {
+    for tool in tools.iter().filter(|tool| on_a_canvas(&tool.name)) {
         let properties = tool.input_schema.get("properties").cloned();
         let project = properties.unwrap_or_default()["project"]["description"].clone();
         let project = project.as_str().unwrap_or_default();
@@ -231,7 +285,7 @@ fn agents_are_told_the_canvas_is_their_own_projects() {
 #[test]
 fn every_canvas_tool_takes_a_file_and_the_instructions_say_so() {
     let tools = Sawit::router().list_all();
-    let canvas_tools = tools.iter().filter(|tool| tool.name.starts_with("canvas_"));
+    let canvas_tools = tools.iter().filter(|tool| on_a_canvas(&tool.name));
     let without: Vec<&str> = canvas_tools
         .filter(|tool| {
             let properties = tool.input_schema.get("properties");

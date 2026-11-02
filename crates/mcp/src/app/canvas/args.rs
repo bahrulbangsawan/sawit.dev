@@ -111,6 +111,15 @@ pub struct CanvasCommandsArgs {
     pub project: Option<String>,
 }
 
+/// canvas_design_guide's arguments: the guide reads no canvas.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasDesignGuideArgs {
+    #[schemars(
+        description = "A heading of the guide, such as Typography: only that section, with the Checklist section after it. A name no heading has lists the headings. Default: the whole guide"
+    )]
+    pub section: Option<String>,
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasExportArgs {
     #[schemars(description = "svg (default) or png")]

@@ -97,35 +97,37 @@ pub fn main() -> std::process::ExitCode {
 /// Text returned by one tool call at most; longer output is cut with a note.
 const MAX_OUTPUT: usize = 100_000;
 
-/// What the server tells agents when they connect.
+/// What the server tells agents when they connect: an overview, the details being each tool's
+/// own. Claude Code keeps only the first 4,096 characters of a server's instructions, so they
+/// stay at 4,000 at most, and the step an agent designing UI takes first comes first.
 pub const INSTRUCTIONS: &str = "\
-Sawit is a macOS developer workbench. These tools work without the Sawit app running:
-- Instances: local PostgreSQL servers managed by Sawit (list/create/start/stop/restart/remove, logs, port checks, installed binaries).
-- Databases: detect every reachable database, list/create/drop databases, describe schemas and tables, `query` (always read-only) and `execute_sql` (read-write: can modify data), saved connections, writing DATABASE_URL to a project's .env; export tables or queries to CSV/Excel, pg_dump backups, CSV imports, drop/truncate (with confirm) and refresh relations. Cloudflare D1 (a Workers project's local SQLite files and remote databases) and SQLite files are targets too, by the ids detect_databases gives with project_dir.
-- Diagrams: render_diagram draws a diagram written in Mermaid syntax to SVG with Pele (https://pele.run, built in and offline; mermaid.js isn't used), any type Pele draws: flowchart, swimlane, sequence, class, state, ER, gantt, git graph, pie, mindmap, kanban, timeline, journey, quadrant, XY, requirement, sankey, architecture, C4, block, agentflow, railroad, tree view, Cynefin, Wardley, event modeling, use case, Venn, Ishikawa, packet, radar, treemap, info (not ZenUML). schema_diagram draws a database schema as Mermaid, DBML or SVG. render_mermaid and canvas_add_mermaid are the old names of render_diagram and canvas_add_diagram.
-- Ports: list listening dev servers and stop them.
-- Cloudflare Local Explorer: local_explorer finds the explorers Workers dev servers (wrangler dev, vite with the Cloudflare plugin, cf dev) serve at http://localhost:<port>/cdn-cgi/local/explorer, the project's Workers, their bindings and whether the installed Wrangler or Vite plugin has it; local_explorer_request calls its API on loopback (GET reads; POST, PUT, PATCH and DELETE write local data and need confirm: true).
-- Network: diagnose the internet connection, ping a host.
-- SSH: saved servers and ~/.ssh/config hosts; add/update/remove, probe, run a non-interactive command.
-- Run: a project's scripts (package.json, Makefile, …) and saved run commands.
+Sawit is a macOS developer workbench. Before you design, build or review UI on the Sawit canvas, read canvas_design_guide and follow it.
+These tools work without the Sawit app running:
+- Instances: local PostgreSQL servers Sawit manages (create, start, stop, logs, …).
+- Databases: detect; PostgreSQL: list, describe, create, drop, truncate, refresh, export, back up, import CSV; D1 and SQLite: list, describe, export; `query` (always read-only), `execute_sql` (read-write); saved connections, DATABASE_URL in .env. `target`: an instance or connection name (list_connections), or an id from detect_databases.
+- Diagrams: render_diagram draws Mermaid syntax to SVG with Pele (built in, offline); schema_diagram draws a database schema.
+- Ports: listening dev servers; stop them.
+- Cloudflare Local Explorer: local_explorer finds Workers dev servers' explorers; local_explorer_request calls their API.
+- Network: diagnose the connection, ping a host.
+- SSH: saved and ~/.ssh/config hosts: add, update, remove, probe, run a command.
+- Run: a project's scripts (package.json, Makefile, …) and saved commands.
 - Git: status, log, diff, show, branches, stage/unstage, commit, switch.
 - Prompts: the prompt library (with {{variables}}).
 - Files: text search in a folder.
-- Config files: the Config Files panel's list (shell startup files, and every coding agent's config files on this Mac and in the project), as paths and what each is, never contents: list_config_files.
-- Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …), what is installed (and where) and what has a newer release, installing with prerequisites, upgrading and uninstalling (confirm=true).
-- MCP servers: the MCP page catalog and the AI clients on this Mac; install or remove a server in a client's config (local servers and the remote bridge run with npx, pnpm dlx, bunx or yarn dlx: package_manager).
-- New project: the New Project page's stack builder (Better-T-Stack, create-better-t-stack 3.49.0): stack_options lists every category, option and preset and the default stack; stack_check resolves a stack by the CLI's flag names (what the compatibility rules change, every disabled option and why, the command); stack_create creates the project (confirm=true), in a Sawit terminal that opens it as a project when the app runs, else here.
-- Skills: the Skills page catalog of agent skill packs (Superpowers, Cloudflare, MCP Apps, …) and which agents on this Mac have each; install, update or remove one for chosen agents, with the skills CLI (package_manager), a Claude Code plugin or a clone and copy.
-These control the running Sawit app (start it with launch_app; app_state shows windows, tabs and terminals):
-- app_*: open files/folders, show panels, layout, tabs, pages (canvas, MCP, tools, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
-- GitHub: Sawit's GitHub features run on the user's one GitHub sign-in in the app, which no tool can do for them. app_state's `github` says whether they have signed in (signed_in, login); while they haven't, app_open_page github shows them the sign-in card and says to sign in to GitHub in Sawit first.
-- terminal_*: run commands in Sawit's terminal and read their output, split a pane to run something beside it (terminal_split), type keys (ctrl-c), close tabs or panes. terminal_run, terminal_split, app_run_script and app_ssh_connect return the terminal (tab) and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal, which stays in front (app_state lists tabs and panes, and the coding agent, such as Claude Code, running in each). terminal_input and terminal_split need the tab, and a split tab needs its pane; terminal_read without a tab reads the pane the user has in front, and terminal_close without a pane closes the whole tab. terminal_close ends what runs there: while a program runs or the user types there it needs confirm: true.
-- canvas_*: the Sawit canvas: list, clear and export SVG/PNG the page on show; add shapes/stickies/arrows, and diagrams in Mermaid syntax as editable shapes (canvas_add_diagram; charts as one picture); update and delete layers by id, on any page; load another canvas in place of every page. They use your project's canvas (.nyawit/canvas.sawit), or the .sawit file named by `file` (a design file, say), in a canvas tab of its own. They also work on the saved file when the app is closed, and keep what they clear, load over or delete in backups beside it (.bak, .del.bak), which canvas_load reads back.
-- canvas_command: run any command of the canvas engine by id with its parameters (board.sticky, node.set, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
-- browser_*: a browser tab (WebKit) to check the app being built: navigate (default the project's dev server), snapshot the page as an outline with element refs, click/hover/type/press keys/select/scroll by ref or CSS selector, wait for text, screenshot, read console errors and network requests, evaluate JS, resize to a device, read the user's annotations, inspect an element's design, read the page's design system, export it as DESIGN.md + tokens + assets. Take a new browser_snapshot after the page changes; refs reset.
-- keymap_*: the key bindings, as the Keymap Editor shows them: keymap_list says what a key does or which key runs an action, keymap_bind and keymap_unbind change the user's bindings (they write keymap.json again without its comments, so a file with comments needs confirm: true). They need the app: the default keys live in it.
-Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost window. The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas, even while the user looks at another project of the window.
-Targets: database tools take a Sawit instance name or a saved connection name (see list_connections).";
+- Config files: list_config_files lists shell and agent config files (paths, never contents).
+- Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …): install, upgrade, uninstall.
+- MCP servers: the MCP page catalog; install or remove a server in an AI client's config.
+- New project: stack_options, stack_check and stack_create build a Better-T-Stack project.
+- Skills: the Skills page's skill packs and which agents have each; install, update or remove one.
+These need the running app (launch_app starts it; app_state shows windows, tabs and terminals):
+- app_*: open files and folders, panels, layout, tabs, pages (canvas, MCP, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
+- GitHub: only the user can sign in to GitHub in Sawit; app_state's `github` says if they have.
+- terminal_*: run commands in Sawit's terminal (terminal_split: beside one), read output, type keys, close tabs or panes. terminal_run, terminal_split, app_run_script and app_ssh_connect return the tab and `pane` they used: pass both to terminal_read, terminal_input and terminal_close, since the user may be typing in another terminal (app_state lists them).
+- canvas_*: the Sawit canvas: list, clear and export SVG/PNG the page on show; add shapes, stickies, arrows and Mermaid diagrams (canvas_add_diagram); update and delete layers by id, on any page; load another canvas in place of every page. They use your project's canvas (.nyawit/canvas.sawit), or the .sawit file named by `file`. They also work on the saved file when the app is closed, and keep what they clear, load over or delete in backups beside it (.bak, .del.bak).
+- canvas_command: run any canvas engine command by id (board.sticky, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
+- browser_*: a browser tab (WebKit) to check the app being built: navigate, snapshot (an outline with element refs), act by ref or selector, screenshot, console, network, JS, devices, the user's annotations, the page's design. Snapshot again after the page changes: refs reset.
+- keymap_*: read and change the key bindings (keymap_list, keymap_bind, keymap_unbind). They need the app: the default keys live in it.
+Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost. The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas, even while the user looks at another project of the window.";
 
 #[derive(Debug, Clone)]
 pub struct Sawit {

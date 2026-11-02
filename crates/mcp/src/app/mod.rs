@@ -19,8 +19,9 @@ use sawit_core::app_control::{self, Command, Request};
 use serde_json::Value;
 
 pub use canvas::{
-    CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs, CanvasElementsArgs, CanvasExportArgs,
-    CanvasLoadArgs, CanvasMermaidArgs, CanvasTargetArgs, CanvasUpdateArgs,
+    CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs, CanvasDesignGuideArgs,
+    CanvasElementsArgs, CanvasExportArgs, CanvasLoadArgs, CanvasMermaidArgs, CanvasTargetArgs,
+    CanvasUpdateArgs,
 };
 pub use launch::LaunchArgs;
 pub use panels::{

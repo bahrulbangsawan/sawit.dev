@@ -1,10 +1,12 @@
 //! The canvas tools. Each runs an op of `sawit_board::ops` on a canvas: the one the running app
 //! shows for the project, or for a canvas file an agent names, and with the app closed the stored
-//! canvas file itself ([`dispatch`]).
+//! canvas file itself ([`dispatch`]). canvas_design_guide reads none: it answers with Sawit's
+//! design standard ([`guide`]), which the tools that make UI point agents at.
 
 mod args;
 mod dispatch;
 mod files;
+mod guide;
 mod stored;
 #[cfg(test)]
 mod tests;
@@ -18,14 +20,23 @@ use sawit_board::store;
 use serde_json::{Value, json};
 
 pub use args::{
-    CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs, CanvasElementsArgs, CanvasExportArgs,
-    CanvasLoadArgs, CanvasMermaidArgs, CanvasTargetArgs, CanvasUpdateArgs,
+    CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs, CanvasDesignGuideArgs,
+    CanvasElementsArgs, CanvasExportArgs, CanvasLoadArgs, CanvasMermaidArgs, CanvasTargetArgs,
+    CanvasUpdateArgs,
 };
 use dispatch::command_list;
 use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
 
 use super::{base64_decode, pretty};
 use crate::{Sawit, blocking, fail, ok, tri};
+
+/// The sentence that ends the description of each canvas tool that makes UI: Sawit's design
+/// standard comes first.
+macro_rules! design_guide_first {
+    () => {
+        "Designing UI? Read canvas_design_guide first and follow it"
+    };
+}
 
 /// What `canvas_add_diagram` says it does, and `canvas_add_mermaid` after the word that it is the
 /// old name. How each type comes in is `sawit_board::mermaid::WAYS`.
@@ -43,7 +54,8 @@ macro_rules! canvas_add_diagram_says {
              diagrams as shapes over one picture of their frame (tracks, axes, regions, sets); \
              charts whose shapes are their data (journey, pie, gantt, xychart, sankey, radar, \
              treemap, info) as one picture. Icons and turned text come in as small pictures. \
-             Answers the ids of what it drew. For an SVG file of a diagram use render_diagram"
+             Answers the ids of what it drew. For an SVG file of a diagram use render_diagram. ",
+            design_guide_first!()
         )
     };
 }
@@ -51,15 +63,32 @@ macro_rules! canvas_add_diagram_says {
 #[tool_router(router = canvas_router, vis = "pub(super)")]
 impl Sawit {
     #[tool(
+        description = "Sawit's design standard for UI on the canvas, as Markdown: the SKILL.md of the Canvas Design skill Sawit ships. Read it before you design, build or review any UI on the canvas, follow it, and run its checklist before you say a design is done. `section` (a heading, such as Typography) gives that section with the checklist. Works without the app"
+    )]
+    async fn canvas_design_guide(
+        &self,
+        Parameters(a): Parameters<CanvasDesignGuideArgs>,
+    ) -> CallToolResult {
+        let text = tri!(guide::text());
+        match guide::answer(text, a.section.as_deref()) {
+            Ok(answer) => ok(answer),
+            Err(e) => fail(e),
+        }
+    }
+
+    #[tool(
         description = "List the top-level layers of the canvas's page on show: id, type, position, size, text, color and what a connector joins. For the other pages and nested layers use canvas_command: page.list lists the pages, node.get {id} reads a page's or a layer's own layers, and page.select shows another page (with the app closed, only for the rest of one command.batch). Works from the saved file when the app isn't running; the page on show is then the one last saved"
     )]
     async fn canvas_get(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
         self.canvas_get_tool(a).await
     }
 
-    #[tool(
-        description = "Draw on Sawit's canvas: add shapes, stickies, labels, text and arrows (arrows bind to shapes by id). Shapes and stickies with no backgroundColor come in sticky yellow. Opens the canvas tab when the app is running"
-    )]
+    #[tool(description = concat!(
+        "Draw on Sawit's canvas: add shapes, stickies, labels, text and arrows (arrows bind to \
+         shapes by id). Shapes and stickies with no backgroundColor come in sticky yellow. Opens \
+         the canvas tab when the app is running. ",
+        design_guide_first!()
+    ))]
     async fn canvas_add_elements(
         &self,
         Parameters(a): Parameters<CanvasElementsArgs>,
@@ -97,7 +126,10 @@ impl Sawit {
         self.canvas_add_diagram_tool(a).await
     }
 
-    #[tool(description = "Change canvas elements by id: position, size, colors, text")]
+    #[tool(description = concat!(
+        "Change canvas elements by id: position, size, colors, text. ",
+        design_guide_first!()
+    ))]
     async fn canvas_update(&self, Parameters(a): Parameters<CanvasUpdateArgs>) -> CallToolResult {
         match self
             .canvas(
@@ -241,16 +273,27 @@ impl Sawit {
         }
     }
 
-    #[tool(
-        description = "Run one command of the canvas engine by its id, with its parameters as JSON: board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply is the command's result, and a command the engine refuses is an error. canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file, so nothing carries over between calls (no undo, no selection, no view): pass ids, or run the steps in one command.batch. A command that deletes layers (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas file as <file>.del.bak first, as canvas_delete does"
-    )]
+    #[tool(description = concat!(
+        "Run one command of the canvas engine by its id, with its parameters as JSON: \
+         board.sticky {x, y, text}, node.set, align.left, edit.undo, view.zoomFit, ... The reply \
+         is the command's result, and a command the engine refuses is an error. canvas_commands \
+         lists the ids, and with a filter what each takes. With the app closed each call starts \
+         from the saved file, so nothing carries over between calls (no undo, no selection, no \
+         view): pass ids, or run the steps in one command.batch. A command that deletes layers \
+         (edit.delete, edit.cut, page.delete, ...) keeps the board they were on beside the canvas \
+         file as <file>.del.bak first, as canvas_delete does. ",
+        design_guide_first!()
+    ))]
     async fn canvas_command(&self, Parameters(a): Parameters<CanvasCommandArgs>) -> CallToolResult {
         self.canvas_command_tool(a).await
     }
 
-    #[tool(
-        description = "List the commands canvas_command runs: the id and label of each. The parameters each takes make the full list too long to return at once, so pass `filter` (board., align, sticky, ...) to get the matching commands with theirs"
-    )]
+    #[tool(description = concat!(
+        "List the commands canvas_command runs: the id and label of each. The parameters each \
+         takes make the full list too long to return at once, so pass `filter` (board., align, \
+         sticky, ...) to get the matching commands with theirs. ",
+        design_guide_first!()
+    ))]
     async fn canvas_commands(
         &self,
         Parameters(a): Parameters<CanvasCommandsArgs>,

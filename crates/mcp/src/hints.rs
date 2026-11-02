@@ -50,6 +50,7 @@ const READ_ONLY: &[&str] = &[
     "app_open_diagram",
     "app_open_prompt",
     "terminal_read",
+    "canvas_design_guide",
     "canvas_get",
     "canvas_commands",
     "browser_snapshot",

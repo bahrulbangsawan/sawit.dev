@@ -4,6 +4,7 @@
 mod backups;
 mod export;
 mod files;
+mod guide;
 mod load;
 mod running;
 mod saves;
