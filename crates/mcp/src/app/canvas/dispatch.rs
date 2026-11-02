@@ -1,8 +1,11 @@
 //! Where a canvas op runs: on the canvas of the running app, or with the app closed on the stored
 //! canvas file; and what the tools that read the canvas answer.
 
+use std::collections::BTreeMap;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use rmcp::model::CallToolResult;
 use sawit_board::store;
@@ -22,6 +25,49 @@ use crate::{Sawit, blocking, fail, ok};
 /// the op on the project's canvas: a clear or a deletion meant for a design file would take layers
 /// off the project's board, whose ids the design file's can match ([`app_reads_canvas_files`]).
 pub(super) const APP_WITH_CANVAS_FILES: Version = Version(0, 0, 8);
+
+/// The version app_state answered with, by the socket of the app that answered, and that socket
+/// file ([`Listener`]): [`refuse_an_app_without_canvas_files`] asks an app once, rather than
+/// before every op on a canvas file, for an answer that is the app's whole state, which the app
+/// gathers from every window on its UI thread. An app makes its socket anew as it starts, so one
+/// opened again (restarted, or updated and opened) is asked again.
+static APP_VERSIONS: Mutex<BTreeMap<PathBuf, (Listener, String)>> = Mutex::new(BTreeMap::new());
+
+/// The socket file an app listens on, as that app's own: the file's device, inode and change
+/// time, which the socket another app makes at that path doesn't share.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Listener(u64, u64, i64, i64);
+
+impl Listener {
+    /// The socket file at `socket`, if there is one.
+    pub(super) fn of(socket: &Path) -> Option<Self> {
+        let file = std::fs::metadata(socket).ok()?;
+        Some(Self(
+            file.dev(),
+            file.ino(),
+            file.ctime(),
+            file.ctime_nsec(),
+        ))
+    }
+}
+
+/// The version the app that listens on `listener`, at `socket`, answered app_state with, if it
+/// was asked.
+fn known_version(socket: &Path, listener: &Listener) -> Option<String> {
+    let known = APP_VERSIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let (answered, version) = known.get(socket)?;
+    (answered == listener).then(|| version.clone())
+}
+
+/// The socket file a connection reached, to keep what its app says under ([`APP_VERSIONS`]): the
+/// one at the path `before` the connection was made, when it is still the one there `after`. A
+/// socket file unlinked from the path never comes back to it, so the connection, made in
+/// between, reached that file's app. When they differ, another app's socket took the path in
+/// between (`cli::serve` unlinks the old file, then binds its own, so two apps starting at once
+/// can swap it), the connection may have reached either app, and nothing is kept or used.
+pub(super) fn same_listener(before: Option<Listener>, after: Option<Listener>) -> Option<Listener> {
+    before.filter(|before| after.as_ref() == Some(before))
+}
 
 /// What became of a canvas op offered to the app ([`offer`]).
 enum Offered {
@@ -195,8 +241,8 @@ impl Sawit {
 /// a time, reading it to its end before it takes the next, and drops one that sends nothing for
 /// 5 s: a connection is made here right before its request goes on it, with nothing that can wait
 /// on the disk or on a thread in between. The op goes on the connection that found the app
-/// running. With `file`, the app's version (`state`) goes on it first, and the op on a second
-/// ([`refuse_an_app_without_canvas_files`]).
+/// running. With `file`, the app's version (`state`) goes on it first, when it isn't known, and
+/// the op on a second ([`refuse_an_app_without_canvas_files`]).
 fn offer(
     paths: &AppPaths,
     request: impl FnOnce(Command) -> Request,
@@ -204,16 +250,20 @@ fn offer(
     op: Value,
     file: Option<PathBuf>,
 ) -> Offered {
+    let socket = paths.cli_socket();
+    let before = file.as_ref().and_then(|_| Listener::of(&socket));
     let Some(app) = app_control::connect(paths) else {
         return Offered::NotRunning(op, file);
     };
-    let app = match (&file, &state) {
-        (Some(named), Some(state)) => match refuse_an_app_without_canvas_files(app, state, named) {
-            Ok(()) => None,
-            Err(refused) => return Offered::Answered(Err(refused)),
-        },
-        _ => Some(app),
-    };
+    let mut app = Some(app);
+    if let (Some(named), Some(state)) = (&file, &state) {
+        let listener = same_listener(before, Listener::of(&socket));
+        if let Err(refused) =
+            refuse_an_app_without_canvas_files(paths, &mut app, listener, state, named)
+        {
+            return Offered::Answered(Err(refused));
+        }
+    }
     let request = request(Command::Canvas { op, file });
     Offered::Answered(match app {
         Some(app) => app_control::exchange(app, &request, REPLY_TIMEOUT),
@@ -224,16 +274,35 @@ fn offer(
 /// Refuses an op on the canvas file `file`, before it is sent, when the running app is older
 /// than one that runs it there ([`app_reads_canvas_files`]): it would run the op on the
 /// project's canvas. The app's version is the one app_state answers with: `state`, asked on `app`,
-/// a connection to the app. An app updated on disk runs its old version until it restarts,
-/// while an agent started since runs the new sawit-mcp.
-fn refuse_an_app_without_canvas_files(
-    app: UnixStream,
+/// a connection to the app, which that uses up. An app updated on disk runs its old version
+/// until it restarts, while an agent started since runs the new sawit-mcp. Each app is asked
+/// once: when the connection reached the socket file `listener` ([`same_listener`]), the version
+/// that file's app gave is used, and one it gives now kept ([`APP_VERSIONS`]).
+pub(super) fn refuse_an_app_without_canvas_files(
+    paths: &AppPaths,
+    app: &mut Option<UnixStream>,
+    listener: Option<Listener>,
     state: &Request,
     file: &Path,
 ) -> Result<(), String> {
-    let state = app_control::exchange(app, state, REPLY_TIMEOUT)?;
-    let version = state["version"].as_str().unwrap_or("an unknown version");
-    if app_reads_canvas_files(version) {
+    let socket = paths.cli_socket();
+    let known = (listener.as_ref()).and_then(|listener| known_version(&socket, listener));
+    let version = match known {
+        Some(version) => version,
+        None => {
+            let answer = match app.take() {
+                Some(app) => app_control::exchange(app, state, REPLY_TIMEOUT),
+                None => app_control::send(paths, state, REPLY_TIMEOUT),
+            }?;
+            let version = answer["version"].as_str().unwrap_or("an unknown version");
+            if let Some(listener) = listener {
+                let mut known = APP_VERSIONS.lock().unwrap_or_else(PoisonError::into_inner);
+                known.insert(socket, (listener, version.to_string()));
+            }
+            version.to_string()
+        }
+    };
+    if app_reads_canvas_files(&version) {
         return Ok(());
     }
     Err(format!(

@@ -1,14 +1,19 @@
 //! A canvas file an agent names with `file`: a design file or an `.excalidraw` scene, with Sawit
 //! closed and running, and refused when it is no canvas file or the app is too old for it.
 
+use std::os::unix::net::UnixListener;
 use std::sync::mpsc::Receiver;
 
 use rmcp::handler::server::wrapper::Parameters;
 use sawit_core::app_control::{Command, Request};
+use sawit_core::instances::AppPaths;
 use sawit_core::update::Version;
 
 use super::*;
-use crate::app::canvas::dispatch::{APP_WITH_CANVAS_FILES, app_reads_canvas_files};
+use crate::app::canvas::dispatch::{
+    APP_WITH_CANVAS_FILES, Listener, app_reads_canvas_files, refuse_an_app_without_canvas_files,
+    same_listener,
+};
 use crate::app::canvas::files::canvas_file;
 use crate::app::canvas::{
     CanvasDeleteArgs, CanvasElementsArgs, CanvasExportArgs, CanvasTargetArgs,
@@ -249,6 +254,117 @@ async fn an_app_too_old_to_know_a_canvas_file_is_never_sent_an_op_on_one() {
             op: json!({"op": "clear"}),
             file: None
         }
+    );
+}
+
+/// The running app's version is asked once per app, not before every op on a canvas file: its
+/// answer is the app's whole state, gathered from every window on its UI thread. An app opened
+/// again listens on a socket of its own, and is asked again.
+#[tokio::test]
+async fn the_running_apps_version_is_asked_once_per_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let project = project_in(dir.path());
+    let design = project.join("home.sawit");
+    write_design(&design);
+    let state = json!({"version": env!("CARGO_PKG_VERSION"), "windows": []});
+    let got = json!({"ok": true, "elements": []});
+    let get = || {
+        server.canvas_get_tool(CanvasTargetArgs {
+            file: Some(design.display().to_string()),
+            project: None,
+        })
+    };
+    let sent = |asked: &Receiver<Request>| -> Vec<Command> {
+        asked.try_iter().map(|request| request.command).collect()
+    };
+
+    let asked = fake_app_answering(&server.paths, vec![state.clone(), got.clone(), got.clone()]);
+    for _ in 0..2 {
+        let answered = get().await;
+        assert_ne!(answered.is_error, Some(true), "{}", said(&answered));
+    }
+    let commands = sent(&asked);
+    assert!(
+        matches!(
+            commands.as_slice(),
+            [
+                Command::State,
+                Command::Canvas { .. },
+                Command::Canvas { .. }
+            ]
+        ),
+        "{commands:?}"
+    );
+
+    // Sawit quit and opened again, on a socket of its own at that path.
+    std::fs::remove_file(server.paths.cli_socket()).unwrap();
+    let asked = fake_app_answering(&server.paths, vec![state, got]);
+    let answered = get().await;
+    assert_ne!(answered.is_error, Some(true), "{}", said(&answered));
+    let commands = sent(&asked);
+    assert!(
+        matches!(
+            commands.as_slice(),
+            [Command::State, Command::Canvas { .. }]
+        ),
+        "{commands:?}"
+    );
+}
+
+/// A version is kept, and used, only under the socket file that was at the path both before the
+/// connection was made and after it. When another app's socket took the path in between
+/// (`cli::serve` unlinks the old file, then binds its own, so two apps starting at once can swap
+/// it), the connection may have reached either app: the version is asked, kept under neither,
+/// and asked again next time.
+#[test]
+fn a_version_is_kept_only_under_a_socket_that_stayed_put() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths {
+        root: dir.path().join("home"),
+    };
+    let state = json!({"version": env!("CARGO_PKG_VERSION"), "windows": []});
+    let asked = fake_app_answering(&paths, vec![state.clone(), state.clone(), state]);
+    // Another app's socket file, made as an app starting at once would make it.
+    let other = dir.path().join("other.sock");
+    let _other = UnixListener::bind(&other).unwrap();
+    let ours = Listener::of(&paths.cli_socket()).unwrap();
+    let theirs = Listener::of(&other).unwrap();
+    assert_eq!(same_listener(Some(ours), Some(ours)), Some(ours));
+    for (before, after) in [
+        (Some(ours), Some(theirs)),
+        (None, Some(ours)),
+        (Some(ours), None),
+    ] {
+        assert_eq!(
+            same_listener(before, after),
+            None,
+            "{before:?} then {after:?}"
+        );
+    }
+
+    let request = Request {
+        project: None,
+        agent_folder: None,
+        agent: None,
+        command: Command::State,
+    };
+    let file = dir.path().join("home.sawit");
+    let refuse =
+        |listener| refuse_an_app_without_canvas_files(&paths, &mut None, listener, &request, &file);
+    let asked_again = |asked: &Receiver<Request>| asked.recv_timeout(Duration::from_secs(5)).ok();
+    // The socket changed under the connection: asked each time, and kept under neither.
+    for _ in 0..2 {
+        refuse(same_listener(Some(ours), Some(theirs))).unwrap();
+        assert_eq!(asked_again(&asked).map(|r| r.command), Some(Command::State));
+    }
+    // It stayed: asked once, then known.
+    refuse(Some(ours)).unwrap();
+    assert_eq!(asked_again(&asked).map(|r| r.command), Some(Command::State));
+    refuse(Some(ours)).unwrap();
+    assert!(
+        asked.recv_timeout(Duration::from_millis(300)).is_err(),
+        "asked again"
     );
 }
 
