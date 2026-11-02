@@ -229,9 +229,7 @@ fn outline(
     color: Rgba,
     width: f64,
 ) {
-    let lines = shape_lines(doc, id, view)
-        .or_else(|| node_quad(doc, id, view).map(|quad| vec![(quad.to_vec(), true)]));
-    for (points, closed) in lines.into_iter().flatten() {
+    let mut line = |points, closed| {
         out.push(Shape::Outline {
             points,
             closed,
@@ -239,6 +237,14 @@ fn outline(
             width,
             dashed: false,
         });
+    };
+    match shape_lines(doc, id, view) {
+        Some(lines) => lines
+            .into_iter()
+            .for_each(|(points, closed)| line(points, closed)),
+        None => node_quad(doc, id, view)
+            .into_iter()
+            .for_each(|quad| line(quad.to_vec(), true)),
     }
 }
 
