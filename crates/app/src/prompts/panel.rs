@@ -21,7 +21,9 @@ impl EventEmitter<PromptsEvent> for PromptsPanel {}
 const ROW_HEIGHT: f32 = 44.;
 
 pub struct PromptsPanel {
-    store: Entity<PromptStore>,
+    pub(super) store: Entity<PromptStore>,
+    /// The library's backup on GitHub.
+    pub(super) github: super::github::PromptsGitHub,
     search: Entity<InputState>,
     scroll: UniformListScrollHandle,
     copied: Option<String>,
@@ -31,8 +33,13 @@ pub struct PromptsPanel {
 impl PromptsPanel {
     pub fn new(store: Entity<PromptStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search prompts or #tag"));
+        let account = crate::git::account::global(cx);
         let subscriptions = vec![
-            cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.observe(&store, |this, _, cx| {
+                this.library_changed(cx);
+                cx.notify()
+            }),
+            cx.observe(&account, |_, _, cx| cx.notify()),
             cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -40,6 +47,7 @@ impl PromptsPanel {
             }),
         ];
         Self {
+            github: super::github::PromptsGitHub::new(window, cx),
             store,
             search,
             scroll: UniformListScrollHandle::new(),
@@ -272,5 +280,6 @@ impl Render for PromptsPanel {
                         })
                     }),
             )
+            .child(self.render_github(cx))
     }
 }

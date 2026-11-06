@@ -37,7 +37,7 @@ pub struct ShellSyncArgs {
 }
 
 /// The sign-in the app keeps, or why there is none.
-fn token() -> Result<String, String> {
+pub(crate) fn token() -> Result<String, String> {
     match Keychain::user().load() {
         Ok(Some(t)) if !t.trim().is_empty() => Ok(t),
         Ok(_) => Err("Sawit isn't signed in to GitHub. Only the user can sign in: ask them to sign in from Sawit's title bar.".into()),

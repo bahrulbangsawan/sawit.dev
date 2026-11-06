@@ -106,6 +106,8 @@ fn every_tool_is_routed() {
         // config files
         "list_config_files",
         "shell_files_sync",
+        "backup_prompts",
+        "restore_prompts",
         // new project
         "stack_options",
         "stack_check",

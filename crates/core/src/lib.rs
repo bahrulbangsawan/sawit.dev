@@ -39,6 +39,7 @@ pub mod pdf;
 pub mod pgctl;
 pub mod ports;
 pub mod probe;
+pub mod prompt_sync;
 pub mod prompts;
 pub mod recent;
 pub mod rt;

@@ -52,6 +52,7 @@ pub mod network;
 pub mod new_project;
 mod paths;
 pub mod ports;
+pub mod prompt_backup;
 pub mod prompts;
 pub mod sawit_skills;
 pub mod scripts;
@@ -251,6 +252,7 @@ impl Sawit {
             + Self::new_project_router()
             + Self::config_files_router()
             + Self::shell_sync_router()
+            + Self::prompt_backup_router()
             // App-control tools (need the app running).
             + Self::app_router()
             + Self::browser_router()

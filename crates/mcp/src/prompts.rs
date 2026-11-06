@@ -100,13 +100,13 @@ impl Sawit {
         self.paths.root.join("prompts.json")
     }
 
-    fn library(&self) -> Result<Library, String> {
+    pub(crate) fn library(&self) -> Result<Library, String> {
         Library::load(&self.prompts_file()).map_err(|e| {
             format!("{e}\nSawit won't save over prompts.json until it is fixed or moved.")
         })
     }
 
-    async fn save_library(&self, lib: &Library) -> Result<(), String> {
+    pub(crate) async fn save_library(&self, lib: &Library) -> Result<(), String> {
         lib.save(&self.prompts_file()).map_err(|e| e.to_string())?;
         self.notify(Store::Prompts).await;
         Ok(())

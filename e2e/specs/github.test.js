@@ -18,3 +18,11 @@ sawitTest("github: signed out, the shell files footer offers only the sign-in", 
   const save = await win.findAll({ role: "button", name: /Save Shell Files to GitHub/ });
   assert.equal(save.length, 0, "Save Shell Files to GitHub shows while signed out");
 });
+
+sawitTest("github: signed out, the prompts sidebar offers the sign-in to back up", async (ctx) => {
+  const { win } = ctx;
+  await ctx.call({ cmd: "show_panel", panel: "prompts" });
+  await win.waitFor({ role: "button", name: "Sign In to Back Up Prompts" });
+  const backUp = await win.findAll({ role: "button", name: "Back Up Now" });
+  assert.equal(backUp.length, 0, "Back Up Now shows while signed out");
+});

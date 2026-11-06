@@ -71,6 +71,9 @@ const READ_ONLY: &[&str] = &[
 /// shell command, a script, JavaScript, an install script. MCP's `destructiveHint`, which a client
 /// may act on by asking first. Every other tool that isn't [`READ_ONLY`] only adds.
 const DESTRUCTIVE: &[&str] = &[
+    // restore replaces prompts here with GitHub's; a backup can replace GitHub's (keep_local).
+    "restore_prompts",
+    "backup_prompts",
     // download replaces the shell files here with GitHub's (backed up first).
     "shell_files_sync",
     "stop_instance",
@@ -172,6 +175,8 @@ const ADDS: &[&str] = &[
 /// may be a server elsewhere (a saved connection), a web page, or whatever a command they run
 /// reaches. MCP's `openWorldHint`; the others stay on this Mac.
 const OPEN_WORLD: &[&str] = &[
+    "backup_prompts",
+    "restore_prompts",
     "shell_files_sync",
     "create_instance",
     "detect_databases",

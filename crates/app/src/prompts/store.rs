@@ -144,6 +144,12 @@ impl PromptStore {
         cx.notify();
     }
 
+    /// Puts a prompt restored from GitHub in place of the one with its id, or adds it.
+    pub fn put(&mut self, prompt: Prompt, cx: &mut Context<Self>) {
+        sawit_core::prompt_sync::merge(&mut self.library, prompt);
+        self.changed(cx);
+    }
+
     pub fn mark_used(&mut self, id: &str, cx: &mut Context<Self>) {
         self.library.mark_used(id, now());
         self.changed(cx);

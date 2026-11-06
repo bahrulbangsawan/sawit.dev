@@ -1,5 +1,6 @@
 //! Prompt manager: a library of saved prompts (sidebar + one tab per prompt).
 
+mod github;
 mod panel;
 mod store;
 mod view;
