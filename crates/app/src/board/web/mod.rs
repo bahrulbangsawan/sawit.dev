@@ -243,11 +243,11 @@ pub(super) struct Live {
     pub menu_since: Option<Instant>,
     /// The selection before it went live, which comes back when it leaves.
     pub selection: Vec<NodeId>,
-}
     /// The user entered it (double-click, Enter, the route bar's Live): the page has the keyboard
     /// while the canvas has GPUI's. An agent's `web` op enters without it: the user's keys stay
     /// where they are ([`crate::browser::engine::keyboard`]).
     pub keys: bool,
+}
 
 /// What the engines' handlers and the page tell the canvas.
 pub(super) enum WebMsg {
