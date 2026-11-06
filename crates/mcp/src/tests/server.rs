@@ -106,6 +106,12 @@ fn every_tool_is_routed() {
         // config files
         "list_config_files",
         "shell_files_sync",
+        "list_agent_accounts",
+        "agent_account_usage",
+        "use_agent_account",
+        "open_agent_account",
+        "agent_account_sessions",
+        "sync_agent_settings",
         "backup_prompts",
         "restore_prompts",
         "list_permissions",
