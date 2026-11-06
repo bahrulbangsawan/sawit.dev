@@ -35,13 +35,20 @@ use script::{Kind, Task};
 pub(in crate::board) enum Speed {
     #[default]
     Full,
-    // Chosen in the canvas's menu and over MCP (the build animation setting).
-    #[allow(dead_code)]
     Fast,
     Off,
 }
 
 impl Speed {
+    /// The replays' speed for the user's setting.
+    pub fn of(setting: crate::agents::BuildAnimation) -> Self {
+        match setting {
+            crate::agents::BuildAnimation::Full => Speed::Full,
+            crate::agents::BuildAnimation::Fast => Speed::Fast,
+            crate::agents::BuildAnimation::Off => Speed::Off,
+        }
+    }
+
     pub fn factor(self) -> f64 {
         match self {
             Speed::Full => 1.0,
@@ -124,6 +131,9 @@ type Drawn = (Arc<Document>, Vec<(NodeId, Stage)>, Arc<Document>);
 pub(in crate::board) struct Replays {
     pub lanes: Vec<Lane>,
     pub speed: Speed,
+    /// When [`Replays::sounds`] last looked, and the snaps since.
+    pub(super) heard: Option<Instant>,
+    pub(super) snapped: Vec<(super::sound::Sound, (f64, f64))>,
     drawn: Option<Drawn>,
 }
 
@@ -144,7 +154,7 @@ impl Replays {
         now: Instant,
         reduce: bool,
     ) {
-        if reduce || self.speed == Speed::Off {
+        if self.speed == Speed::Off {
             return;
         }
         let shown = |r: &[f64; 4]| {
@@ -154,9 +164,19 @@ impl Replays {
             .into_iter()
             .filter(|t| shown(&t.rect))
             .collect();
+        if reduce {
+            // Reduced motion: nothing drags, types or travels; what was added fades in, at once.
+            let fades = tasks
+                .into_iter()
+                .filter(|t| !matches!(t.kind, Kind::Delete | Kind::Update { .. }))
+                .map(|t| Task::new(t.node, Kind::Fade, t.rect, None));
+            self.fade(look, page, after, fades.collect(), now);
+            return;
+        }
         self.schedule(look, page, after, tasks, start_at, now);
     }
 
+    #[allow(clippy::too_many_arguments)]
     /// Plays a screen's changed elements (`tasks`, [`blueprint::tasks`]) for `look` over its
     /// frame on `page`, in the document `doc`.
     pub fn play_screen(
@@ -173,6 +193,41 @@ impl Replays {
             return;
         }
         self.schedule(look, page, doc, tasks, start_at, now);
+    }
+
+    /// Reduced motion's play: every one of `tasks` fades in together, from `now`.
+    fn fade(
+        &mut self,
+        look: &Look,
+        page: NodeId,
+        after: &Arc<Document>,
+        tasks: Vec<Task>,
+        now: Instant,
+    ) {
+        if tasks.is_empty() {
+            return;
+        }
+        self.lanes.retain(|l| l.look.id != look.id);
+        let timed = tasks
+            .into_iter()
+            .map(|task| {
+                let end = now + task.time;
+                Timed {
+                    from: (task.rect[0], task.rect[1]),
+                    travel: now,
+                    start: now,
+                    end,
+                    task,
+                }
+            })
+            .collect();
+        self.lanes.push(Lane {
+            look: look.clone(),
+            page,
+            after: after.clone(),
+            tasks: timed,
+            level: 0,
+        });
     }
 
     /// Puts `tasks` in `look`'s lane after what it still plays, which speeds up or snaps.
@@ -205,6 +260,13 @@ impl Replays {
             lane.level = 0;
         } else {
             lane.level += 1;
+            if lane.level >= SNAP_AFTER {
+                let at = lane
+                    .tasks
+                    .first()
+                    .map_or((0.0, 0.0), |t| (t.task.rect[0], t.task.rect[1]));
+                self.snapped.push((super::sound::Sound::Snap, at));
+            }
             catch_up(lane, now, factor);
         }
         lane.look = look.clone();
@@ -344,7 +406,7 @@ impl Replays {
 /// typed to the last whole word; `None` once it is whole (or for a task that shows its layer as
 /// it plays: an image wiping in, a moved layer, a deletion).
 fn stage(t: &Timed, now: Instant) -> Option<Stage> {
-    if t.task.cover {
+    if t.task.cover || matches!(t.task.kind, Kind::Fade) {
         return None;
     }
     let progress = t.progress(now);

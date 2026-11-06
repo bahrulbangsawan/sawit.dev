@@ -113,7 +113,26 @@ pub const SAWIT_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "file.exportFramesPdf",
     ),
     (EXPORT_REACT, "Export as React…", "File", EXPORT_HTML),
+    (BUILD_FULL, "Build Animation: Full", "View", MAXIMIZE),
+    (BUILD_FAST, "Build Animation: Fast (2×)", "View", BUILD_FULL),
+    (BUILD_OFF, "Build Animation: Off", "View", BUILD_FAST),
+    (BUILD_SOUND, "Build Sounds", "View", BUILD_OFF),
+    (
+        SUBAGENT_CURSORS,
+        "Show Subagents as Separate Cursors",
+        "View",
+        BUILD_SOUND,
+    ),
 ];
+
+/// How agents' builds play on the canvas (Full, Fast, Off), whether they click, and whether a
+/// session's subagents show as cursors of their own: Sawit's own settings, which the app keeps and
+/// ticks in the View menu.
+pub const BUILD_FULL: &str = "sawit.buildFull";
+pub const BUILD_FAST: &str = "sawit.buildFast";
+pub const BUILD_OFF: &str = "sawit.buildOff";
+pub const BUILD_SOUND: &str = "sawit.buildSound";
+pub const SUBAGENT_CURSORS: &str = "sawit.subagentCursors";
 
 /// Maximize Canvas: the canvas fills the window, or the layout comes back. Sawit's own command,
 /// which the app carries out; its keys are the workspace's (⌃⌘3).

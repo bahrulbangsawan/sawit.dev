@@ -202,7 +202,7 @@ fn the_drawn_copy_hides_what_isnt_placed_and_snaps_on_undo() {
 }
 
 #[test]
-fn fast_halves_the_play_and_off_and_reduced_motion_play_nothing() {
+fn fast_halves_the_play_off_plays_nothing_and_reduced_motion_only_fades() {
     let (before, after, page) = diff(|b| {
         make(
             b,
@@ -235,5 +235,9 @@ fn fast_halves_the_play_and_off_and_reduced_motion_play_nothing() {
         "{full:?} {fast:?}"
     );
     assert_eq!(length(Speed::Off, false), None);
-    assert_eq!(length(Speed::Full, true), None);
+    assert_eq!(
+        length(Speed::Full, true),
+        Some(std::time::Duration::from_millis(150)),
+        "reduced motion: a short fade only"
+    );
 }

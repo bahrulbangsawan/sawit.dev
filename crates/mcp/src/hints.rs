@@ -142,6 +142,7 @@ const DESTRUCTIVE: &[&str] = &[
     "canvas_screen_write",
     "canvas_screen_export",
     "canvas_handoff",
+    "canvas_settings",
     "browser_navigate",
     "browser_click",
     "browser_type",

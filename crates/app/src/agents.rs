@@ -98,6 +98,9 @@ pub(crate) struct Agents {
     shown: bool,
     /// A session's lanes show as cursors of their own ([`lanes_shown`]).
     lanes: bool,
+    /// How agents' builds play on the canvas, and whether they click ([`build_animation`]).
+    build: BuildAnimation,
+    sound: bool,
     /// Agents' cursors stay in the screenshots agents take of the page.
     in_screenshots: bool,
     /// Where [`shown`] is kept between launches; `None` in tests, where it lasts the run.
@@ -112,6 +115,8 @@ impl Default for Agents {
             roster: Roster::default(),
             shown: true,
             lanes: true,
+            build: BuildAnimation::Full,
+            sound: false,
             in_screenshots: false,
             file: None,
             epoch: Instant::now(),
@@ -138,7 +143,135 @@ pub fn keep_setting(file: PathBuf, cx: &mut App) {
     let agents = cx.default_global::<Agents>();
     agents.shown = saved["show_agent_cursors"].as_bool().unwrap_or(true);
     agents.in_screenshots = saved["agent_cursors_in_screenshots"].as_bool() == Some(true);
+    agents.lanes = saved["subagent_cursors"].as_bool().unwrap_or(true);
+    agents.sound = saved["build_sound"].as_bool() == Some(true);
+    agents.build = (saved["build_animation"].as_str())
+        .and_then(BuildAnimation::parse)
+        .unwrap_or_default();
     agents.file = Some(file);
+}
+
+/// How agents' builds play on the canvas: as designed, twice as fast, or not at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuildAnimation {
+    #[default]
+    Full,
+    Fast,
+    Off,
+}
+
+impl BuildAnimation {
+    pub fn id(self) -> &'static str {
+        match self {
+            BuildAnimation::Full => "full",
+            BuildAnimation::Fast => "fast",
+            BuildAnimation::Off => "off",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "full" | "on" => Some(BuildAnimation::Full),
+            "fast" | "2x" => Some(BuildAnimation::Fast),
+            "off" | "none" => Some(BuildAnimation::Off),
+            _ => None,
+        }
+    }
+}
+
+/// How agents' builds play ([`BuildAnimation`]): Full unless the user or an agent chose another.
+pub fn build_animation(cx: &App) -> BuildAnimation {
+    cx.try_global::<Agents>()
+        .map(|agents| agents.build)
+        .unwrap_or_default()
+}
+
+/// Whether agents' builds make their short clicks: off unless turned on.
+pub fn build_sound(cx: &App) -> bool {
+    cx.try_global::<Agents>().is_some_and(|agents| agents.sound)
+}
+
+/// Changes the build settings given (the canvas's View menu, or an agent's `canvas_settings`),
+/// keeps them, redraws, and answers them all as JSON.
+pub fn set_build(
+    build: Option<BuildAnimation>,
+    sound: Option<bool>,
+    lanes: Option<bool>,
+    cx: &mut App,
+) -> Value {
+    let agents = cx.default_global::<Agents>();
+    if let Some(build) = build {
+        agents.build = build;
+    }
+    if let Some(sound) = sound {
+        agents.sound = sound;
+    }
+    if let Some(lanes) = lanes {
+        agents.lanes = lanes;
+    }
+    save(cx);
+    crate::cli::set_menus(cx);
+    cx.refresh_windows();
+    build_settings(cx)
+}
+
+/// Whether the View menu ticks Sawit's build setting `id` (`None` for any other item).
+pub fn build_checked(id: &str, cx: &App) -> Option<bool> {
+    use sawit_board::policy::{BUILD_FAST, BUILD_FULL, BUILD_OFF, BUILD_SOUND, SUBAGENT_CURSORS};
+    Some(match id {
+        BUILD_FULL => build_animation(cx) == BuildAnimation::Full,
+        BUILD_FAST => build_animation(cx) == BuildAnimation::Fast,
+        BUILD_OFF => build_animation(cx) == BuildAnimation::Off,
+        BUILD_SOUND => build_sound(cx),
+        SUBAGENT_CURSORS => lanes_shown(cx),
+        _ => return None,
+    })
+}
+
+/// Carries out the View menu's build setting `id`; whether it was one.
+pub fn run_build_setting(id: &str, cx: &mut App) -> bool {
+    use sawit_board::policy::{BUILD_FAST, BUILD_FULL, BUILD_OFF, BUILD_SOUND, SUBAGENT_CURSORS};
+    match id {
+        BUILD_FULL => set_build(Some(BuildAnimation::Full), None, None, cx),
+        BUILD_FAST => set_build(Some(BuildAnimation::Fast), None, None, cx),
+        BUILD_OFF => set_build(Some(BuildAnimation::Off), None, None, cx),
+        BUILD_SOUND => set_build(None, Some(!build_sound(cx)), None, cx),
+        SUBAGENT_CURSORS => set_build(None, None, Some(!lanes_shown(cx)), cx),
+        _ => return false,
+    };
+    true
+}
+
+/// The build settings as JSON: `{build_animation, build_sound, subagent_cursors}`.
+pub fn build_settings(cx: &App) -> Value {
+    json!({
+        "build_animation": build_animation(cx).id(),
+        "build_sound": build_sound(cx),
+        "subagent_cursors": lanes_shown(cx),
+    })
+}
+
+/// Writes the agents' settings to their file, off the UI thread.
+fn save(cx: &mut App) {
+    let agents = cx.default_global::<Agents>();
+    let Some(file) = agents.file.clone() else {
+        return;
+    };
+    let text = json!({
+        "show_agent_cursors": agents.shown,
+        "agent_cursors_in_screenshots": agents.in_screenshots,
+        "subagent_cursors": agents.lanes,
+        "build_animation": agents.build.id(),
+        "build_sound": agents.sound,
+    })
+    .to_string();
+    cx.background_spawn(async move {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = sawit_core::files::write_atomic(&file, text.as_bytes());
+    })
+    .detach();
 }
 
 /// Whether agents' cursors stay in the screenshots agents take of the page: only when the user
@@ -159,20 +292,7 @@ pub fn shown(cx: &App) -> bool {
 pub fn toggle(cx: &mut App) {
     let agents = cx.default_global::<Agents>();
     agents.shown = !agents.shown;
-    if let Some(file) = agents.file.clone() {
-        let text = json!({
-            "show_agent_cursors": agents.shown,
-            "agent_cursors_in_screenshots": agents.in_screenshots,
-        })
-        .to_string();
-        cx.background_spawn(async move {
-            if let Some(dir) = file.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            let _ = sawit_core::files::write_atomic(&file, text.as_bytes());
-        })
-        .detach();
-    }
+    save(cx);
     crate::cli::set_menus(cx);
     cx.refresh_windows();
 }

@@ -126,9 +126,11 @@ fn add_items(
             } => {
                 // The keys as the keymap binds them now, not FigCraft's in the model.
                 let keys = crate::board::command_keys(id, cx);
+                // Sawit's build settings tick as the app holds them.
+                let checked = crate::agents::build_checked(id, cx).or(*checked);
                 menu.item(
                     menu_item(id, label, keys.as_deref(), view.clone())
-                        .checked(*checked == Some(true))
+                        .checked(checked == Some(true))
                         .disabled(!*enabled),
                 )
             }

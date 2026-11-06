@@ -335,6 +335,25 @@ pub struct CanvasHandoffArgs {
     pub project: Option<String>,
 }
 
+/// `canvas_settings`'s arguments: how agents' builds play on the canvas.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasSettingsArgs {
+    #[schemars(
+        description = "How the canvas plays an agent's build: full (boxes dragged out, text typed, lines drawn), fast (the same at 2×), or off (results appear at once). Turn it down for long batch jobs"
+    )]
+    pub build_animation: Option<String>,
+    #[schemars(description = "Short synthesised clicks while a build plays (off by default)")]
+    pub sound: Option<bool>,
+    #[schemars(
+        description = "Whether a session's subagents (each `agent` id, each open work) show as cursors of their own (on by default)"
+    )]
+    pub subagent_cursors: Option<bool>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
 /// `canvas_add_routes`'s arguments: which dev server, which of its routes, at which viewports.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasAddRoutesArgs {

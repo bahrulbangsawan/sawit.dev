@@ -73,6 +73,14 @@ pub(super) fn run_ui(
         }
         sawit_board::policy::ADD_ROUTES => view.open_routes_dialog(cx),
         sawit_board::policy::MAXIMIZE => cx.emit(super::ToggleCanvasMaximize),
+        _ if crate::agents::build_checked(id, cx).is_some() => {
+            crate::agents::run_build_setting(id, cx);
+            // Off ends what plays now.
+            if crate::agents::build_animation(cx) == crate::agents::BuildAnimation::Off {
+                view.agents.replays.cancel();
+            }
+            cx.notify();
+        }
         _ if sawit_board::policy::is_handoff(id) => {
             use super::screens::SendTo;
             let frames = view

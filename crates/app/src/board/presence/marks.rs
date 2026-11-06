@@ -166,10 +166,8 @@ impl Presence {
             });
         }
         // What the lanes' replays draw: boxes being dragged out, carets, rubber bands.
-        if !reduce {
-            for lane in self.replays.lanes.iter().filter(|l| l.page == page) {
-                super::replay::marks::lane_marks(lane, now, &screen, &mut marks);
-            }
+        for lane in self.replays.lanes.iter().filter(|l| l.page == page) {
+            super::replay::marks::lane_marks(lane, now, &screen, &mut marks);
         }
         // The most recent agent last, on top.
         let mut agents: Vec<_> = self.agents.iter().collect();

@@ -61,7 +61,7 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std"
 # NSWorkspace: whether VoiceOver or Switch Control is on (workspace::screen_reader_on). mesurer's
 # captures (a snapshot's CGImage encoded off the main thread) and its colour sampler
 # (NSColorSampler, the colour in sRGB): browser::engine::{capture, color}.
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-core-graphics", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSResponder", "NSView", "NSWindow", "NSEvent", "NSWorkspace", "NSAccessibility", "NSColor", "NSColorSampler", "NSColorSpace"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-core-graphics", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSResponder", "NSView", "NSWindow", "NSEvent", "NSWorkspace", "NSAccessibility", "NSColor", "NSColorSampler", "NSColorSpace", "NSSound"] }
 # A snapshot's pixels (CGImage), handed off the main thread: encoded for mesurer's captures, and
 # drawn into BGRA bitmaps for the canvas's web frames (UI screens, and URL frames behind
 # SAWIT_WEB_FRAMES=1; browser::engine::web_frame).

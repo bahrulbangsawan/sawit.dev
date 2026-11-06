@@ -116,3 +116,40 @@ fn three_open_works_of_one_session_are_three_cursors(cx: &mut TestAppContext) {
     });
     assert!(cursors(&view, cx).len() >= 3);
 }
+
+/// An agent turns builds Off for a batch (the `settings` op, `canvas_settings`): its ops then
+/// play nothing, and Full brings the play back; Fast halves it.
+#[gpui_kit::test]
+fn the_build_setting_turns_the_play_down(cx: &mut TestAppContext) {
+    let tmp = Scratch::new("agent-build-setting");
+    cx.update(gpui_kit::init);
+    let (_window, view) = open_in_window(cx, &tmp.0.join("canvas.sawit"));
+    next_frame(cx, &view, None);
+    let add = |y: f64| json!({"op": "add", "elements": [{"type": "rectangle", "x": 20, "y": y, "width": 60, "height": 40}]});
+    let off = run(
+        &view,
+        json!({"op": "settings", "build_animation": "off"}),
+        cx,
+    );
+    assert_eq!(off["build_animation"], "off", "{off}");
+    run(&view, add(0.0), cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.agents.replays.lanes.is_empty(), "nothing plays")
+    });
+    let full = run(
+        &view,
+        json!({"op": "settings", "build_animation": "full", "sound": true}),
+        cx,
+    );
+    assert_eq!(full["build_sound"], true);
+    run(&view, add(100.0), cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.agents.replays.lanes.len(), 1, "it plays")
+    });
+    let bad = run(
+        &view,
+        json!({"op": "settings", "build_animation": "slow"}),
+        cx,
+    );
+    assert_eq!(bad["ok"], false);
+}

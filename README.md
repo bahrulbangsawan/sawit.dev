@@ -67,7 +67,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (162 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (163 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn/ui and shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop, Design to Code and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -990,6 +990,15 @@ their own cursor.
   queue, so several play at once. An op plays for 2.5 s at most; an agent that sends more while it plays speeds up
   (2×, 4×, then it snaps). What you select, undo or edit, what another op changes and what is off screen show whole at
   once.
+- **Settings.** View ▸ Build Animation: Full, Fast (2×) or Off; Build Sounds (off by default: short clicks made at
+  runtime, quiet, panned to where the cursor is); Show Subagents as Separate Cursors (on by default). Sawit keeps them
+  in `agent-cursors.json`. An agent can turn the animation down for a long batch job with `canvas_settings`. Under
+  Reduce motion pointers jump and nothing drags or types: what an agent adds fades in. Screen readers hear one
+  sentence per change of each agent, never one per animated element. Only what is on screen plays, and the canvas
+  stops redrawing when nothing plays.
+- **Screens build live too.** After an agent writes a screen and its page settles, Sawit takes a blueprint of the
+  page in the screen's own web view and plays only what changed since the last write (boxes, text, images, repeated
+  cards) over the frame, each element fading from its cover to the live page, which you can click at once.
 - **Many agents in one session.** Claude Code's subagents, a workflow's agents and parallel calls share their parent's
   `sawit-mcp`, so they used to share one cursor. Each canvas tool that draws takes `agent` (`"header"` or `{id: "header",
   name: "Header agent"}`): each id is a cursor of its own, in its own colour (none reused while on screen), with its
@@ -1518,7 +1527,7 @@ sawit github token --header                  # the GitHub sign-in as {"Authoriza
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 162 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 163 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.

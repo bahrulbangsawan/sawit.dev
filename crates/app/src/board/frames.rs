@@ -181,6 +181,7 @@ impl BoardView {
         board.session.tool.labels = names;
         // Over it all, the agents at work on the page on show.
         let pictured = self.web_pictured();
+        self.play_build_sounds(&shown_view, now, cx);
         let agents = self.agents_paint(&doc, &shown_view, page, &pictured, now, window, cx);
         let web = self.web_prepaint(bounds, window, cx);
         let painting = Painting {

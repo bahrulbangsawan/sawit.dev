@@ -62,7 +62,7 @@ pub(in crate::board) fn tool_of(kind: &Kind) -> Tool {
         Kind::Line => Tool::Pen,
         Kind::Duplicate { .. } => Tool::Duplicate,
         Kind::Update { .. } => Tool::Hand,
-        Kind::Delete | Kind::Image => Tool::Arrow,
+        Kind::Delete | Kind::Image | Kind::Fade => Tool::Arrow,
         _ => Tool::Crosshair,
     }
 }
@@ -270,6 +270,17 @@ fn task_marks(
                 alpha: 1.0,
                 dashed: false,
                 fill: 0.0,
+            });
+        }
+        Kind::Fade => {
+            // A white veil over the element, lifting.
+            let veil: Hsla = gpui_kit::hsla(0.0, 0.0, 1.0, 1.0);
+            marks.push(Mark::Box {
+                rect: screen(r),
+                color: veil,
+                alpha: 0.0,
+                dashed: false,
+                fill: (1.0 - p) as f32 * 0.9,
             });
         }
         Kind::Delete => {

@@ -35,6 +35,9 @@ impl BoardView {
         if let Some(refused) = agent_refusal(&op) {
             return Answer::Now(json!({"ok": false, "error": refused}));
         }
+        if op.get("op").and_then(Value::as_str) == Some("settings") {
+            return Answer::Now(self.agent_settings(&op, cx));
+        }
         let op = match self.agent_screen_op(op, &look, cx) {
             Ok(answer) => return answer,
             Err(op) => op,
@@ -148,6 +151,25 @@ impl BoardView {
         crate::agents::meet(Some(&look.identity.in_lane(lane)), cx)
     }
 
+    /// The `settings` op (`{build_animation?, sound?, subagent_cursors?}`): an agent changes how
+    /// builds play, for a long batch say; answers the settings now. Off ends what plays.
+    fn agent_settings(&mut self, op: &Value, cx: &mut Context<Self>) -> Value {
+        let build = op.get("build_animation").and_then(Value::as_str);
+        let parsed = build.map(crate::agents::BuildAnimation::parse);
+        if let Some(None) = parsed {
+            return json!({"ok": false, "error": "build_animation: full, fast or off"});
+        }
+        let sound = op.get("sound").and_then(Value::as_bool);
+        let lanes = op.get("subagent_cursors").and_then(Value::as_bool);
+        let mut settings = crate::agents::set_build(parsed.flatten(), sound, lanes, cx);
+        if crate::agents::build_animation(cx) == crate::agents::BuildAnimation::Off {
+            self.agents.replays.cancel();
+        }
+        cx.notify();
+        settings["ok"] = json!(true);
+        settings
+    }
+
     /// A placeholder for `look`'s slow op `op` on the page on show ([`ghost_rect`]).
     fn place_ghost(&mut self, op: &Value, look: &Look, now: Instant) -> Option<u64> {
         let ds = self.board()?.session.ds().ok()?;
@@ -237,6 +259,8 @@ impl BoardView {
                 .find(|a| a.look.id == look.id)
                 .and_then(|a| a.at.map(|s| s.point))
                 .unwrap_or_default();
+            self.agents.replays.speed =
+                super::replay::Speed::of(crate::agents::build_animation(cx));
             self.agents
                 .replays
                 .play(look, before, after, page, visible, at, now, reduce);

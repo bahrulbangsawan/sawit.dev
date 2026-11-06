@@ -42,6 +42,7 @@ pub(super) mod pointer;
 pub(super) mod replay;
 mod roster;
 mod rows;
+mod sound;
 mod target;
 mod work;
 mod work_ops;
@@ -386,7 +387,7 @@ impl Presence {
         (self.agents.iter()).any(|a| gliding(a) || touched(a) || fading(a))
             || self.ghosts.iter().any(shimmer)
             || self.works.iter().any(|w| w.animating(now, reduce))
-            || (!reduce && self.replays.active(now))
+            || self.replays.active(now)
     }
 
     /// The agent at work here most recently, while one is: its op in the last

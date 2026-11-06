@@ -11,6 +11,7 @@ mod guide;
 mod handoff;
 mod routes;
 mod screens;
+mod settings;
 mod stored;
 mod tab;
 #[cfg(test)]
@@ -28,7 +29,7 @@ pub use args::{
     CanvasAddRoutesArgs, CanvasBeginArgs, CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs,
     CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasHandoffArgs, CanvasLoadArgs,
     CanvasMermaidArgs, CanvasProgressArgs, CanvasScreenExportArgs, CanvasScreenGetArgs,
-    CanvasScreenWriteArgs, CanvasTargetArgs, CanvasUpdateArgs,
+    CanvasScreenWriteArgs, CanvasSettingsArgs, CanvasTargetArgs, CanvasUpdateArgs,
 };
 use dispatch::{command_list, in_work};
 use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
@@ -403,6 +404,16 @@ impl Sawit {
     ) -> CallToolResult {
         tri!(a.tab_into_file());
         self.canvas_screen_export_tool(a).await
+    }
+
+    #[tool(
+        description = "Read or change how the Sawit canvas plays agents' builds: build_animation full (as designed), fast (2×) or off (results appear at once, for long batch jobs), sound (short clicks, off by default) and subagent_cursors (a cursor per `agent` id and per open work, on by default). Answers the settings now. They are the user's View menu settings: change them only for a reason, and say so. With the app closed they are saved for its next start"
+    )]
+    async fn canvas_settings(
+        &self,
+        Parameters(a): Parameters<CanvasSettingsArgs>,
+    ) -> CallToolResult {
+        self.canvas_settings_tool(a).await
     }
 
     #[tool(

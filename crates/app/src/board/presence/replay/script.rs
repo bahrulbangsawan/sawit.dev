@@ -32,6 +32,8 @@ pub(in crate::board) enum Kind {
     Update { from: [f64; 4] },
     /// A layer taken off, from `rect`.
     Delete,
+    /// Under reduced motion: the element fades in, nothing more.
+    Fade,
 }
 
 /// One element's task: the layer, what plays, its page rect, how long it takes at 1×, and for
@@ -87,6 +89,7 @@ impl Kind {
             Kind::Component { .. } => 300,
             Kind::Update { .. } => 300,
             Kind::Delete => 220,
+            Kind::Fade => 150,
         };
         Duration::from_millis(ms).min(ELEMENT_BUDGET)
     }
