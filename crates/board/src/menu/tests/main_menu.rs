@@ -123,6 +123,8 @@ fn file_menu_follows_the_catalog_under_the_policy() {
             "-",
             "Save",
             "Save as…",
+            "Save to version history…",
+            "Show version history",
             "-",
             "Export…",
             "Export frames to PDF…",
@@ -155,7 +157,8 @@ fn paths_become_nested_submenus() {
         submenu_labels(children_of(&menu, "Text")),
         ["Alignment", "Adjust", "Case"]
     );
-    // A submenu sits where its first item does: Panels follows Soft-proof sRGB and a line.
+    // A submenu sits where its first item does: Panels follows Soft-proof sRGB, Sawit's
+    // Variables… after it, and a line.
     let order = outline(view);
     let outlines = order
         .iter()
@@ -163,7 +166,9 @@ fn paths_become_nested_submenus() {
         .unwrap();
     let panels = order.iter().position(|label| label == "Panels ▸").unwrap();
     assert!(outlines < panels, "{order:?}");
-    assert_eq!(order[panels - 2], "Soft-proof sRGB");
+    assert_eq!(order[panels - 4], "Soft-proof sRGB");
+    assert_eq!(order[panels - 3], "Variables…");
+    assert_eq!(order[panels - 2], "Comments…");
     assert_eq!(order[panels - 1], "-");
     // A submenu keeps its own separators, and loses the hidden items.
     assert_eq!(
@@ -178,8 +183,14 @@ fn paths_become_nested_submenus() {
     );
     assert_eq!(
         ids(children_of(view, "Panels")),
-        ["view.toggleUi", "view.layers", "view.design"],
-        "Reset panel widths, Assets and Prototype are hidden"
+        [
+            "view.toggleUi",
+            "view.layers",
+            "view.assets",
+            "view.design",
+            "view.prototype"
+        ],
+        "Reset panel widths is hidden"
     );
 }
 

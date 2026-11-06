@@ -108,10 +108,11 @@ impl BoardView {
             cx.propagate();
             return;
         };
-        // A command that needs what the canvas has no dialog to ask for (a link's URL) has
-        // nothing to do from a key: the key does nothing, as one with nothing selected does.
-        if menu::NEEDS_INPUT.contains(&command.id.as_str()) {
+        // A command that needs a value (a link's URL) opens its dialog.
+        if sawit_board::prompts::is_prompt(&command.id) {
             cx.stop_propagation();
+            let id = command.id.clone();
+            self.open_prompt(&id, window, cx);
             return;
         }
         let key = pressed.as_ref().map(|(key, mods)| (key.as_str(), *mods));

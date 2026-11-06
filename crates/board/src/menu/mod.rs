@@ -41,7 +41,7 @@ mod enabled;
 mod tests;
 
 use enabled::available;
-pub use enabled::{NEEDS_INPUT, NEEDS_SELECTION, NEVER_ON_THE_CANVAS, applies};
+pub use enabled::{NEEDS_SELECTION, NEVER_ON_THE_CANVAS, applies};
 
 /// One entry of a menu.
 #[derive(Clone, Debug, PartialEq, Eq)]

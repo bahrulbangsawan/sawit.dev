@@ -83,10 +83,13 @@ fn items_that_do_not_apply_now_are_greyed_out() {
     // Undone, it can be done again.
     empty.execute("edit.undo", &json!({})).unwrap();
     assert!(enabled(&main_menu(&empty.session), "edit.redo"));
-    // What needs a dialog the canvas doesn't have, or never applies on a canvas, never is.
+    // What never applies on a canvas never is; what needs a value is, and opens its dialog.
     let selected = board_with_sticky();
     let menu = main_menu(&selected.session);
-    for id in NEEDS_INPUT.iter().chain(NEVER_ON_THE_CANVAS) {
+    for id in crate::prompts::PROMPTS {
+        assert!(applies(&selected.session, id), "{id}");
+    }
+    for id in NEVER_ON_THE_CANVAS {
         assert!(!applies(&selected.session, id), "{id}");
         if ids(&menu).contains(id) {
             assert!(!enabled(&menu, id), "{id}");
@@ -131,7 +134,7 @@ fn needs_selection_is_what_the_engine_refuses_with_nothing_selected() {
     for make in [board as fn() -> BoardDoc, design] {
         let menu_ids = ids(&main_menu(&make().session));
         for id in menu_ids {
-            if is_ui(id) || crate::policy::is_clipboard(id) || NEEDS_INPUT.contains(&id) {
+            if is_ui(id) || crate::policy::is_clipboard(id) || crate::prompts::is_prompt(id) {
                 continue;
             }
             let mut doc = make();
@@ -150,7 +153,7 @@ fn needs_selection_is_what_the_engine_refuses_with_nothing_selected() {
     let shown = ids(&main_menu(&board().session));
     for id in NEEDS_SELECTION
         .iter()
-        .chain(NEEDS_INPUT)
+        .chain(crate::prompts::PROMPTS)
         .chain(NEVER_ON_THE_CANVAS)
     {
         assert!(shown.contains(id), "{id} is in no menu");

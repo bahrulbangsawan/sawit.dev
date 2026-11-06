@@ -276,9 +276,10 @@ pub(super) fn shortcut(
         .filter(|id| !is_hidden(id))
 }
 
-/// Run command `id` for its shortcut, unless Sawit carries it out itself.
+/// Run command `id` for its shortcut, unless Sawit carries it out itself, or it opens a dialog
+/// for its value (`crate::prompts`).
 pub(super) fn run(board: &mut BoardDoc, id: &'static str) -> Result<KeyOutcome, BoardError> {
-    if is_ui(id) || is_clipboard(id) {
+    if is_ui(id) || is_clipboard(id) || crate::prompts::is_prompt(id) {
         return Ok(KeyOutcome::Ui(id));
     }
     // From the keyboard, typing goes on in the new sticky, as in FigCraft's own menus.

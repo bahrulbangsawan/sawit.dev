@@ -51,6 +51,8 @@ pub const NEEDS_SELECTION: &[&str] = &[
     "component.pushChanges",
     "component.restoreMain",
     "object.mask",
+    "edit.setDefaultProperties",
+    "object.setThumbnail",
     "object.releaseMask",
     "image.crop",
     "arrange.front",
@@ -119,20 +121,6 @@ pub const NEEDS_SELECTION: &[&str] = &[
     "vector.reverse",
 ];
 
-/// The commands the menus show that need what the canvas has no dialog to ask for yet: a link's
-/// URL, a page, the new names, an offset, a colour profile, the nudge amounts (ruling P6-C18's
-/// follow-up for input dialogs). Run as a menu item runs them, without it, they only refuse or
-/// read the values back. Their items are greyed out and their keys do nothing until the canvas
-/// asks for it; an agent passes it in the command's parameters.
-pub const NEEDS_INPUT: &[&str] = &[
-    "text.link",
-    "vector.offset",
-    "object.moveToPage",
-    "object.batchRename",
-    "file.colorProfile",
-    "pref.nudge",
-];
-
 /// The commands the menus show that never apply on the canvas: Revert to saved, because the canvas
 /// writes its file as it is edited and never holds unsaved changes to drop (the engine says "the
 /// file was never saved").
@@ -140,8 +128,8 @@ pub const NEVER_ON_THE_CANVAS: &[&str] = &["file.revert"];
 
 /// Whether command `id` applies to what the canvas `s` holds now, so that its menu item is enabled
 /// and its key acts:
-/// - not one that needs input the canvas can't ask for ([`NEEDS_INPUT`]), nor one that never
-///   applies on the canvas ([`NEVER_ON_THE_CANVAS`]);
+/// - not one that never applies on the canvas ([`NEVER_ON_THE_CANVAS`]); one that needs a value
+///   opens its dialog (`crate::prompts`), and applies as any other;
 /// - for a command on the selection ([`NEEDS_SELECTION`]), only with layers selected, or for copy
 ///   and paste and the Text menu's styles while text is edited, which act on its characters;
 /// - Undo and Redo only with a step to take back or do again (an edit of text under way is one);
@@ -149,7 +137,7 @@ pub const NEVER_ON_THE_CANVAS: &[&str] = &["file.revert"];
 ///
 /// Any other command applies.
 pub fn applies(s: &Session, id: &str) -> bool {
-    if NEEDS_INPUT.contains(&id) || NEVER_ON_THE_CANVAS.contains(&id) {
+    if NEVER_ON_THE_CANVAS.contains(&id) {
         return false;
     }
     let ds = s.ds().ok();
