@@ -110,6 +110,18 @@ pub struct TerminalView {
 /// A foreground job and the name of the program it runs.
 type ForegroundKey = (u32, Option<String>);
 
+/// A terminal that goes stops what it started (item 12): its shell's whole process tree, read
+/// now while the shell is still its parent, gets SIGHUP, SIGTERM, then SIGKILL on a thread of its
+/// own. The session drops right after, hanging up the PTY.
+impl Drop for TerminalView {
+    fn drop(&mut self) {
+        if let Some(pid) = self.shell_pid() {
+            let tree = sawit_core::terminal::reap::process_tree(&[pid]);
+            super::panel::ending::stop_trees(tree);
+        }
+    }
+}
+
 impl TerminalView {
     pub fn new(
         session: Session,
@@ -277,6 +289,11 @@ impl TerminalView {
     /// stays the script's: what runs there is read as the script running.
     pub fn idle_shell(&self) -> bool {
         self.at_prompt() && self.remote.is_none() && self.job.is_none()
+    }
+
+    /// The pid of the program the terminal started (its shell), while it runs.
+    pub fn shell_pid(&self) -> Option<u32> {
+        (!self.exited).then(|| self.session.pid()).flatten()
     }
 
     /// The command the shell is running, by process group.

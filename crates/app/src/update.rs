@@ -93,6 +93,7 @@ pub fn restart(cx: &mut App) {
     cx.defer(move |cx| {
         let windows = crate::cli::terminal_panels(cx);
         crate::terminal::end_all(windows, crate::terminal::Ending::Restart, cx, move |cx| {
+            crate::terminal::stop_all_now(&crate::cli::terminal_panels(cx), cx);
             updater.update(cx, |u, cx| u.restart(cx))
         });
     });

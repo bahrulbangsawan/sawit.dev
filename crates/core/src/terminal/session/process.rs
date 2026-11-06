@@ -5,6 +5,15 @@ use std::path::PathBuf;
 use super::Session;
 
 impl Session {
+    /// The pid of the program started in this PTY (the shell), while known.
+    pub fn pid(&self) -> Option<u32> {
+        #[cfg(unix)]
+        if let Some((pid, _)) = &self.foreground {
+            return Some(*pid);
+        }
+        None
+    }
+
     /// Whether the program started in this PTY is in the foreground: for a
     /// shell, it is at its prompt rather than running a command. Always false
     /// where that cannot be told (Windows).

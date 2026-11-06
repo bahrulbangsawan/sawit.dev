@@ -313,8 +313,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Closes the project at `ix` with its tabs, asking first if any has
-    /// unsaved changes. Its terminals keep running, ungrouped.
+    /// Closes the project at `ix` with its tabs and its terminals (item 12), asking first
+    /// ([`closing::question`]) when a file has unsaved changes, its browser has notes not yet
+    /// sent, or one of its terminals runs something: the question lists what would stop.
     pub(super) fn close_project(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.projects.get(ix).and_then(|p| p.root(cx)) else {
             return;
@@ -335,34 +336,18 @@ impl Workspace {
                 _ => 0,
             })
             .sum();
-        if unsaved == 0 && notes == 0 {
+        let running = self.terminal.read(cx).project_terminals(&root, cx).running;
+        let name = crate::tab_groups::project_name(&root);
+        let losing = closing::Losing {
+            unsaved,
+            notes,
+            running,
+        };
+        let Some(question) = closing::question(&name, &losing) else {
             self.remove_project(&root, window, cx);
             return;
-        }
-        let name = crate::tab_groups::project_name(&root);
-        let (message, detail) = if unsaved > 0 {
-            (
-                format!(
-                    "Close {name} with {unsaved} unsaved file{}?",
-                    if unsaved == 1 { "" } else { "s" }
-                ),
-                "Your changes will be lost if you don't save them.".to_string(),
-            )
-        } else {
-            (
-                format!("Close {name} with its browser's annotations?"),
-                crate::browser::notes_lost(notes),
-            )
         };
-        let verb = if unsaved > 0 {
-            "Close and Discard Changes"
-        } else {
-            "Close and Discard Notes"
-        };
-        let answer = crate::confirm::Confirm::new(message, verb)
-            .thing(name.clone())
-            .detail(detail)
-            .ask(window, cx);
+        let answer = question.ask(window, cx);
         cx.spawn_in(window, async move |this, cx| {
             if answer.await {
                 let _ = this.update_in(cx, |this, window, cx| {
@@ -385,6 +370,10 @@ impl Workspace {
             .filter(|&i| self.tabs[i].group.as_deref() == Some(root))
             .collect();
         self.remove_tabs(&closing, cx);
+        // Its terminals close with it, and what they started stops (before the dock hears the
+        // project is gone, which would ungroup them).
+        self.terminal
+            .update(cx, |t, cx| t.close_project(root, window, cx));
         self.projects.remove(ix);
         if self.projects.is_empty() {
             // Keep one, empty, for the Files panel's "Open Folder".
@@ -429,6 +418,8 @@ fn give_keyboard(item: Option<&PaneItem>, home: &FocusHandle, window: &mut Windo
         Some(PaneItem::Server) | None => {}
     }
 }
+
+mod closing;
 
 #[cfg(test)]
 mod tests;

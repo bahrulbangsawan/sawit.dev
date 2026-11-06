@@ -37,20 +37,20 @@ const LISTED: usize = 6;
 /// A question to ask before something destructive. Build it, then [`ask`](Self::ask).
 #[derive(Clone, Debug, Default)]
 pub struct Confirm {
-    title: SharedString,
+    pub(crate) title: SharedString,
     /// The thing, shown in bold where the title names it, and what
     /// [`type_to_confirm`](Self::type_to_confirm) asks for.
-    thing: Option<SharedString>,
-    detail: Option<SharedString>,
+    pub(crate) thing: Option<SharedString>,
+    pub(crate) detail: Option<SharedString>,
     /// What else goes (the running processes a close stops), one per line.
-    items: Vec<SharedString>,
+    pub(crate) items: Vec<SharedString>,
     /// The red button: a specific verb ("Drop Database").
-    verb: SharedString,
+    pub(crate) verb: SharedString,
     /// A second red button, left of the first, for a stronger way to do it ("Delete with
     /// Dependents"): [`Answer::choice`] says which was pressed.
-    second: Option<SharedString>,
+    pub(crate) second: Option<SharedString>,
     /// Whether the red button waits for the thing's name.
-    typed: bool,
+    pub(crate) typed: bool,
 }
 
 impl Confirm {

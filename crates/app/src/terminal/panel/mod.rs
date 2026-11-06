@@ -3,6 +3,7 @@
 //! window's project they started in.
 
 mod control;
+pub(super) mod ending;
 mod groups;
 mod jobs;
 mod open;
@@ -24,6 +25,7 @@ use sawit_core::terminal::{AgentKind, Command, PaneId};
 
 use super::tab::{TabEvent, TerminalTab};
 use super::view::TerminalView;
+pub use ending::stop_all_now;
 use open::shell_name;
 
 pub struct TerminalPanel {

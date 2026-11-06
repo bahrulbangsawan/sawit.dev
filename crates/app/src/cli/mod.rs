@@ -196,7 +196,11 @@ pub fn reopen(cx: &mut App) {
 /// runs something.
 fn quit(cx: &mut App) {
     let windows = terminal_panels(cx);
-    crate::terminal::end_all(windows, crate::terminal::Ending::Quit, cx, |cx| cx.quit());
+    crate::terminal::end_all(windows, crate::terminal::Ending::Quit, cx, |cx| {
+        // The app won't be there to stop what the terminals started once it quits (item 12).
+        crate::terminal::stop_all_now(&terminal_panels(cx), cx);
+        cx.quit()
+    });
 }
 
 /// Every window's terminal dock, front to back.
