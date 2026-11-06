@@ -47,6 +47,7 @@ use std::sync::Arc;
 use figcraft_doc::{Document, NodeId};
 use figcraft_engine::guard;
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
 use gpui_kit::*;
@@ -153,6 +154,8 @@ pub(super) struct LayersPanel {
     hovered: Option<NodeId>,
     /// The page list is folded away.
     pages_closed: bool,
+    /// The Assets tab shows in place of the pages and layers ([`assets`]).
+    pub(in crate::board) assets: bool,
     /// The page whose name is being typed in its row.
     renaming_page: Option<NodeId>,
     /// The field a name is typed in, made with the frame the rename starts in, which has the
@@ -367,12 +370,42 @@ pub(super) fn render_layers_panel(
     window: &mut Window,
     cx: &mut Context<BoardView>,
 ) -> impl IntoElement + use<> {
-    let rows = view.settle_layers_panel(window, cx);
-    let pages = (!view.layers.pages_closed).then(|| view.page_rows());
+    let assets = view.layers.assets;
+    let tab = |id: &'static str,
+               label: &'static str,
+               on: bool,
+               to_assets: bool,
+               cx: &mut Context<BoardView>| {
+        Button::new(id)
+            .ghost()
+            .small()
+            .label(label)
+            .selected(on)
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.layers.assets = to_assets;
+                cx.notify();
+            }))
+    };
+    let tabs = h_flex()
+        .flex_shrink_0()
+        .h(px(32.))
+        .px_2()
+        .gap_1()
+        .items_center()
+        .child(tab("layers-tab-layers", "Layers", !assets, false, cx))
+        .child(tab("layers-tab-assets", "Assets", assets, true, cx));
     let filter = view.filter_input(window, cx);
-    let header = view.render_pages_header(cx);
-    let pages = pages.map(|pages| view.render_pages(&pages, cx));
-    let tree = view.render_tree(&rows, cx);
+    let (header, pages, tree) = if assets {
+        let needle = filter.read(cx).value().to_string();
+        (None, None, assets::render_assets(view, &needle, cx))
+    } else {
+        let rows = view.settle_layers_panel(window, cx);
+        let pages = (!view.layers.pages_closed).then(|| view.page_rows());
+        let header = view.render_pages_header(cx);
+        let pages = pages.map(|pages| view.render_pages(&pages, cx));
+        let tree = view.render_tree(&rows, cx).into_any_element();
+        (Some(header), pages, tree)
+    };
     let theme = cx.theme();
     v_flex()
         .id("board-layers-panel")
@@ -386,7 +419,8 @@ pub(super) fn render_layers_panel(
         .bg(theme.background)
         .text_color(theme.foreground)
         .text_sm()
-        .child(header)
+        .child(tabs)
+        .children(header)
         .children(pages)
         .child(
             div()
@@ -409,5 +443,7 @@ pub(super) fn render_layers_panel(
         .child(tree)
 }
 
+mod assets;
+pub(in crate::board) use assets::Thumbnails;
 #[cfg(test)]
 mod tests;
