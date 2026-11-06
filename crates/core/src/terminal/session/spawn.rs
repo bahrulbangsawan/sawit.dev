@@ -110,6 +110,7 @@ impl Session {
                 changes,
                 #[cfg(unix)]
                 foreground,
+                find: FairMutex::new(None),
             },
             rx,
         ))

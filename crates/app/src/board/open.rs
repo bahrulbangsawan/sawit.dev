@@ -141,6 +141,7 @@ impl BoardView {
             path,
             board,
             focus: cx.focus_handle(),
+            find: Default::default(),
             worker,
             requested: None,
             composition: None,

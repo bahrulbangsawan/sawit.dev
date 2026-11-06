@@ -59,6 +59,16 @@ impl Render for TerminalView {
             .px(PAD_X)
             .bg(hsla(self.palette.background))
             .on_key_down(cx.listener(Self::on_key))
+            .on_action(cx.listener(|this, _: &crate::find::Find, w, cx| this.open_find(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::find::FindNext, _, cx| this.find_step(true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::FindPrevious, _, cx| this.find_step(false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::CloseFind, w, cx| this.close_find(w, cx)),
+            )
             .on_scroll(cx.listener(Self::on_scroll))
             .on_drag_move(|e: &DragMoveEvent<ExternalPaths>, window, cx| {
                 pointer_moved_for_drop(e.event.position, window, cx)
@@ -215,5 +225,20 @@ impl Render for TerminalView {
                 .size_full(),
             )
             .children(toast)
+            // Over the pane's top right, as the terminal never moves its rows for it.
+            .children(self.find.finder.render().map(|bar| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .w(px(440.))
+                    .max_w_full()
+                    .rounded_bl_md()
+                    .border_l_1()
+                    .border_color(cx.theme().border)
+                    .shadow_md()
+                    .overflow_hidden()
+                    .child(bar)
+            }))
     }
 }

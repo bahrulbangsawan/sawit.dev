@@ -68,6 +68,7 @@ mod dock;
 mod explorer;
 mod file_tabs;
 mod fill;
+mod find;
 mod keyboard;
 mod new_project;
 mod pages;
@@ -275,6 +276,9 @@ pub struct Workspace {
     /// The tab whose view fills the window (the browser's or the canvas's): no sidebar, terminal,
     /// tab bar or status bar ([`fill`]).
     filled_tab: Option<EntityId>,
+    /// ⌘F's bar over a tab that has nothing to search ([`find`]), and that tab's view.
+    finder: crate::find::Finder,
+    finder_tab: Option<EntityId>,
     /// The title bar says which key restores the layout, for a moment after a panel fills the
     /// window.
     fill_hint: bool,

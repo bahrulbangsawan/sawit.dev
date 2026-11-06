@@ -156,7 +156,8 @@ impl FileEditor {
             }
             FileKind::Mermaid => return self.render_diagram(cx),
             FileKind::Html => TextView::html(id, self.preview.clone()),
-            _ => TextView::markdown(id, self.diagrams.markdown.clone()),
+            // A view of its own, which the find bar searches and highlights.
+            _ => TextView::new(&self.markdown_view(cx)),
         };
         let images = self.diagrams.images.clone();
         let this = cx.entity().downgrade();
@@ -253,6 +254,21 @@ impl Render for FileEditor {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::format))
+            .on_action(
+                cx.listener(|this, _: &crate::find::Find, w, cx| this.open_find(false, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::Replace, w, cx| this.open_find(true, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::FindNext, _, cx| this.find_step(true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::FindPrevious, _, cx| this.find_step(false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::CloseFind, w, cx| this.close_find(w, cx)),
+            )
             .size_full()
             .bg(cx.theme().background)
             .child(self.render_toolbar(cx))
@@ -285,6 +301,8 @@ impl Render for FileEditor {
                         .child("Opening…"),
                 )
             })
+            // Above the text, so it never covers a match.
+            .children(self.find.finder.render())
             .child(div().flex_1().min_h_0().child(body))
     }
 }

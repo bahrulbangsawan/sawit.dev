@@ -17,6 +17,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 toml_edit = "0.22"
 toml = "0.9"
 alacritty_terminal = "=0.26.0"
+regex = "1"
 postgresql_archive = { version = "=0.22.0", default-features = false, features = ["theseus", "tls-rustls-ring"] }
 thiserror.workspace = true
 tokio.workspace = true

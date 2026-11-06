@@ -17,6 +17,7 @@ mod design;
 mod device;
 pub(crate) mod engine;
 mod events;
+mod find;
 mod mesurer;
 mod navigation;
 mod notes;
@@ -37,17 +38,17 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use futures::StreamExt as _;
-use futures::channel::mpsc::{UnboundedSender, unbounded};
-use futures::channel::oneshot;
+use futures::channel::{
+    mpsc::{UnboundedSender, unbounded},
+    oneshot,
+};
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::browser::{BrowserOp, Logs, PageEvent, ViewportMode};
-use sawit_core::probe;
-use sawit_core::terminal::AgentKind;
+use sawit_core::{probe, terminal::AgentKind};
 use serde_json::{Value, json};
 
 pub use agents::{AgentSource, installed_agents, open_command, write_prompt};
@@ -168,6 +169,7 @@ impl EventEmitter<BrowserEvent> for BrowserView {}
 pub struct BrowserView {
     project: Option<PathBuf>,
     engine: Option<Rc<Engine>>,
+    find: find::BrowserFind, // ⌘F's bar above the page
     error: Option<SharedString>,
     bounds: Option<Bounds<Pixels>>,
     /// The tab is active and the center pane is showing.
@@ -320,6 +322,7 @@ impl BrowserView {
         Self {
             project,
             engine: None,
+            find: Default::default(),
             error: None,
             bounds: None,
             visible: false,
@@ -482,9 +485,11 @@ impl Render for BrowserView {
             .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| {
                 this.annotate_key(cx);
             }))
+            .map(|el| Self::with_find_keys(el, cx))
             .map(|el| Self::with_mesurer_keys(el, cx))
             .size_full()
             .child(self.toolbar(&url, window, cx))
+            .children(self.find.finder.render())
             .child(
                 h_flex()
                     .flex_1()

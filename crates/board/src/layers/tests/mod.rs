@@ -13,6 +13,7 @@ use crate::doc::BoardDoc;
 
 mod drop;
 mod filter;
+mod find;
 mod icons;
 mod pages;
 mod reveal;

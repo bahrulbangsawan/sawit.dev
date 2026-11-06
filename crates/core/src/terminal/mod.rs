@@ -21,8 +21,9 @@ pub use layout::{
 };
 pub use palette::{Palette, Rgb};
 pub use session::{
-    CellView, Command, CursorView, GridSize, SelectKind, Session, Snapshot, TermEvent,
-    default_shell, multiplexer_markers, wrap_unsetting,
+    CellView, Command, CursorView, FindMarks, Found, GridMatch, GridSize, SelectKind, Session,
+    Snapshot, TermEvent, default_shell, find_in_rows, found_at, multiplexer_markers,
+    wrap_unsetting,
 };
 pub use tab::{MIN_COLS, MIN_ROWS, PaneMeta, TabState};
 

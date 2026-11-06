@@ -113,6 +113,14 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::os_action("Copy", text::Copy, OsAction::Copy),
             MenuItem::os_action("Paste", text::Paste, OsAction::Paste),
             MenuItem::os_action("Select All", text::SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            // The find bar of the view with the keyboard (`crate::find`).
+            MenuItem::submenu(Menu::new("Find").items([
+                MenuItem::action("Find…", crate::find::Find),
+                MenuItem::action("Find and Replace…", crate::find::Replace),
+                MenuItem::action("Find Next", crate::find::FindNext),
+                MenuItem::action("Find Previous", crate::find::FindPrevious),
+            ])),
         ]),
         Menu::new("View").items([
             MenuItem::action(

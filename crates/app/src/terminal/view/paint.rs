@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
-use sawit_core::terminal::{CellView, CursorView, Palette, Rgb, Session, Snapshot};
+use sawit_core::terminal::{CellView, CursorView, Found, Palette, Rgb, Session, Snapshot};
 
 pub(super) const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
@@ -203,7 +203,8 @@ fn row_hash(cells: &[CellView]) -> u64 {
             | (c.underline as u64) << 2
             | (c.strikeout as u64) << 3
             | (c.spacer as u64) << 4
-            | (c.selected as u64) << 5;
+            | (c.selected as u64) << 5
+            | (c.found as u64) << 6;
         let glyph = (c.ch as u64) << 32 | flags << 24 | rgb(c.fg);
         mix(mix(h, glyph), rgb(c.bg))
     })
@@ -218,11 +219,29 @@ fn make_row(cells: &[CellView], hash: Option<u64>, p: &Painter, window: &Window)
     }
 }
 
-/// A row's backgrounds by column, merged across equal neighbours: the selection's, and any
-/// other than the terminal's own. Each run of like cells takes its colour once.
+/// The find bar's matches (`Found::Match`) and its current one, as an editor marks them: amber,
+/// the current one stronger.
+const FOUND: Hsla = Hsla {
+    h: 0.12,
+    s: 0.9,
+    l: 0.5,
+    a: 0.35,
+};
+const FOUND_CURRENT: Hsla = Hsla {
+    h: 0.08,
+    s: 0.95,
+    l: 0.55,
+    a: 0.8,
+};
+
+/// A row's backgrounds by column, merged across equal neighbours: the selection's, the find bar's
+/// matches, and any other than the terminal's own. Each run of like cells takes its colour once.
 fn backgrounds(cells: &[CellView], p: &Painter) -> Vec<(Range<usize>, Hsla)> {
-    let same =
-        |a: &CellView, b: &CellView| a.selected == b.selected && (a.selected || a.bg == b.bg);
+    let same = |a: &CellView, b: &CellView| {
+        a.selected == b.selected
+            && a.found == b.found
+            && (a.selected || a.found != Found::No || a.bg == b.bg)
+    };
     let mut out: Vec<(Range<usize>, Hsla)> = Vec::new();
     let mut col = 0;
     while col < cells.len() {
@@ -233,6 +252,10 @@ fn backgrounds(cells: &[CellView], p: &Painter) -> Vec<(Range<usize>, Hsla)> {
         }
         let color = if first.selected {
             Some(p.selection)
+        } else if first.found == Found::Current {
+            Some(FOUND_CURRENT)
+        } else if first.found == Found::Match {
+            Some(FOUND)
         } else {
             (first.bg != p.palette.background).then(|| hsla(first.bg))
         };

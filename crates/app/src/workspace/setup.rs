@@ -216,6 +216,8 @@ impl Workspace {
             unmaximized: None,
             boards: Vec::new(),
             filled_tab: None,
+            finder: Default::default(),
+            finder_tab: None,
             fill_hint: false,
             _fill_hint_reset: Task::ready(()),
             split_h: cx.new(|_| Default::default()),

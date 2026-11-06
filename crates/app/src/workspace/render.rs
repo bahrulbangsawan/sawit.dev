@@ -85,6 +85,14 @@ impl Render for Workspace {
                 this.toggle_fill(FillPanel::Canvas, Origin::User, w, cx)
             }))
             .on_action(cx.listener(|this, _: &RestoreLayout, _, cx| this.escape_fill(cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::find::Find, w, cx| this.find_unavailable(w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::CloseFind, w, cx| {
+                    this.close_unavailable(w, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
             .on_action(cx.listener(|this, _: &NextProject, _, cx| this.cycle_project(1, cx)))
@@ -285,6 +293,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .when(show_tabs, |el| el.child(self.render_tab_bar(cx)))
+            .children(self.render_unavailable())
             .child(div().flex_1().min_h_0().child(self.render_active_item(cx)))
     }
 

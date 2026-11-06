@@ -4,6 +4,7 @@
 
 mod diagrams;
 mod disk;
+mod find;
 pub mod kept;
 mod render;
 mod save;
@@ -126,6 +127,11 @@ pub struct FileEditor {
     /// Cursor line/column the toolbar last showed.
     shown_cursor: Option<(u32, u32)>,
     focus: FocusHandle,
+    /// The Markdown preview's view, which the find bar searches, and the text it was last given.
+    preview_view: Option<Entity<gpui_kit::component::text::TextViewState>>,
+    preview_view_text: SharedString,
+    /// The find bar and what it searches ([`find`]).
+    find: find::EditorFind,
     _subscriptions: Vec<Subscription>,
     /// A quit that couldn't ask keeps the unsaved changes ([`Self::keep_unsaved`]).
     _quit: Subscription,
@@ -205,6 +211,9 @@ impl FileEditor {
             pending_cursor: None,
             shown_cursor: None,
             focus: cx.focus_handle(),
+            preview_view: None,
+            preview_view_text: SharedString::default(),
+            find: Default::default(),
             _subscriptions: Vec::new(),
             _quit: cx.on_app_quit(|this, cx| {
                 this.keep_unsaved(cx);
@@ -392,6 +401,10 @@ impl FileEditor {
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
         self.read_only = read_only;
+        // A read-only tab finds, but doesn't replace.
+        if let Some(bar) = self.find.finder.bar() {
+            bar.update(cx, |bar, cx| bar.set_can_replace(!read_only, cx));
+        }
         cx.emit(FileEditorEvent::Changed);
         cx.notify();
     }

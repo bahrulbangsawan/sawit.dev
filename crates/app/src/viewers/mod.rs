@@ -2,6 +2,8 @@
 
 mod image;
 mod pdf;
+mod pdf_find;
+mod pdf_text;
 mod video;
 
 pub use image::ImageView;

@@ -38,6 +38,7 @@ mod context_bar;
 mod copy_paste;
 mod design_panel;
 mod events;
+mod find;
 mod frames;
 mod keymap;
 mod keys;
@@ -208,6 +209,8 @@ pub struct BoardView {
     /// The document, or why the file couldn't be opened: the tab then says so, and never saves.
     board: Result<BoardDoc, SharedString>,
     focus: FocusHandle,
+    /// The find bar above the canvas ([`find`]).
+    find: find::BoardFind,
     worker: Worker,
     /// The newest render request, and its document. The document is kept so that no other one
     /// can take its address, which the request's key holds.

@@ -28,6 +28,10 @@ gpui_kit::assets::icon_assets!(
         FileText,
         FileSpreadsheet,
         Upload,
+        // The find bar's options and Replace All.
+        WholeWord,
+        Regex,
+        ReplaceAll,
         // The footer's Pages menu and the schema diagram's Auto Layout; GitHub repository rows.
         LayoutGrid,
         Archive,

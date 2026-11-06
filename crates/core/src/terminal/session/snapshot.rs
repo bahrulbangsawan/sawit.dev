@@ -7,6 +7,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::COUNT;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
+use super::find::{Found, find_in_rows, found_at};
 use super::{Session, modes_of};
 use crate::terminal::input::Modes;
 use crate::terminal::palette::{Palette, Rgb};
@@ -24,6 +25,8 @@ pub struct CellView {
     pub spacer: bool,
     /// Inside the mouse selection.
     pub selected: bool,
+    /// In a match of the find bar's, or in its current match ([`super::find`]).
+    pub found: Found,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +100,16 @@ impl Session {
         let cursor_shape = content.cursor.shape;
         let offset = content.display_offset as i32;
         let grid = term.grid();
+        // The find bar's matches on the rows shown, worked out from them as they are now.
+        let find = self.find.lock();
+        let (matches, current) = match find.as_ref() {
+            Some(marks) => (
+                find_in_rows(grid, &marks.regex, -offset, rows as i32 - 1 - offset),
+                marks.current_now(grid.history_size()),
+            ),
+            None => (Vec::new(), None),
+        };
+        drop(find);
         // Row by row: the grid's own iterator looks each cell's row up again.
         let lines = (0..rows as i32)
             .map(|row| {
@@ -109,7 +122,11 @@ impl Session {
                         let selected = selection.is_some_and(|s| {
                             s.contains_cell(&Indexed { point, cell }, cursor_at, cursor_shape)
                         });
-                        cell_view(cell, selected, resolve, palette)
+                        let mut view = cell_view(cell, selected, resolve, palette);
+                        if !matches.is_empty() {
+                            view.found = found_at(&matches, current.as_ref(), point);
+                        }
+                        view
                     })
                     .collect()
             })
@@ -189,6 +206,7 @@ fn cell_view(
         strikeout: flags.contains(Flags::STRIKEOUT),
         spacer: flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER),
         selected,
+        found: Found::No,
     }
 }
 

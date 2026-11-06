@@ -1,5 +1,6 @@
 //! A PTY running a program, emulated by `alacritty_terminal`.
 
+mod find;
 mod process;
 mod snapshot;
 mod spawn;
@@ -15,6 +16,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Term, TermMode};
 
+pub use find::{FindMarks, Found, GridMatch, find_in_rows, found_at};
 pub use snapshot::{CellView, CursorView, Snapshot};
 use spawn::Listener;
 pub use spawn::{Command, TermEvent, default_shell, multiplexer_markers, wrap_unsetting};
@@ -67,6 +69,8 @@ pub struct Session {
     /// program itself (not a job it started) is in the foreground.
     #[cfg(unix)]
     foreground: Option<(u32, std::fs::File)>,
+    /// What the find bar highlights, while it is open ([`find`]).
+    find: FairMutex<Option<find::FindMarks>>,
 }
 
 impl Session {

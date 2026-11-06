@@ -55,8 +55,20 @@ impl Render for BoardView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .on_action(cx.listener(Self::on_command))
+            .on_action(cx.listener(|this, _: &crate::find::Find, w, cx| this.open_find(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::find::FindNext, _, cx| this.find_step(true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::FindPrevious, _, cx| this.find_step(false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::CloseFind, w, cx| this.close_find(w, cx)),
+            )
             .on_key_up(cx.listener(Self::on_key_up))
             .children(top)
+            // Above the canvas and its panels, not over them: a live frame is a native view.
+            .children(self.find.finder.render())
             // The canvas is a container of its own between the panels, holding the toolbar and the
             // context bar, so their places and the pointer's stay the canvas's (ruling P4-C14).
             .child(

@@ -17,6 +17,7 @@ pub mod dev_tools;
 pub mod download;
 pub mod error;
 pub mod files;
+pub mod find;
 pub mod format;
 pub mod git;
 pub mod github;

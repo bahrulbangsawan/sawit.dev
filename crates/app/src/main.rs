@@ -10,6 +10,7 @@ mod db;
 mod editor;
 mod file_icons;
 mod files;
+mod find;
 mod git;
 mod highlight;
 mod keymap;
@@ -139,6 +140,7 @@ fn main() -> std::process::ExitCode {
     app.run(move |cx| {
         gpui_kit::init(cx);
         editor::init(cx);
+        find::init(cx);
         files::init(cx);
         shell_config::init(cx);
         catalog::init(cx);

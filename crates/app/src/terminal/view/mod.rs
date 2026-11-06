@@ -4,6 +4,7 @@
 //! program (vim, Claude Code) has the mouse. Dropped files are typed as paths.
 
 mod agent;
+mod find;
 mod keys;
 mod mouse;
 mod paint;
@@ -98,6 +99,8 @@ pub struct TerminalView {
     agent_check: Option<Task<()>>,
     /// When the pane last drew with the keyboard in it.
     keyboard_at: Option<Instant>,
+    /// The find bar and its matches ([`find`]).
+    find: find::TerminalFind,
     /// Stands in for what runs in the foreground (for tests).
     #[cfg(test)]
     fake_agent: Option<Option<AgentKind>>,
@@ -140,6 +143,7 @@ impl TerminalView {
                         }
                     }
                     this.check_agent_soon(cx);
+                    this.recount_soon(cx);
                     cx.notify();
                 });
                 if alive.is_err() {
@@ -171,6 +175,7 @@ impl TerminalView {
             title_job: None,
             agent_check: None,
             keyboard_at: None,
+            find: Default::default(),
             #[cfg(test)]
             fake_agent: None,
             _events: task,

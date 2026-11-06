@@ -30,13 +30,17 @@ pub struct PdfView {
     sizes: Option<Vec<(f64, f64)>>,
     error: Option<String>,
     zoom_ix: usize,
-    list: ListState,
+    pub(super) list: ListState,
     pages: HashMap<PageKey, Arc<RenderImage>>,
     recent: VecDeque<PageKey>,
     pending: HashSet<PageKey>,
     /// Pages dropped from the cache whose GPU textures the next render frees
     /// (dropping the Arc alone leaves them in the atlas).
     evicted: Vec<Arc<RenderImage>>,
+    /// Takes the keyboard with a click, for ⌘F.
+    pub(crate) focus: FocusHandle,
+    /// The find bar and its matches ([`super::pdf_find`]).
+    pub(super) find: super::pdf_find::PdfFind,
 }
 
 impl PdfView {
@@ -72,6 +76,8 @@ impl PdfView {
             recent: VecDeque::new(),
             pending: HashSet::new(),
             evicted: Vec::new(),
+            focus: cx.focus_handle(),
+            find: Default::default(),
         }
     }
 
@@ -81,6 +87,14 @@ impl PdfView {
 
     fn width(&self) -> f32 {
         BASE_WIDTH * ZOOMS[self.zoom_ix]
+    }
+
+    /// Page `ix`'s height as drawn.
+    pub(super) fn page_height(&self, ix: usize) -> f32 {
+        match self.sizes.as_ref().and_then(|s| s.get(ix)) {
+            Some(&(pw, ph)) => self.width() * (ph / pw) as f32,
+            None => 0.0,
+        }
     }
 
     fn zoom(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -160,9 +174,11 @@ impl PdfView {
                     .w(px(width))
                     .h(px(height))
                     .flex_none()
+                    .relative()
                     .bg(gpui_kit::white())
                     .shadow_md()
-                    .children(page.map(|image| img(image).size_full())),
+                    .children(page.map(|image| img(image).size_full()))
+                    .children(self.page_marks(ix, width, height)),
             )
             .into_any_element()
     }
@@ -223,8 +239,28 @@ impl Render for PdfView {
         };
         v_flex()
             .size_full()
+            .track_focus(&self.focus)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if !this.focus.contains_focused(window, cx) {
+                        window.focus(&this.focus, cx);
+                    }
+                }),
+            )
+            .on_action(cx.listener(|this, _: &crate::find::Find, w, cx| this.open_find(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::find::FindNext, _, cx| this.find_step(true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::FindPrevious, _, cx| this.find_step(false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::find::CloseFind, w, cx| this.close_find(w, cx)),
+            )
             .bg(cx.theme().background)
             .child(bar)
+            .children(self.find.finder.render())
             .child(div().flex_1().min_h_0().bg(cx.theme().muted).child(body))
     }
 }

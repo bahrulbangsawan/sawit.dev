@@ -26,6 +26,7 @@ use figcraft_color::PaintKind;
 use figcraft_doc::{BoardItem, Document, Node, NodeId, NodeKind};
 
 mod drop;
+pub mod find;
 #[cfg(test)]
 mod tests;
 

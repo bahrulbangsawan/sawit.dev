@@ -134,6 +134,7 @@ impl BrowserView {
                     self.sync_design(cx);
                 }
                 if !started {
+                    self.find_after_load(cx);
                     self.scan_if_design_open(cx);
                     for op in self.ops_after_load(cx) {
                         if op["op"] == "pick" {

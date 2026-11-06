@@ -7556,6 +7556,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "postgresql_archive",
+ "regex",
  "resvg 0.46.0",
  "ring",
  "rquickjs",
