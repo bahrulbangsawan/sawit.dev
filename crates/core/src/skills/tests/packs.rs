@@ -1,11 +1,48 @@
-//! The packs added from their sources' docs: HyperFrames' Core Skills (its plugin in Claude
-//! Code).
+//! The packs added from their sources' docs: shadcn/ui's official skills, HyperFrames' Core
+//! Skills (its plugin in Claude Code).
 
 use super::*;
 use crate::package_manager::PackageManager;
 
 fn lines(pack: &Pack, method: Method, action: Action, places: &[Place]) -> Vec<String> {
     script(pack, method, action, places, PackageManager::Npm, &env()).unwrap()
+}
+
+/// shadcn/ui's skills install the way ui.shadcn.com/docs/skills says (`npx skills add
+/// shadcn/ui`), both of them, into Claude Code and the other agents picked; removing deletes
+/// their two folders.
+#[test]
+fn shadcns_official_skills_install_with_the_skills_cli() {
+    let pack = get("shadcn-ui").unwrap();
+    assert_eq!((pack.name, pack.by), ("shadcn/ui", "shadcn"));
+    assert_eq!(pack.category, Category::Design);
+    assert_eq!(pack.home, "https://ui.shadcn.com/docs/skills");
+    assert_eq!(pack.repo, "https://github.com/shadcn-ui/ui");
+    assert_eq!(pack.skills, ["shadcn", "migrate-radix-to-base"]);
+    // Not the other shadcn pack.
+    assert_eq!(get("improve").unwrap().skills, ["improve"]);
+    let none = Installed::default();
+    let (main, codex) = (claude(None), folder(".agents/skills", Some("codex")));
+    assert_eq!(
+        lines(
+            pack,
+            pack.methods[0],
+            Action::Install,
+            &[(&main, &none), (&codex, &none)]
+        ),
+        ["npx -y skills add shadcn/ui --skill '*' -g -a claude-code -a codex -y"]
+    );
+    let there = Installed {
+        folder: ["shadcn".to_string(), "migrate-radix-to-base".to_string()].into(),
+        ..Installed::default()
+    };
+    assert_eq!(
+        lines(pack, pack.methods[0], Action::Remove, &[(&main, &there)]),
+        [
+            "rm -rf \"$HOME/.claude/skills/shadcn\"",
+            "rm -rf \"$HOME/.claude/skills/migrate-radix-to-base\""
+        ]
+    );
 }
 
 /// HyperFrames: its plugin in Claude Code (`claude plugin marketplace add

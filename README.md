@@ -66,7 +66,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
 | 🤖 **Ready for AI agents** | The `sawit-mcp` server (143 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
-| ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
+| ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn/ui and shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
 
@@ -393,6 +393,8 @@ explained. A conflict on the same address can't be forced.
     codebase and writes plans for cheaper models to execute, with the `skills` CLI as its README says
     (`npx skills add shadcn/improve`), or as the Claude Code plugin from its own marketplace
     (`claude plugin install improve@improve`).
+  - **shadcn/ui** by shadcn ([ui.shadcn.com/docs/skills](https://ui.shadcn.com/docs/skills)): its official
+    `shadcn` and `migrate-radix-to-base` skills, with the `skills` CLI as its docs say (`npx skills add shadcn/ui`).
   - **HyperFrames** by HeyGen ([hyperframes.heygen.com](https://hyperframes.heygen.com)): its Claude Code plugin
     (`hyperframes@hyperframes`, entry skill `/hyperframes:hyperframes`), or its Core Skills with the `skills` CLI
     (`npx skills add heygen-com/hyperframes`) for the other agents. The CLI installs from the Dev Tools page.

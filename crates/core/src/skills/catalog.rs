@@ -255,6 +255,24 @@ pub const PACKS: &[Pack] = &[
         ],
         note: None,
     },
+    // shadcn/ui's own skills (ui.shadcn.com/docs/skills: `npx skills add shadcn/ui`; the
+    // repository moved to shadcn-ui/ui, where GitHub sends shadcn/ui): `shadcn` and
+    // `migrate-radix-to-base`, its only SKILL.md files.
+    Pack {
+        id: "shadcn-ui",
+        name: "shadcn/ui",
+        by: "shadcn",
+        about: "shadcn/ui's official skills: find, add, compose and theme components the way your project's components.json says, with the shadcn CLI, registries and presets; and migrate components from Radix UI to Base UI.",
+        category: Category::Design,
+        skills: &["shadcn", "migrate-radix-to-base"],
+        home: "https://ui.shadcn.com/docs/skills",
+        repo: "https://github.com/shadcn-ui/ui",
+        methods: &[Method::SkillsCli {
+            source: "shadcn/ui",
+            all: true,
+        }],
+        note: Some("Works in projects with a components.json; it runs the shadcn CLI with npx."),
+    },
     Pack {
         id: "mcp-apps",
         name: "MCP Apps",

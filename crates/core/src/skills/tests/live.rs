@@ -113,6 +113,16 @@ fn round_trip(pack: &Pack, method: Method, home: &Path, targets: &[&Target]) {
     }
 }
 
+/// shadcn/ui's skills with the skills CLI, into Claude Code and Codex.
+#[test]
+#[ignore = "downloads from GitHub and npm"]
+fn live_shadcn_ui_installs_and_removes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (main, shared, _) = agents(dir.path());
+    let pack = get("shadcn-ui").unwrap();
+    round_trip(pack, pack.methods[0], dir.path(), &[&main, &shared]);
+}
+
 /// HyperFrames: its Core Skills with the skills CLI into Codex, and its plugin into a Claude
 /// Code profile of the throwaway home.
 #[test]
