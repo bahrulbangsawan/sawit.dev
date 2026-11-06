@@ -440,7 +440,8 @@ fn a_terminal_close_is_unconfirmed_unless_it_says_so() {
             command: Command::TerminalClose {
                 tab: 1,
                 pane: None,
-                confirm: false
+                confirm: false,
+                scope: None
             },
             ..
         }))
@@ -453,6 +454,7 @@ fn a_terminal_close_is_unconfirmed_unless_it_says_so() {
             tab: 1,
             pane: Some(0),
             confirm: true,
+            scope: None,
         },
     };
     let bytes = encode(&request);

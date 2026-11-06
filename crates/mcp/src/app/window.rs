@@ -77,6 +77,21 @@ pub struct TabArgs {
     pub project: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CloseAllTabsArgs {
+    #[schemars(
+        description = "false (default): Safe Close All, the tabs that lose nothing and aren't pinned. true: Force Close All, every tab"
+    )]
+    #[serde(default)]
+    pub force: bool,
+    #[schemars(
+        description = "With force: close even though unsaved changes, browser notes not yet sent or an install going on would be lost. Without it such a close is refused, naming what"
+    )]
+    #[serde(default)]
+    pub confirm: bool,
+    pub project: Option<String>,
+}
+
 #[tool_router(router = window_router, vis = "pub(super)")]
 impl Sawit {
     #[tool(
@@ -164,5 +179,19 @@ impl Sawit {
     async fn app_close_tab(&self, Parameters(a): Parameters<TabArgs>) -> CallToolResult {
         self.app_tool(a.project, Command::CloseTab { tab: a.tab })
             .await
+    }
+
+    #[tool(
+        description = "Close the center tabs at once, as the tab menu's Safe Close All and Force Close All do. Safe (the default) closes the tabs that lose nothing and aren't pinned, and says how many it kept. DESTRUCTIVE with force: every tab closes, pinned ones too, unsaved changes are discarded; refused unless confirm is true while something would be lost, naming it"
+    )]
+    async fn app_close_all_tabs(
+        &self,
+        Parameters(a): Parameters<CloseAllTabsArgs>,
+    ) -> CallToolResult {
+        let command = Command::CloseAllTabs {
+            force: a.force,
+            confirm: a.confirm,
+        };
+        self.app_tool(a.project, command).await
     }
 }

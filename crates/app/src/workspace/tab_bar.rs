@@ -259,6 +259,7 @@ impl Workspace {
             right_keys,
             clean_keys,
             all_keys,
+            force_keys,
             pin_keys,
         ] = [
             &CloseActiveTab as &dyn Action,
@@ -267,19 +268,12 @@ impl Workspace {
             &CloseTabsRight,
             &CloseCleanTabs,
             &CloseAllTabs,
+            &ForceCloseAllTabs,
             &TogglePinTab,
         ]
         .map(keys);
-        let item = |label: &'static str, keys: SharedString| {
-            PopupMenuItem::element(move |_, _| {
-                h_flex()
-                    .w_full()
-                    .gap_6()
-                    .justify_between()
-                    .child(label)
-                    .child(div().text_color(muted).child(keys.clone()))
-            })
-        };
+        let item =
+            |label: &'static str, keys: SharedString| crate::menus::keyed(label, keys, muted);
         let close = |op: CloseOp| {
             let this = this.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -296,7 +290,18 @@ impl Workspace {
             .item(item("Close Right", right_keys).on_click(close(CloseOp::Right)))
             .separator()
             .item(item("Close Clean", clean_keys).on_click(close(CloseOp::Clean)))
-            .item(item("Close All", all_keys).on_click(close(CloseOp::All)))
+            .item(item("Safe Close All", all_keys).on_click({
+                let this = this.clone();
+                move |_, window, cx| {
+                    let _ = this.update(cx, |ws, cx| ws.safe_close_all(window, cx));
+                }
+            }))
+            .item(item("Force Close All", force_keys).on_click({
+                let this = this.clone();
+                move |_, window, cx| {
+                    let _ = this.update(cx, |ws, cx| ws.force_close_all(window, cx));
+                }
+            }))
             .when(is_file, |menu| {
                 menu.separator().item(
                     PopupMenuItem::new(if read_only {

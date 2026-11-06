@@ -56,6 +56,8 @@ pub enum TabEvent {
     NewTerminal,
     /// Something the user asked for was refused (a pane of a locked tab doesn't close): why.
     Refused(String),
+    /// The pane menu's Open File: the workspace opens it in a tab.
+    OpenFile(PathBuf),
 }
 
 /// A divider being dragged.

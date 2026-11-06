@@ -5,9 +5,9 @@ use sawit_core::terminal::{KeyInput, key_to_bytes, paste_bytes};
 
 use super::TerminalView;
 use crate::terminal::{
-    ClosePane, CopyError, CopyLastOutput, FocusDown, FocusLeft, FocusNextPane,
-    FocusNextPaneAtPrompt, FocusPreviousPane, FocusRight, FocusUp, RenamePane, RenameTab,
-    SplitDown, SplitRight, ToggleSendRightClicks, ZoomPane,
+    Clear, ClosePane, CopyError, CopyLastOutput, FocusDown, FocusLeft, FocusNextPane,
+    FocusNextPaneAtPrompt, FocusPreviousPane, FocusRight, FocusUp, Paste, RenamePane, RenameTab,
+    SelectAll, SplitDown, SplitRight, ToggleSendRightClicks, ZoomPane,
 };
 
 /// Key bindings run before `on_key_down`, so an outer binding for a key the
@@ -19,7 +19,11 @@ use crate::terminal::{
 /// here too, so they only act in a terminal. Renaming follows Terminal.app's
 /// Edit Title (⇧⌘I, the tab) and iTerm2's Edit Session (⌘I, the pane). ⌘W
 /// stays the workspace's (it closes the center tab), so a pane closes with
-/// ⌥⌘W. ⌘] and ⌘[ step through the panes as in iTerm2.
+/// ⌥⌘W; the terminal tab menu's close items have no default keys for the same reason (the
+/// workspace's ⌥⌘T, ⌘K E… close center tabs). ⌘] and ⌘[ step through the panes as in iTerm2.
+/// ⌘C copies the selection (in `on_key`, so no binding can take it from a program), ⌘V pastes,
+/// ⌘A selects everything and ⌘K clears, as in Terminal.app
+/// (⌘K waits a moment for the workspace's ⌘K chords, as in Zed).
 ///
 /// Shift-Tab is the one key a program gets that the terminal also uses: at a
 /// shell prompt in a split tab it moves to the next pane, and anywhere else its
@@ -32,6 +36,9 @@ pub(in crate::terminal) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-tab", NoAction, ctx),
         KeyBinding::new("shift-tab", FocusNextPaneAtPrompt, ctx),
         KeyBinding::new("cmd-c", NoAction, ctx),
+        KeyBinding::new("cmd-v", Paste, ctx),
+        KeyBinding::new("cmd-a", SelectAll, ctx),
+        KeyBinding::new("cmd-k", Clear, ctx),
         KeyBinding::new("cmd-d", SplitRight, ctx),
         KeyBinding::new("cmd-shift-d", SplitDown, ctx),
         KeyBinding::new("cmd-alt-left", FocusLeft, ctx),

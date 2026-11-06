@@ -12,8 +12,8 @@ mod view;
 use gpui_kit::actions;
 
 pub use guard::{Ending, ask_before_closing, end_all};
-pub use panel::stop_all_now;
-pub use panel::{JobTag, Origin, Remote, TerminalPanel, ToggleMaximize};
+pub use panel::{CloseScope, stop_all_now};
+pub use panel::{JobTag, OpenFileRequest, Origin, Remote, TerminalPanel, ToggleMaximize};
 // The agents running in the terminals, and their logos, for the browser's Send to agent.
 pub use {agents::logo_in as agent_logo, panel::RunningAgent};
 
@@ -60,6 +60,36 @@ actions!(
         CopyLastOutput,
         /// Copies the error lines (with a few around each) of the last command's output.
         CopyError,
+        /// Copies the focused pane's selection.
+        Copy,
+        /// Pastes into the focused pane, as typed (bracketed when its program asks).
+        Paste,
+        /// Selects the focused pane's whole scrollback and screen.
+        SelectAll,
+        /// Clears the focused pane's scrollback and screen; a shell draws its prompt again.
+        Clear,
+        /// Resets the focused pane's terminal state (modes, colours, scrollback).
+        ResetTerminal,
+        /// Saves the focused pane's scrollback and screen to a text file.
+        ExportOutput,
+        /// Closes the active terminal tab (asking first while it runs something).
+        CloseTab,
+        /// Closes every terminal tab but the active one, keeping locked and pinned ones.
+        CloseOtherTabs,
+        /// Closes the terminal tabs left of the active one.
+        CloseTabsLeft,
+        /// Closes the terminal tabs right of the active one.
+        CloseTabsRight,
+        /// Closes the terminal tabs with nothing running, keeping locked and pinned ones.
+        SafeCloseAll,
+        /// Closes every terminal tab but the locked ones, after asking when one runs something.
+        ForceCloseAll,
+        /// Opens a new terminal in the active tab's folder, in its project.
+        DuplicateTab,
+        /// Locks the active terminal tab so nothing closes it, or unlocks it.
+        ToggleLockTab,
+        /// Pins the active terminal tab to the start of the strip, or unpins it.
+        TogglePinTab,
     ]
 );
 

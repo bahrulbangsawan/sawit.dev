@@ -104,7 +104,10 @@ impl Render for TerminalView {
                         this.modes().mouse_report,
                     );
                     match target {
-                        RightClick::Menu => cx.emit(TerminalEvent::MenuRequested(e.position)),
+                        RightClick::Menu => {
+                            this.menu_target = this.target_at(e.position);
+                            cx.emit(TerminalEvent::MenuRequested(e.position))
+                        }
                         RightClick::Program => {
                             if this.send_mouse(
                                 MouseAction::Press(TermButton::Right),

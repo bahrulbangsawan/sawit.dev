@@ -348,6 +348,7 @@ impl Render for TerminalPanel {
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
                 this.split_active(SplitDir::Down, window, cx)
             }))
+            .map(|el| tab_menu::on_actions(el, cx))
             .bg(cx.theme().background)
             .border_t_1()
             .border_color(cx.theme().border)

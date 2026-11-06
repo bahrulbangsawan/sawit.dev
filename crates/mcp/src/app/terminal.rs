@@ -103,6 +103,19 @@ pub struct TerminalCloseArgs {
     )]
     #[serde(default)]
     pub confirm: bool,
+    #[schemars(
+        description = "Close other tabs from this one instead, as the tab's menu does: others, left, right, idle (Safe Close All: the tabs with nothing running) or all (Force Close All). Locked tabs always stay; pinned ones stay except for all; without confirm it is refused while a tab it would close runs something"
+    )]
+    pub scope: Option<String>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TerminalClearArgs {
+    #[schemars(
+        description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state)"
+    )]
+    pub tab: usize,
     pub project: Option<String>,
 }
 
@@ -318,6 +331,20 @@ impl Sawit {
     }
 
     #[tool(
+        description = "Clear a terminal tab's scrollback and screen (its focused pane's), as its menu's Clear (⌘K) does; a shell at its prompt draws its prompt again at the top. Name the tab as terminal_run or app_state give it. Needs the app running"
+    )]
+    pub(super) async fn terminal_clear(
+        &self,
+        Parameters(a): Parameters<TerminalClearArgs>,
+    ) -> CallToolResult {
+        let command = Command::TerminalClear {
+            tab: a.tab,
+            pane: None,
+        };
+        self.app_tool(a.project, command).await
+    }
+
+    #[tool(
         description = "Lock a terminal tab so that nothing closes it (the user's close button or keys, Close Others and Close All, terminal_close) until it is unlocked, or unlock it; typing in it stays allowed, and its tab shows a lock. Use it on the tab running your long-lived dev server or watcher. Returns the tab and whether it is locked. Needs the app running"
     )]
     pub(super) async fn terminal_lock(
@@ -346,7 +373,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Close a terminal tab, or just one pane of it, ending whatever runs there: a dev server, an SSH session, the user's own agent. DESTRUCTIVE: while a program runs there or the user is typing in it, the close is refused unless confirm is true, and the refusal names what runs; shells waiting at their prompt close without it. A locked tab is always refused, confirm or not, until it is unlocked. Name the tab, and a pane to close only that one, as terminal_run or app_state give them"
+        description = "Close a terminal tab, or just one pane of it, ending whatever runs there: a dev server, an SSH session, the user's own agent. DESTRUCTIVE: while a program runs there or the user is typing in it, the close is refused unless confirm is true, and the refusal names what runs; shells waiting at their prompt close without it. A locked tab is always refused, confirm or not, until it is unlocked. With scope it closes other tabs from this one (others, left, right, idle, all) as the tab's menu does, keeping locked ones Name the tab, and a pane to close only that one, as terminal_run or app_state give them"
     )]
     pub(super) async fn terminal_close(
         &self,
@@ -358,6 +385,7 @@ impl Sawit {
                 tab: a.tab,
                 pane: a.pane,
                 confirm: a.confirm,
+                scope: a.scope,
             },
         )
         .await

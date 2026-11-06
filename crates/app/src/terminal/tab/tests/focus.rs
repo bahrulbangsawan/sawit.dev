@@ -79,7 +79,9 @@ fn closing_a_tabs_only_pane_gives_the_keyboard_to_the_next_tab(cx: &mut TestAppC
     focus_terminal(cx, w, &panel);
     let pane = cx.update(|cx| closing.read(cx).state.focused);
     cx.update_window(w, |_, window, cx| {
-        closing.update(cx, |t, cx| t.run_menu_item(pane, "Close pane", window, cx))
+        closing.update(cx, |t, cx| {
+            t.run_pane_act(pane, crate::terminal::tab::menu::PaneAct::Close, window, cx)
+        })
     })
     .unwrap();
     cx.run_until_parked();

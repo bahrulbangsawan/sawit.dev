@@ -233,6 +233,7 @@ async fn terminal_close_passes_its_confirm_on() {
                 tab: 1,
                 pane: Some(0),
                 confirm,
+                scope: None,
             }
         );
     }

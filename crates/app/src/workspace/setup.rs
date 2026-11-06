@@ -67,6 +67,14 @@ impl Workspace {
                     this.toggle_terminal_maximized(Origin::User, window, cx)
                 },
             ),
+            // A terminal pane menu's Open File opens the file in a tab.
+            cx.subscribe_in(
+                &terminal,
+                window,
+                |this, _, e: &crate::terminal::OpenFileRequest, window, cx| {
+                    this.open_file(e.0.clone(), window, cx)
+                },
+            ),
             cx.observe_in(&db, window, |this, db, window, cx| {
                 let ready = match &this.pending_db {
                     Some(event) => {
@@ -215,6 +223,8 @@ impl Workspace {
             layout: Layout::default(),
             path_copied: false,
             _path_copied_reset: Task::ready(()),
+            close_note: None,
+            _close_note_reset: Task::ready(()),
             unmaximized: None,
             boards: Vec::new(),
             filled_tab: None,

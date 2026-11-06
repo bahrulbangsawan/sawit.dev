@@ -107,6 +107,9 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::action("New Window", NewWindow),
             MenuItem::action("New Project…", crate::workspace::OpenNewProject),
             MenuItem::action("Open Folder…", OpenFolder),
+            MenuItem::separator(),
+            MenuItem::action("Safe Close All Tabs", crate::workspace::CloseAllTabs),
+            MenuItem::action("Force Close All Tabs…", crate::workspace::ForceCloseAllTabs),
         ]),
         Menu::new("Edit").items([
             MenuItem::os_action("Cut", text::Cut, OsAction::Cut),

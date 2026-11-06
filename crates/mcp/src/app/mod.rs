@@ -30,10 +30,12 @@ pub use panels::{
     ScriptArgs, SshConnectArgs,
 };
 pub use terminal::{
-    TerminalCloseArgs, TerminalInputArgs, TerminalLockArgs, TerminalPinArgs, TerminalReadArgs,
-    TerminalRenameArgs, TerminalRunArgs, TerminalSplitArgs,
+    TerminalClearArgs, TerminalCloseArgs, TerminalInputArgs, TerminalLockArgs, TerminalPinArgs,
+    TerminalReadArgs, TerminalRenameArgs, TerminalRunArgs, TerminalSplitArgs,
 };
-pub use window::{LayoutArgs, OpenArgs, PageArgs, PanelArgs, TabArgs, WindowArgs};
+pub use window::{
+    CloseAllTabsArgs, LayoutArgs, OpenArgs, PageArgs, PanelArgs, TabArgs, WindowArgs,
+};
 
 use crate::{Sawit, fail, ok};
 

@@ -177,6 +177,27 @@ pub enum Command {
         pane: Option<usize>,
         #[serde(default)]
         confirm: bool,
+        /// Closes other tabs from `tab` instead, as the tab's menu does: `others`, `left`,
+        /// `right`, `idle` (Safe Close All: tabs with nothing running) or `all` (Force Close
+        /// All). Locked tabs always stay; without `confirm` it is refused while a tab it would
+        /// close runs something.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+    },
+    /// Clears a terminal pane's scrollback and screen, as its menu's Clear (⌘K) does.
+    TerminalClear {
+        tab: usize,
+        #[serde(default)]
+        pane: Option<usize>,
+    },
+    /// Closes the center tabs: safe (`force` false), the tabs that lose nothing and aren't
+    /// pinned, as Safe Close All does; or every tab (Force Close All), refused without `confirm`
+    /// while that would lose unsaved changes, notes not yet sent or an install going on.
+    CloseAllTabs {
+        #[serde(default)]
+        force: bool,
+        #[serde(default)]
+        confirm: bool,
     },
     /// The Run panel's scripts and saved commands, with running state.
     RunList,

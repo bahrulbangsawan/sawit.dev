@@ -183,7 +183,30 @@ impl Workspace {
             // Unconfirmed, a close that would end what runs there, or the terminal the user types
             // in, is refused: terminal_run never touches the user's shell, and a close shouldn't
             // either without the agent saying it is sure.
-            Command::TerminalClose { tab, pane, confirm } => {
+            Command::TerminalClose {
+                tab,
+                confirm,
+                scope: Some(scope),
+                ..
+            } => {
+                let scope = crate::terminal::CloseScope::parse(&scope).ok_or_else(|| {
+                    format!("Unknown scope {scope}: use others, left, right, idle or all.")
+                })?;
+                done(
+                    self.terminal
+                        .update(cx, |t, cx| t.close_scope_for_agent(scope, tab, confirm, cx))?,
+                )
+            }
+            Command::TerminalClear { tab, pane } => done(
+                self.terminal
+                    .update(cx, |t, cx| t.clear_for_agent(tab, pane, cx))?,
+            ),
+            Command::CloseAllTabs { force, confirm } => {
+                done(self.close_all_for_agent(force, confirm, window, cx)?)
+            }
+            Command::TerminalClose {
+                tab, pane, confirm, ..
+            } => {
                 let refusal = self
                     .terminal
                     .read(cx)

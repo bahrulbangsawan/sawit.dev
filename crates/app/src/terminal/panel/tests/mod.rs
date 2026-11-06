@@ -4,6 +4,7 @@ mod control;
 mod ending;
 mod jobs;
 mod lock_pin;
+mod menus;
 mod run;
 mod running;
 mod split;

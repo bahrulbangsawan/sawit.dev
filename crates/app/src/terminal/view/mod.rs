@@ -7,6 +7,7 @@ mod agent;
 mod copy_out;
 mod find;
 mod keys;
+mod menu_acts;
 mod mouse;
 mod paint;
 mod render;
@@ -87,6 +88,8 @@ pub struct TerminalView {
     /// Where the last command typed at the prompt began ([`Session::cursor_mark`]): Copy Last
     /// Output copies from the row after it.
     command_mark: Cell<Option<usize>>,
+    /// The link or path the last right-click for the pane menu landed on.
+    pub menu_target: Option<sawit_core::terminal::Target>,
     /// The last `cwd()` answer for the pane header, and when it was asked.
     folder: Option<(Instant, Option<PathBuf>)>,
     /// Asks for the folder again a moment after the header last read it,
@@ -188,6 +191,7 @@ impl TerminalView {
             toast: None,
             toast_text: SharedString::default(),
             command_mark: Cell::new(None),
+            menu_target: None,
             folder: None,
             folder_refresh: None,
             agent: None,

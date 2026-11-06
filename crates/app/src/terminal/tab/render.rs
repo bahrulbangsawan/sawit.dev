@@ -12,9 +12,9 @@ use super::panes::min_size;
 use super::{Drag, PANE_BORDER, TerminalTab};
 use crate::terminal::view::{TerminalView, cell_size};
 use crate::terminal::{
-    ClosePane, CopyError, CopyLastOutput, FocusDown, FocusLeft, FocusNextPane,
-    FocusNextPaneAtPrompt, FocusPreviousPane, FocusRight, FocusUp, RenamePane, RenameTab,
-    ToggleSendRightClicks, ZoomPane, agents,
+    Clear, ClosePane, Copy, CopyError, CopyLastOutput, ExportOutput, FocusDown, FocusLeft,
+    FocusNextPane, FocusNextPaneAtPrompt, FocusPreviousPane, FocusRight, FocusUp, Paste,
+    RenamePane, RenameTab, ResetTerminal, SelectAll, ToggleSendRightClicks, ZoomPane, agents,
 };
 
 /// Width of the grab strip centred on each divider.
@@ -163,6 +163,24 @@ impl Render for TerminalTab {
             .on_action(cx.listener(|this, _: &CopyError, _, cx| {
                 let pane = this.state.focused;
                 this.copy_output(pane, true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Copy, _, cx| {
+                this.on_focused(cx, |v, cx| v.copy_selection(cx))
+            }))
+            .on_action(cx.listener(|this, _: &Paste, _, cx| {
+                this.on_focused(cx, |v, cx| v.paste_clipboard(cx))
+            }))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                this.on_focused(cx, |v, cx| v.select_all(cx))
+            }))
+            .on_action(
+                cx.listener(|this, _: &Clear, _, cx| this.on_focused(cx, |v, cx| v.clear(cx))),
+            )
+            .on_action(cx.listener(|this, _: &ResetTerminal, _, cx| {
+                this.on_focused(cx, |v, cx| v.reset(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ExportOutput, _, cx| {
+                this.on_focused(cx, |v, cx| v.export_output(cx))
             }))
             .child(
                 canvas(

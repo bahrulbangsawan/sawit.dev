@@ -206,6 +206,8 @@ mod tests {
         assert_eq!(stopped.processes, pids.len());
         assert!(stopped.killed >= 1, "{stopped:?}");
         waiter.join().unwrap().unwrap();
-        assert!(alive(&pids).is_empty(), "left running: {:?}", alive(&pids));
+        // SIGKILL lands a moment after it is sent.
+        let left = wait_for(&pids, Duration::from_secs(2));
+        assert!(left.is_empty(), "left running: {left:?}");
     }
 }

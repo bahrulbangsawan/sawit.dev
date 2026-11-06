@@ -10,7 +10,7 @@ mod lock_pin;
 mod open;
 mod render;
 pub(super) mod running;
-mod tab_menu;
+pub(super) mod tab_menu;
 #[cfg(test)]
 mod tests;
 
@@ -69,6 +69,9 @@ pub struct TerminalPanel {
 /// Asks the workspace to fill the window with the panel, or to restore.
 pub struct ToggleMaximize;
 
+/// Asks the workspace to open a file in a tab (a pane menu's Open File).
+pub struct OpenFileRequest(pub PathBuf);
+
 /// How to connect to the SSH server with a key, as its settings are now.
 type RemoteSource = Rc<dyn Fn(&str, &mut App) -> Result<Remote, String>>;
 
@@ -125,6 +128,7 @@ pub struct JobStatus {
 }
 
 impl EventEmitter<ToggleMaximize> for TerminalPanel {}
+impl EventEmitter<OpenFileRequest> for TerminalPanel {}
 
 impl TerminalPanel {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -325,6 +329,7 @@ impl TerminalPanel {
                 }
             }
             TabEvent::Changed => cx.notify(),
+            TabEvent::OpenFile(path) => cx.emit(OpenFileRequest(path.clone())),
             TabEvent::Refused(why) => {
                 self.notice = Some(why.clone());
                 cx.notify();

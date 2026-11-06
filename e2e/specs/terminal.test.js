@@ -103,14 +103,17 @@ sawitTest(
 
 /** The pane menu's items, the actions they run, and the keys the menu shows beside them. */
 const PANE_MENU = [
+  ["Paste", "terminal::Paste", "cmd-v"],
+  ["Select All", "terminal::SelectAll", "cmd-a"],
   ["Copy Last Output", "terminal::CopyLastOutput", "cmd-shift-c"],
   ["Copy Error", "terminal::CopyError", "cmd-alt-shift-c"],
-  ["Rename pane", "terminal::RenamePane", "cmd-i"],
-  ["Split right", "terminal::SplitRight", "cmd-d"],
-  ["Split down", "terminal::SplitDown", "cmd-shift-d"],
-  ["Zoom", "terminal::ZoomPane", "cmd-shift-enter"],
-  ["Send right-clicks to pane", "terminal::ToggleSendRightClicks", "cmd-alt-r"],
-  ["Close pane", "terminal::ClosePane", "alt-cmd-w"],
+  ["Clear", "terminal::Clear", "cmd-k"],
+  ["Rename Pane", "terminal::RenamePane", "cmd-i"],
+  ["Split Right", "terminal::SplitRight", "cmd-d"],
+  ["Split Down", "terminal::SplitDown", "cmd-shift-d"],
+  ["Zoom Pane", "terminal::ZoomPane", "cmd-shift-enter"],
+  ["Send Right-Clicks to Pane", "terminal::ToggleSendRightClicks", "cmd-alt-r"],
+  ["Close Pane", "terminal::ClosePane", "alt-cmd-w"],
 ];
 
 /** Whether `a` and `b` name one key combo, whatever order their modifiers are in. */
@@ -173,11 +176,11 @@ sawitTest(
     const { win } = ctx;
     await newTerminal(ctx);
     await win.rightClick(TERMINAL);
-    await win.waitFor({ role: "menuitem", name: "Rename pane" });
+    await win.waitFor({ role: "menuitem", name: "Rename Pane" });
     const names = (await win.findAll({ role: "menuitem" })).map((m) => m.name);
     for (const [label] of PANE_MENU) assert.ok(names.includes(label), `${label} in ${names.join(", ")}`);
     await win.press("escape");
-    await win.waitForGone({ role: "menuitem", name: "Rename pane" });
+    await win.waitForGone({ role: "menuitem", name: "Rename Pane" });
   },
 );
 

@@ -58,9 +58,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CloseCleanTabs, w, cx| {
                 this.on_close_action(CloseOp::Clean, w, cx)
             }))
-            .on_action(cx.listener(|this, _: &CloseAllTabs, w, cx| {
-                this.on_close_action(CloseOp::All, w, cx)
-            }))
+            .on_action(cx.listener(|this, _: &CloseAllTabs, w, cx| this.safe_close_all(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &ForceCloseAllTabs, w, cx| this.force_close_all(w, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_area(Area::Sidebar, cx)),
             )

@@ -40,7 +40,7 @@ pub fn right_click_target(
 impl TerminalView {
     /// Grid cell under `position`, clamped to the screen, and whether the
     /// mouse is over its right half.
-    fn cell_at(&self, position: Point<Pixels>) -> Option<(usize, usize, bool)> {
+    pub(super) fn cell_at(&self, position: Point<Pixels>) -> Option<(usize, usize, bool)> {
         let (origin, cell) = self.layout.get()?;
         let size = self.session.size();
         let x = ((position.x - origin.x) / cell.width).max(0.);

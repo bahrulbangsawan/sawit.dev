@@ -60,6 +60,17 @@ impl Workspace {
             .bg(cx.theme().status_bar)
             .border_t_1()
             .border_color(cx.theme().status_bar_border)
+            .when_some(self.close_note.clone(), |el, note| {
+                el.child(
+                    div()
+                        .id("status-close-note")
+                        .role(Role::Status)
+                        .aria_label(note.clone())
+                        .px_1()
+                        .text_color(cx.theme().foreground)
+                        .child(note),
+                )
+            })
             .child(
                 Button::new("status-instances")
                     .ghost()

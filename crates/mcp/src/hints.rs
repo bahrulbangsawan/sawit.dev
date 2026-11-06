@@ -117,6 +117,8 @@ const DESTRUCTIVE: &[&str] = &[
     "install_sawit_skills",
     "stack_create",
     "app_close_tab",
+    "app_close_all_tabs",
+    "terminal_clear",
     "app_run_script",
     "app_stop_script",
     "app_open_sql",

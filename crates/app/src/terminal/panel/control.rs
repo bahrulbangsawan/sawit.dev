@@ -371,4 +371,21 @@ impl TerminalPanel {
         self.reveal(ix, pane, origin, window, cx);
         Ok((ix, pane))
     }
+
+    /// An agent's `terminal_clear`: clears the scrollback and screen of the tab at `ix`'s pane
+    /// at position `pane` (default: its focused pane).
+    pub fn clear_for_agent(
+        &mut self,
+        ix: usize,
+        pane: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> Result<serde_json::Value, String> {
+        let ix = self.tab_ix(Some(ix))?;
+        let id = match pane {
+            Some(_) => self.pane_of(ix, pane, cx)?.0,
+            None => self.tabs[ix].read(cx).state.focused,
+        };
+        self.tabs[ix].update(cx, |t, cx| t.clear_pane(id, cx));
+        Ok(serde_json::json!({ "terminal": ix, "cleared": true }))
+    }
 }

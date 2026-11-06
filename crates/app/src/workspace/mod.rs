@@ -71,6 +71,7 @@ mod explorer;
 mod file_tabs;
 mod fill;
 mod find;
+mod force_close;
 mod keyboard;
 mod new_project;
 mod pages;
@@ -98,6 +99,8 @@ actions!(
         CloseTabsRight,
         CloseCleanTabs,
         CloseAllTabs,
+        /// Closes every tab, pinned ones and ones with unsaved changes too, after asking.
+        ForceCloseAllTabs,
         TogglePinTab,
         ToggleSidebar,
         ToggleTerminal,
@@ -152,6 +155,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-k t", CloseTabsRight, ctx),
         KeyBinding::new("cmd-k u", CloseCleanTabs, ctx),
         KeyBinding::new("cmd-k w", CloseAllTabs, ctx),
+        KeyBinding::new("cmd-k shift-w", ForceCloseAllTabs, ctx),
         KeyBinding::new("cmd-k shift-enter", TogglePinTab, ctx),
         KeyBinding::new("ctrl-tab", NextTab, ctx),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, ctx),
@@ -272,6 +276,9 @@ pub struct Workspace {
     /// The status bar's copy-path button is showing its check mark.
     path_copied: bool,
     _path_copied_reset: Task<()>,
+    /// What Safe Close All kept, in the status bar for a moment.
+    close_note: Option<SharedString>,
+    _close_note_reset: Task<()>,
     /// Layout to go back to when the maximized terminal or canvas is restored.
     unmaximized: Option<Layout>,
     /// The projects' canvas tabs (owned by their tabs), one per project at most.

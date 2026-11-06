@@ -55,13 +55,16 @@ fn a_pinned_tab_moves_to_the_start_and_bulk_closes_keep_it(cx: &mut TestAppConte
     assert_eq!(plan.kept, 2);
     cx.update_window(w, |_, window, cx| {
         panel.update(cx, |p, cx| {
-            p.close_tabs_for_user(CloseScope::All, 1, window, cx)
+            p.close_tabs_for_user(CloseScope::Idle, 1, window, cx)
         })
     })
     .unwrap();
     assert_eq!(cx.update(|cx| panel.read(cx).tab_count()), 2);
     let notice = cx.update(|cx| panel.read(cx).notice.clone());
-    assert_eq!(notice.as_deref(), Some("Kept 2 locked or pinned tabs."));
+    assert_eq!(
+        notice.as_deref(),
+        Some("Kept 2 tabs (locked, pinned or busy).")
+    );
 }
 
 /// Close All asks before it stops what runs, naming it; Cancel keeps every tab.

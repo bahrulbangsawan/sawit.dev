@@ -7,32 +7,104 @@ use gpui_kit::{
 };
 
 use crate::terminal::RenameTab;
-use crate::terminal::tab::menu::pane_menu_items;
+use crate::terminal::tab::menu::{PaneAct, PaneEntry, PaneMenuState, pane_menu};
 use crate::terminal::testing::{
     focus_terminal, init, open_panel, ready, scratch_dir, start_cat, wait_until,
 };
 
+/// The pane menu's items in their groups (item 22), in Title Case.
 #[test]
 fn pane_menu_lists_the_planned_items() {
-    let labels: Vec<_> = pane_menu_items(false, true)
-        .into_iter()
-        .map(|(l, _, _)| l)
+    let labels: Vec<&str> = pane_menu(&PaneMenuState::default())
+        .iter()
+        .map(|e| match e {
+            PaneEntry::Separator => "-",
+            PaneEntry::Item { label, .. } => label,
+        })
         .collect();
     assert_eq!(
         labels,
         [
+            "Copy",
+            "Paste",
+            "Select All",
+            "Find…",
+            "-",
             "Copy Last Output",
             "Copy Error",
-            "Rename pane",
-            "Split right",
-            "Split down",
-            "Zoom",
-            "Send right-clicks to pane",
-            "Close pane"
+            "Open Link",
+            "Copy Link",
+            "Open File",
+            "-",
+            "Clear",
+            "Reset Terminal",
+            "-",
+            "Rename Pane",
+            "Split Right",
+            "Split Down",
+            "Zoom Pane",
+            "Full Screen",
+            "-",
+            "Send Right-Clicks to Pane",
+            "-",
+            "Close Pane",
         ]
     );
-    assert_eq!(pane_menu_items(true, false)[5].0, "Unzoom");
-    assert_eq!(pane_menu_items(false, true)[6].1, Some(true));
+}
+
+/// Which pane menu items apply: disabled, not hidden, when they don't.
+#[test]
+fn pane_menu_disables_what_does_not_apply() {
+    let enabled = |s: &PaneMenuState| -> Vec<(&'static str, bool)> {
+        pane_menu(s)
+            .into_iter()
+            .filter_map(|e| match e {
+                PaneEntry::Item { label, enabled, .. } => Some((label, enabled)),
+                PaneEntry::Separator => None,
+            })
+            .collect()
+    };
+    let off = |s: &PaneMenuState| -> Vec<&'static str> {
+        enabled(s)
+            .into_iter()
+            .filter(|(_, on)| !on)
+            .map(|(l, _)| l)
+            .collect()
+    };
+    // One pane, nothing selected, the click on no link.
+    assert_eq!(
+        off(&PaneMenuState::default()),
+        [
+            "Copy",
+            "Find…",
+            "Open Link",
+            "Copy Link",
+            "Open File",
+            "Zoom Pane"
+        ]
+    );
+    // A split tab, text selected, the click on a link, the tab locked.
+    let state = PaneMenuState {
+        zoomed: true,
+        split: true,
+        send_right_clicks: true,
+        has_selection: true,
+        target: Some(sawit_core::terminal::Target::Link(
+            "https://sawit.dev".into(),
+        )),
+        locked: true,
+    };
+    assert_eq!(off(&state), ["Find…", "Open File", "Close Pane"]);
+    assert!(enabled(&state).contains(&("Unzoom Pane", true)));
+    let checked = pane_menu(&state).into_iter().find_map(|e| match e {
+        PaneEntry::Item {
+            act: PaneAct::SendRightClicks,
+            checked,
+            ..
+        } => checked,
+        _ => None,
+    });
+    assert_eq!(checked, Some(true));
 }
 
 /// The keys of the terminal's menus as a terminal sees them: each item of the pane menu
@@ -45,9 +117,12 @@ fn menu_keys(cx: &mut TestAppContext) -> Vec<(String, Option<String>)> {
     cx.update(|cx| {
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        let mut actions: Vec<Box<dyn Action>> = pane_menu_items(false, false)
+        let mut actions: Vec<Box<dyn Action>> = pane_menu(&PaneMenuState::default())
             .into_iter()
-            .map(|(_, _, action)| action)
+            .filter_map(|e| match e {
+                PaneEntry::Item { action, .. } => action,
+                PaneEntry::Separator => None,
+            })
             .collect();
         actions.push(Box::new(RenameTab));
         actions
@@ -80,8 +155,9 @@ fn menu_keys(cx: &mut TestAppContext) -> Vec<(String, Option<String>)> {
     })
 }
 
-/// Every item of the pane menu, and the tab menu's Rename Tab, has a key that runs it in a
-/// terminal, which the menu shows beside it, and no two items share one.
+/// The pane menu's items, and the tab menu's Rename Tab, have the keys that run them in a
+/// terminal, which the menu shows beside them; no two items share one, and an item with no
+/// clash-free key shows none.
 #[gpui_kit::test]
 fn every_menu_item_has_its_own_key(cx: &mut TestAppContext) {
     cx.update(init);
@@ -89,12 +165,21 @@ fn every_menu_item_has_its_own_key(cx: &mut TestAppContext) {
     assert_eq!(
         keys,
         [
+            // ⌘C stays the terminal's own (on_key copies the selection), unbound.
+            ("terminal::Copy", None),
+            ("terminal::Paste", Some("cmd-v")),
+            ("terminal::SelectAll", Some("cmd-a")),
             ("terminal::CopyLastOutput", Some("cmd-shift-c")),
             ("terminal::CopyError", Some("alt-cmd-shift-c")),
+            ("terminal::Clear", Some("cmd-k")),
+            // No clash-free key: the menu shows none.
+            ("terminal::ResetTerminal", None),
             ("terminal::RenamePane", Some("cmd-i")),
             ("terminal::SplitRight", Some("cmd-d")),
             ("terminal::SplitDown", Some("cmd-shift-d")),
             ("terminal::ZoomPane", Some("cmd-shift-enter")),
+            // ⇧⌘↩ is the workspace's, but a terminal zooms its pane with it.
+            ("workspace::ToggleMaximizePane", None),
             ("terminal::ToggleSendRightClicks", Some("alt-cmd-r")),
             ("terminal::ClosePane", Some("alt-cmd-w")),
             ("terminal::RenameTab", Some("cmd-shift-i")),
@@ -379,7 +464,7 @@ fn right_clicks_open_the_pane_menu_unless_sent_on(cx: &mut TestAppContext) {
 
     vcx.update(|window, cx| {
         tab.update(cx, |t, cx| {
-            t.run_menu_item(pane, "Send right-clicks to pane", window, cx);
+            t.run_pane_act(pane, PaneAct::SendRightClicks, window, cx);
             t.menu = None;
         })
     });

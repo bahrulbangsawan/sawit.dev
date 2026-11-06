@@ -23,8 +23,28 @@ use crate::terminal::tab::TerminalTab;
 pub enum CloseScope {
     /// Every tab but the one.
     Others,
-    /// Every tab.
+    /// The tabs before it in the strip.
+    Left,
+    /// The tabs after it.
+    Right,
+    /// Tabs with nothing running: Safe Close All.
+    Idle,
+    /// Every tab, running or not: Force Close All (it asks first when something runs).
     All,
+}
+
+impl CloseScope {
+    /// From an agent's `terminal_close` scope: `others`, `left`, `right`, `idle` or `all`.
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "others" => Self::Others,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "idle" => Self::Idle,
+            "all" => Self::All,
+            _ => return None,
+        })
+    }
 }
 
 /// What a bulk close would do: the tabs it closes, what runs in them, and the tabs it keeps.
@@ -36,12 +56,12 @@ pub struct BulkClose {
     pub kept: usize,
 }
 
-/// "Kept 2 locked or pinned tabs.", or nothing.
+/// "Kept 2 tabs (locked, pinned or busy).", or nothing.
 pub fn kept_note(kept: usize) -> Option<String> {
     match kept {
         0 => None,
-        1 => Some("Kept 1 locked or pinned tab.".into()),
-        n => Some(format!("Kept {n} locked or pinned tabs.")),
+        1 => Some("Kept 1 tab (locked, pinned or busy).".into()),
+        n => Some(format!("Kept {n} tabs (locked, pinned or busy).")),
     }
 }
 
@@ -87,24 +107,33 @@ impl TerminalPanel {
         (pinned, at)
     }
 
-    /// What closing per `scope` from the tab at `target` would do. Locked and pinned tabs stay,
-    /// and what they close may run something (the caller asks first).
+    /// What closing per `scope` from the tab at `target` would do. Locked tabs always stay,
+    /// pinned ones except for [`CloseScope::All`], and busy ones for [`CloseScope::Idle`]; what
+    /// the others close may run something (the caller asks first).
     pub fn bulk_close(&self, scope: CloseScope, target: usize, cx: &App) -> BulkClose {
         let mut plan = BulkClose::default();
         for ix in 0..self.tabs.len() {
             let in_scope = match scope {
                 CloseScope::Others => ix != target,
-                CloseScope::All => true,
+                CloseScope::Left => ix < target,
+                CloseScope::Right => ix > target,
+                CloseScope::Idle | CloseScope::All => true,
             };
             if !in_scope {
                 continue;
             }
             let state = &self.tabs[ix].read(cx).state;
-            if state.locked || state.pinned {
+            // Force Close All closes pinned tabs too (they come back with their project); a
+            // lock always holds.
+            if state.locked || (state.pinned && scope != CloseScope::All) {
                 plan.kept += 1;
                 continue;
             }
             let running = self.running_in_tab(ix, cx);
+            if scope == CloseScope::Idle && !running.is_empty() {
+                plan.kept += 1;
+                continue;
+            }
             plan.closing.push(ix);
             plan.running.extend(running);
         }
@@ -167,6 +196,38 @@ impl TerminalPanel {
             });
         })
         .detach();
+    }
+
+    /// An agent's `terminal_close` with a scope: closes what [`Self::bulk_close`] plans, refused
+    /// without `confirm` while a tab it would close runs something. Never asks the user (that
+    /// would take their keyboard).
+    pub fn close_scope_for_agent(
+        &mut self,
+        scope: CloseScope,
+        target: usize,
+        confirm: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<serde_json::Value, String> {
+        if target >= self.tabs.len() {
+            return Err(format!("There is no terminal {target}."));
+        }
+        let plan = self.bulk_close(scope, target, cx);
+        if !plan.running.is_empty() && !confirm {
+            return Err(format!(
+                "Nothing was closed: closing them ends what runs there ({}). Pass confirm: true \
+                 to close them anyway.",
+                plan.running.join(", ")
+            ));
+        }
+        let closed = plan.closing.len();
+        // The user's keyboard stays where it is: an agent's close never moves it.
+        let mut closing = plan.closing.clone();
+        closing.sort_unstable();
+        for ix in closing.into_iter().rev() {
+            self.close(ix, cx);
+        }
+        cx.notify();
+        Ok(serde_json::json!({ "closed": closed, "kept": plan.kept }))
     }
 
     /// Closes the tabs `plan` names; the keyboard, if it was in one, goes to the tab shown

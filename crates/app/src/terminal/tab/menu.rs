@@ -1,39 +1,162 @@
-//! The pane menu: its items and their keys, opening it, and what each item does.
+//! The pane menu (right-click inside a terminal): its items in their groups, which ones apply,
+//! their keys (read from the keymap, as the file tab menu shows them), opening it, and what each
+//! does. Items that don't apply are disabled, not hidden, so the menu keeps its shape.
 
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::*;
-use sawit_core::terminal::PaneId;
+use sawit_core::terminal::{PaneId, Target};
 
 use super::{Menu, TerminalTab};
+use crate::terminal::view::TerminalView;
 use crate::terminal::{
-    ClosePane, CopyError, CopyLastOutput, RenamePane, SplitDown, SplitRight, ToggleSendRightClicks,
-    ZoomPane,
+    Clear, ClosePane, Copy, CopyError, CopyLastOutput, Paste, RenamePane, ResetTerminal, SelectAll,
+    SplitDown, SplitRight, ToggleSendRightClicks, ZoomPane,
 };
 
-/// One item of the pane menu: its label, `Some(checked)` for a toggle, and
-/// the action whose key the menu shows beside it.
-pub type PaneMenuItem = (&'static str, Option<bool>, Box<dyn Action>);
+/// What a pane menu item does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneAct {
+    Copy,
+    Paste,
+    SelectAll,
+    /// ⌘F's find bar: item 21 (built in parallel) wires it.
+    Find,
+    CopyLastOutput,
+    CopyError,
+    OpenLink,
+    CopyLink,
+    OpenFile,
+    Clear,
+    Reset,
+    Rename,
+    SplitRight,
+    SplitDown,
+    Zoom,
+    FullScreen,
+    SendRightClicks,
+    Close,
+}
 
-/// The pane menu, in order. A click on an item acts on the pane the menu
-/// was opened for; its key acts on the pane with the keyboard.
-pub fn pane_menu_items(zoomed: bool, send_right_clicks: bool) -> Vec<PaneMenuItem> {
+/// One entry of the pane menu.
+pub enum PaneEntry {
+    Separator,
+    Item {
+        label: &'static str,
+        act: PaneAct,
+        /// `Some(checked)` for a toggle.
+        checked: Option<bool>,
+        /// The action whose keys show beside it, if it has one.
+        action: Option<Box<dyn Action>>,
+        enabled: bool,
+    },
+}
+
+/// What decides the pane menu's items.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PaneMenuState {
+    pub zoomed: bool,
+    pub split: bool,
+    pub send_right_clicks: bool,
+    pub has_selection: bool,
+    /// The link or the existing file the right-click landed on.
+    pub target: Option<Target>,
+    /// The tab is locked: Close Pane is off.
+    pub locked: bool,
+}
+
+/// The pane menu, in its groups. A click on an item acts on the pane the menu was opened for;
+/// its key acts on the pane with the keyboard.
+pub fn pane_menu(s: &PaneMenuState) -> Vec<PaneEntry> {
+    let item = |label, act, action: Option<Box<dyn Action>>, enabled| PaneEntry::Item {
+        label,
+        act,
+        checked: None,
+        action,
+        enabled,
+    };
+    let link = matches!(s.target, Some(Target::Link(_)));
+    let file = matches!(s.target, Some(Target::Path(_)));
     vec![
-        ("Copy Last Output", None, Box::new(CopyLastOutput)),
-        ("Copy Error", None, Box::new(CopyError)),
-        ("Rename pane", None, Box::new(RenamePane)),
-        ("Split right", None, Box::new(SplitRight)),
-        ("Split down", None, Box::new(SplitDown)),
-        (
-            if zoomed { "Unzoom" } else { "Zoom" },
-            None,
-            Box::new(ZoomPane),
+        item("Copy", PaneAct::Copy, Some(Box::new(Copy)), s.has_selection),
+        item("Paste", PaneAct::Paste, Some(Box::new(Paste)), true),
+        item(
+            "Select All",
+            PaneAct::SelectAll,
+            Some(Box::new(SelectAll)),
+            true,
         ),
-        (
-            "Send right-clicks to pane",
-            Some(send_right_clicks),
-            Box::new(ToggleSendRightClicks),
+        item("Find…", PaneAct::Find, None, false),
+        PaneEntry::Separator,
+        item(
+            "Copy Last Output",
+            PaneAct::CopyLastOutput,
+            Some(Box::new(CopyLastOutput)),
+            true,
         ),
-        ("Close pane", None, Box::new(ClosePane)),
+        item(
+            "Copy Error",
+            PaneAct::CopyError,
+            Some(Box::new(CopyError)),
+            true,
+        ),
+        item("Open Link", PaneAct::OpenLink, None, link),
+        item("Copy Link", PaneAct::CopyLink, None, link),
+        item("Open File", PaneAct::OpenFile, None, file),
+        PaneEntry::Separator,
+        item("Clear", PaneAct::Clear, Some(Box::new(Clear)), true),
+        item(
+            "Reset Terminal",
+            PaneAct::Reset,
+            Some(Box::new(ResetTerminal)),
+            true,
+        ),
+        PaneEntry::Separator,
+        item(
+            "Rename Pane",
+            PaneAct::Rename,
+            Some(Box::new(RenamePane)),
+            true,
+        ),
+        item(
+            "Split Right",
+            PaneAct::SplitRight,
+            Some(Box::new(SplitRight)),
+            true,
+        ),
+        item(
+            "Split Down",
+            PaneAct::SplitDown,
+            Some(Box::new(SplitDown)),
+            true,
+        ),
+        item(
+            if s.zoomed { "Unzoom Pane" } else { "Zoom Pane" },
+            PaneAct::Zoom,
+            Some(Box::new(ZoomPane)),
+            // One pane has nothing to zoom over.
+            s.split,
+        ),
+        item(
+            "Full Screen",
+            PaneAct::FullScreen,
+            Some(Box::new(crate::workspace::ToggleMaximizePane)),
+            true,
+        ),
+        PaneEntry::Separator,
+        PaneEntry::Item {
+            label: "Send Right-Clicks to Pane",
+            act: PaneAct::SendRightClicks,
+            checked: Some(s.send_right_clicks),
+            action: Some(Box::new(ToggleSendRightClicks)),
+            enabled: true,
+        },
+        PaneEntry::Separator,
+        item(
+            "Close Pane",
+            PaneAct::Close,
+            Some(Box::new(ClosePane)),
+            !s.locked,
+        ),
     ]
 }
 
@@ -56,27 +179,45 @@ impl TerminalTab {
             return;
         };
         let back = view.focus_handle(cx);
-        let zoomed = self.state.zoomed == Some(pane);
-        let split = self.state.is_split();
-        let send = self
-            .state
-            .panes
-            .get(&pane)
-            .is_some_and(|meta| meta.send_right_clicks);
+        let state = PaneMenuState {
+            zoomed: self.state.zoomed == Some(pane),
+            split: self.state.is_split(),
+            send_right_clicks: self
+                .state
+                .panes
+                .get(&pane)
+                .is_some_and(|meta| meta.send_right_clicks),
+            has_selection: view.read(cx).has_selection(),
+            target: self.menu_target(pane, cx),
+            locked: self.state.locked,
+        };
         let tab = cx.entity().downgrade();
         let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
             menu = menu.action_context(back);
-            for (label, checked, action) in pane_menu_items(zoomed, send) {
+            for entry in pane_menu(&state) {
+                let PaneEntry::Item {
+                    label,
+                    act,
+                    checked,
+                    action,
+                    enabled,
+                } = entry
+                else {
+                    menu = menu.separator();
+                    continue;
+                };
                 let tab = tab.clone();
-                let item = match checked {
-                    Some(checked) => PopupMenuItem::new(label).checked(checked),
-                    None => PopupMenuItem::new(label),
+                // An item with an action shows the keys the keymap gives it in the pane (its
+                // action context), as the file tab menu shows its keys.
+                let mut item = PopupMenuItem::new(label);
+                if let Some(checked) = checked {
+                    item = item.checked(checked);
                 }
-                .action(action)
-                // One pane has nothing to zoom over.
-                .disabled(!split && label == "Zoom");
-                menu = menu.item(item.on_click(move |_, window, cx| {
-                    let _ = tab.update(cx, |t, cx| t.run_menu_item(pane, label, window, cx));
+                if let Some(action) = action {
+                    item = item.action(action);
+                }
+                menu = menu.item(item.disabled(!enabled).on_click(move |_, window, cx| {
+                    let _ = tab.update(cx, |t, cx| t.run_pane_act(pane, act, window, cx));
                 }));
             }
             menu
@@ -96,30 +237,84 @@ impl TerminalTab {
         cx.notify();
     }
 
-    /// Does what the pane menu item `label` says, to `pane`.
-    pub(super) fn run_menu_item(
+    /// The link, or the existing file, the right-click that opened `pane`'s menu landed on.
+    fn menu_target(&self, pane: PaneId, cx: &App) -> Option<Target> {
+        let view = self.views.get(&pane)?.read(cx);
+        match view.menu_target.clone()? {
+            Target::Link(url) => Some(Target::Link(url)),
+            Target::Path(path) => view
+                .resolve_path(&path)
+                .map(|p| Target::Path(p.to_string_lossy().into_owned())),
+        }
+    }
+
+    /// Does what the pane menu item `act` says, to `pane`.
+    pub(super) fn run_pane_act(
         &mut self,
         pane: PaneId,
-        label: &str,
+        act: PaneAct,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match label {
-            "Rename pane" => self.rename_pane(pane, window, cx),
-            "Split right" => {
-                self.focus_pane(pane, window, cx);
-                window.dispatch_action(Box::new(SplitRight), cx);
+        let Some(view) = self.views.get(&pane).cloned() else {
+            return;
+        };
+        let target = self.menu_target(pane, cx);
+        match act {
+            PaneAct::Copy => view.update(cx, |v, cx| v.copy_selection(cx)),
+            PaneAct::Paste => view.update(cx, |v, cx| v.paste_clipboard(cx)),
+            PaneAct::SelectAll => view.update(cx, |v, cx| v.select_all(cx)),
+            PaneAct::Find => {}
+            PaneAct::CopyLastOutput => self.copy_output(pane, false, cx),
+            PaneAct::CopyError => self.copy_output(pane, true, cx),
+            PaneAct::OpenLink => {
+                if let Some(Target::Link(url)) = target {
+                    cx.open_url(&url);
+                }
             }
-            "Split down" => {
-                self.focus_pane(pane, window, cx);
-                window.dispatch_action(Box::new(SplitDown), cx);
+            PaneAct::CopyLink => {
+                if let Some(Target::Link(url)) = target {
+                    view.update(cx, |v, cx| v.copy_text(url, cx));
+                }
             }
-            "Zoom" | "Unzoom" => self.toggle_zoom(pane, window, cx),
-            "Send right-clicks to pane" => self.toggle_right_clicks(pane, cx),
-            "Close pane" => self.close_pane(pane, window, cx),
-            "Copy Last Output" => self.copy_output(pane, false, cx),
-            "Copy Error" => self.copy_output(pane, true, cx),
-            _ => {}
+            PaneAct::OpenFile => {
+                if let Some(Target::Path(path)) = target {
+                    cx.emit(super::TabEvent::OpenFile(path.into()));
+                }
+            }
+            PaneAct::Clear => view.update(cx, |v, cx| v.clear(cx)),
+            PaneAct::Reset => view.update(cx, |v, cx| v.reset(cx)),
+            PaneAct::Rename => self.rename_pane(pane, window, cx),
+            PaneAct::SplitRight | PaneAct::SplitDown | PaneAct::FullScreen => {
+                self.focus_pane(pane, window, cx);
+                let action: Box<dyn Action> = match act {
+                    PaneAct::SplitRight => Box::new(SplitRight),
+                    PaneAct::SplitDown => Box::new(SplitDown),
+                    _ => Box::new(crate::workspace::ToggleMaximizePane),
+                };
+                window.dispatch_action(action, cx);
+            }
+            PaneAct::Zoom => self.toggle_zoom(pane, window, cx),
+            PaneAct::SendRightClicks => self.toggle_right_clicks(pane, cx),
+            PaneAct::Close => self.close_pane(pane, window, cx),
+        }
+    }
+
+    /// Runs `f` on the focused pane's terminal (the pane keys' actions).
+    pub fn on_focused(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut TerminalView, &mut Context<TerminalView>),
+    ) {
+        if let Some(view) = self.views.get(&self.state.focused) {
+            view.update(cx, f);
+        }
+    }
+
+    /// Clears `pane`'s scrollback and screen (Clear, an agent's `terminal_clear`).
+    pub fn clear_pane(&mut self, pane: PaneId, cx: &mut Context<Self>) {
+        if let Some(view) = self.views.get(&pane) {
+            view.update(cx, |v, cx| v.clear(cx));
         }
     }
 

@@ -1,6 +1,7 @@
 //! A PTY running a program, emulated by `alacritty_terminal`.
 
 mod find;
+mod actions;
 mod process;
 mod snapshot;
 mod spawn;
@@ -17,6 +18,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Term, TermMode};
 
 pub use find::{FindMarks, Found, GridMatch, find_in_rows, found_at};
+pub use actions::{Target, target_in};
 pub use snapshot::{CellView, CursorView, Snapshot};
 use spawn::Listener;
 pub use spawn::{Command, TermEvent, default_shell, multiplexer_markers, wrap_unsetting};
