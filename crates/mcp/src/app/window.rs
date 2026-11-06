@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
-use sawit_core::app_control::{Command, Page, Panel};
+use sawit_core::app_control::{Command, FillPanel, Page, Panel};
 
-use super::{PAGES, PANELS, variant};
+use super::{FILL_PANELS, PAGES, PANELS, variant};
 use crate::{Sawit, fail};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -49,6 +49,15 @@ pub struct LayoutArgs {
     pub terminal: Option<bool>,
     #[schemars(description = "Show or hide the tabs (center); tabs or terminal stay visible")]
     pub center: Option<bool>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct MaximizeArgs {
+    #[schemars(
+        description = "terminal, browser or canvas: the panel to fill the window with (the browser or canvas opens if it isn't); the panel that fills it already puts the layout back"
+    )]
+    pub panel: String,
     pub project: Option<String>,
 }
 
@@ -113,9 +122,22 @@ impl Sawit {
         self.app_tool(a.project, command).await
     }
 
-    #[tool(description = "Toggle filling the window with the terminal (and back)")]
+    #[tool(
+        description = "Toggle filling the window with a panel: terminal, browser or canvas (no sidebar, other areas, tab bar or status bar), and back to the layout as it was. Like ⇧⌘↩ (⌃⌘1/2/3), but the keyboard stays where the user has it. Answers the panel that fills the window now"
+    )]
+    async fn app_maximize(&self, Parameters(a): Parameters<MaximizeArgs>) -> CallToolResult {
+        match variant::<FillPanel>(&a.panel, FILL_PANELS) {
+            Ok(panel) => self.app_tool(a.project, Command::Maximize { panel }).await,
+            Err(e) => fail(e),
+        }
+    }
+
+    #[tool(
+        description = "Toggle filling the window with the terminal (and back): app_maximize with panel terminal"
+    )]
     async fn app_maximize_terminal(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
-        self.app_tool(a.project, Command::MaximizeTerminal).await
+        let panel = FillPanel::Terminal;
+        self.app_tool(a.project, Command::Maximize { panel }).await
     }
 
     #[tool(

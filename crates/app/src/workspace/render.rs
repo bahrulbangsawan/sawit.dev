@@ -10,7 +10,7 @@ impl Render for Workspace {
             // Keep workspace shortcuts working when nothing inside has focus.
             self.focus.focus(window, cx);
         }
-        self.sync_canvas_maximized();
+        self.sync_filled();
         self.sync_boards(window, cx);
         self.sync_browser(cx);
         self.sync_db_projects(cx);
@@ -31,8 +31,15 @@ impl Render for Workspace {
         // AppKit's keyboard follows GPUI's: a page or canvas frame that has it gives it back once
         // GPUI's keyboard moved on, or once it hides.
         crate::browser::engine::keyboard::reconcile(window, cx);
+        let filled = self.filled();
+        // `maximized` while a panel fills the window, for Escape's binding.
+        let context = if filled.is_some() {
+            "Workspace maximized"
+        } else {
+            "Workspace"
+        };
         v_flex()
-            .key_context("Workspace")
+            .key_context(context)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &CloseActiveTab, w, cx| {
                 this.on_close_action(CloseOp::This, w, cx)
@@ -68,6 +75,16 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &ToggleMaximizePane, w, cx| this.toggle_maximize_pane(w, cx)),
             )
+            .on_action(cx.listener(|this, _: &MaximizeTerminal, w, cx| {
+                this.toggle_fill(FillPanel::Terminal, Origin::User, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MaximizeBrowser, w, cx| {
+                this.toggle_fill(FillPanel::Browser, Origin::User, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MaximizeCanvas, w, cx| {
+                this.toggle_fill(FillPanel::Canvas, Origin::User, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RestoreLayout, _, cx| this.escape_fill(cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
             .on_action(cx.listener(|this, _: &NextProject, _, cx| this.cycle_project(1, cx)))
@@ -182,6 +199,7 @@ impl Render for Workspace {
                             .child(div().font_semibold().child("Sawit"))
                             .child(self.render_project_switcher(cx))
                             .child(div().flex_1())
+                            .children(self.render_fill_exit(window, cx))
                             .child(self.render_layout_toggles(cx))
                             .child(crate::git::account::account_control(
                                 &self.github,
@@ -191,7 +209,7 @@ impl Render for Workspace {
                     ),
             )
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
-            .child(self.render_status_bar(cx))
+            .when(filled.is_none(), |el| el.child(self.render_status_bar(cx)))
     }
 }
 
@@ -213,6 +231,7 @@ impl Workspace {
             Self::area_mark(&self.terminal_area, cx).child(cached(self.terminal.clone().into()));
         let main = match (l.center, l.terminal) {
             (true, true) => v_resizable("workspace-v")
+                .with_state(&self.split_v)
                 .child(resizable_panel().child(self.render_center(cx)))
                 .child(
                     resizable_panel()
@@ -228,6 +247,7 @@ impl Workspace {
             return main;
         }
         h_resizable("workspace-h")
+            .with_state(&self.split_h)
             .child(
                 resizable_panel()
                     .size(px(240.))
@@ -260,7 +280,7 @@ impl Workspace {
     }
 
     fn render_center(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let show_tabs = !self.canvas_maximized;
+        let show_tabs = self.filled_tab.is_none();
         Self::area_mark(&self.center_area, cx)
             .flex()
             .flex_col()

@@ -114,10 +114,18 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::os_action("Paste", text::Paste, OsAction::Paste),
             MenuItem::os_action("Select All", text::SelectAll, OsAction::SelectAll),
         ]),
-        Menu::new("View").items([MenuItem::action(
-            crate::agents::menu_label(cx),
-            crate::agents::ToggleAgentCursors,
-        )]),
+        Menu::new("View").items([
+            MenuItem::action(
+                crate::agents::menu_label(cx),
+                crate::agents::ToggleAgentCursors,
+            ),
+            MenuItem::separator(),
+            // A panel fills the window (`workspace::fill`); macOS adds its own Enter Full Screen.
+            MenuItem::action("Maximize Panel", crate::workspace::ToggleMaximizePane),
+            MenuItem::action("Maximize Terminal", crate::workspace::MaximizeTerminal),
+            MenuItem::action("Maximize Browser", crate::workspace::MaximizeBrowser),
+            MenuItem::action("Maximize Canvas", crate::workspace::MaximizeCanvas),
+        ]),
     ]
 }
 

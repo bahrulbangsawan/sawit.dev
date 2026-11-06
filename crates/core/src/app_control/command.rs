@@ -39,6 +39,16 @@ pub enum Page {
     NewProject,
 }
 
+/// A panel that can fill the window (`maximize`): the terminal dock, or the browser's or the
+/// canvas's tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillPanel {
+    Terminal,
+    Browser,
+    Canvas,
+}
+
 /// Data the app keeps in memory and saves itself; after another process
 /// changes the file, the app reads it again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,7 +109,13 @@ pub enum Command {
         #[serde(default)]
         center: Option<bool>,
     },
+    /// Fills the window with the terminal (`maximize` with `panel: terminal`, kept for older
+    /// clients).
     MaximizeTerminal,
+    /// Fills the window with `panel`, or puts the layout back when it already fills it.
+    Maximize {
+        panel: FillPanel,
+    },
     OpenPage {
         page: Page,
     },

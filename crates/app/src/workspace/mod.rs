@@ -52,6 +52,7 @@ use crate::update::{Updater, updater};
 use crate::viewers::{ImageView, PdfView, VideoView};
 use crate::welcome::{Welcome, WelcomeEvent};
 use sawit_board::store::{self, board_file};
+use sawit_core::app_control::FillPanel;
 use sawit_core::files::{FileKind, classify};
 use sawit_core::instances::AppPaths;
 use sawit_core::recent::RecentProjects;
@@ -66,6 +67,7 @@ mod control;
 mod dock;
 mod explorer;
 mod file_tabs;
+mod fill;
 mod keyboard;
 mod new_project;
 mod pages;
@@ -98,6 +100,10 @@ actions!(
         ToggleTerminal,
         ToggleCenter,
         ToggleMaximizePane,
+        MaximizeTerminal,
+        MaximizeBrowser,
+        MaximizeCanvas,
+        RestoreLayout,
         NextTab,
         PreviousTab,
         NextProject,
@@ -149,6 +155,14 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-j", ToggleTerminal, ctx),
         KeyBinding::new("cmd-shift-j", ToggleCenter, ctx),
         KeyBinding::new("cmd-shift-enter", ToggleMaximizePane, ctx),
+        // Free on the canvas (its panels are ⌥1–⌥3) and everywhere else: ⌃⌘ and a letter are the
+        // pages', ⌘ and a digit the sidebar's panels.
+        KeyBinding::new("ctrl-cmd-1", MaximizeTerminal, ctx),
+        KeyBinding::new("ctrl-cmd-2", MaximizeBrowser, ctx),
+        KeyBinding::new("ctrl-cmd-3", MaximizeCanvas, ctx),
+        // Only while a panel fills the window, and only where the panel has no use for Escape
+        // (`fill`): a field, a menu or a dialog binds its own Escape, which runs first.
+        KeyBinding::new("escape", RestoreLayout, Some("Workspace && maximized")),
         KeyBinding::new("cmd-t", NewTerminal, ctx),
         KeyBinding::new("cmd-1", ShowInstances, ctx),
         KeyBinding::new("cmd-2", ShowFiles, ctx),
@@ -258,8 +272,17 @@ pub struct Workspace {
     unmaximized: Option<Layout>,
     /// The projects' canvas tabs (owned by their tabs), one per project at most.
     boards: Vec<WeakEntity<BoardView>>,
-    /// The canvas fills the window: no sidebar, terminal or tab bar.
-    canvas_maximized: bool,
+    /// The tab whose view fills the window (the browser's or the canvas's): no sidebar, terminal,
+    /// tab bar or status bar ([`fill`]).
+    filled_tab: Option<EntityId>,
+    /// The title bar says which key restores the layout, for a moment after a panel fills the
+    /// window.
+    fill_hint: bool,
+    _fill_hint_reset: Task<()>,
+    /// The sizes of the sidebar's and the terminal dock's splits, kept while they are hidden, so a
+    /// layout put back has them as they were.
+    split_h: Entity<gpui_kit::component::resizable::ResizableState>,
+    split_v: Entity<gpui_kit::component::resizable::ResizableState>,
     /// The browser tabs' views (owned by their tabs): one per project at most, and one for
     /// no project.
     browsers: Vec<WeakEntity<BrowserView>>,
@@ -285,9 +308,16 @@ pub struct Workspace {
     _subscriptions: Vec<Subscription>,
 }
 
-/// What the workspace shows, as far as the keyboard goes: the welcome screen, the layout, the
-/// filled canvas, the project, the sidebar's panel and the view of the tab in front.
-type Shown = (bool, Layout, bool, usize, SidebarTab, Option<EntityId>);
+/// What the workspace shows, as far as the keyboard goes: the welcome screen, the layout, the tab
+/// filling the window, the project, the sidebar's panel and the view of the tab in front.
+type Shown = (
+    bool,
+    Layout,
+    Option<EntityId>,
+    usize,
+    SidebarTab,
+    Option<EntityId>,
+);
 
 impl Workspace {
     /// The active project's folder, if it has one.

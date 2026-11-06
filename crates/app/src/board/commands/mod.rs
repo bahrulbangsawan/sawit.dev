@@ -68,6 +68,7 @@ pub(super) fn run_ui(
             copy_as(view, id, cx);
         }
         sawit_board::policy::ADD_ROUTES => view.open_routes_dialog(cx),
+        sawit_board::policy::MAXIMIZE => cx.emit(super::ToggleCanvasMaximize),
         // An id the policy might add before the canvas carries it out.
         _ => {
             log::debug!("the canvas doesn't carry out {id} yet");

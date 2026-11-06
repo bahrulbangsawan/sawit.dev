@@ -406,7 +406,11 @@ impl Render for TerminalPanel {
                                     .xsmall()
                                     .icon(max_icon)
                                     .accessibility_label(max_tip)
-                                    .tooltip(max_tip)
+                                    .tooltip_with_action(
+                                        max_tip,
+                                        &crate::workspace::MaximizeTerminal,
+                                        Some("Workspace"),
+                                    )
                                     .on_click(cx.listener(|_, _, _, cx| cx.emit(ToggleMaximize))),
                             ),
                     ),

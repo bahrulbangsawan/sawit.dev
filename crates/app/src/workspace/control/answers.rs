@@ -49,6 +49,7 @@ impl Workspace {
                 "center": self.layout.center,
                 "terminal": self.layout.terminal,
             },
+            "maximized": self.describe_fill()["panel"],
             "tabs": tabs,
             "terminals": self.terminal.read(cx).describe(cx),
             "canvas_open": self.boards.iter().any(|b| b.upgrade().is_some()),

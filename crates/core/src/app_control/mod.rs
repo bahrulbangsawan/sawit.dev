@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::instances::AppPaths;
 
-pub use command::{Command, InstanceAction, Page, Panel, SplitDirection, Store};
+pub use command::{Command, FillPanel, InstanceAction, Page, Panel, SplitDirection, Store};
 pub use keys::{KEY_NAMES, key_bytes};
 
 /// Starts a control request; open requests start with `sawit-open/1`.

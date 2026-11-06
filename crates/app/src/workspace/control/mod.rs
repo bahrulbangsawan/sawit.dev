@@ -4,7 +4,7 @@
 
 use futures::channel::oneshot;
 use sawit_core::agents::AgentIdentity;
-use sawit_core::app_control::{Command, InstanceAction, Page, Panel, Store, key_bytes};
+use sawit_core::app_control::{Command, FillPanel, InstanceAction, Page, Panel, Store, key_bytes};
 use sawit_core::control::Preflight;
 use sawit_core::db::ConnProfile;
 use serde_json::{Value, json};
@@ -95,7 +95,7 @@ impl Workspace {
                     return Err("The tabs or the terminal must stay visible.".into());
                 }
                 self.layout = layout;
-                self.canvas_maximized = false;
+                self.filled_tab = None;
                 done(json!({
                     "sidebar": layout.sidebar,
                     "center": layout.center,
@@ -103,9 +103,12 @@ impl Workspace {
                 }))
             }
             Command::MaximizeTerminal => {
-                self.leave_welcome(Layout::default(), cx);
-                self.toggle_terminal_maximized(Origin::Agent, window, cx);
-                done(json!({ "maximized": self.layout == TERMINAL_ONLY }))
+                self.toggle_fill(FillPanel::Terminal, Origin::Agent, window, cx);
+                done(self.describe_fill())
+            }
+            Command::Maximize { panel } => {
+                self.toggle_fill(panel, Origin::Agent, window, cx);
+                done(self.describe_fill())
             }
             Command::OpenPage { page } => {
                 self.open_page(page, agent_folder, window, cx)?;

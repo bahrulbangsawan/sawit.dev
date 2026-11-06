@@ -98,12 +98,19 @@ pub const ADD_ROUTES: &str = "sawit.addRoutes";
 /// Commands of Sawit's own, not FigCraft's, that the main menu (and so the Actions palette) holds,
 /// and the app carries out: their id, their label, the menu they are in and the item they follow
 /// there.
-pub const SAWIT_COMMANDS: &[(&str, &str, &str, &str)] = &[(
-    ADD_ROUTES,
-    "Add Routes from Dev Server…",
-    "File",
-    "file.placeImage",
-)];
+pub const SAWIT_COMMANDS: &[(&str, &str, &str, &str)] = &[
+    (
+        ADD_ROUTES,
+        "Add Routes from Dev Server…",
+        "File",
+        "file.placeImage",
+    ),
+    (MAXIMIZE, "Maximize Canvas", "View", ""),
+];
+
+/// Maximize Canvas: the canvas fills the window, or the layout comes back. Sawit's own command,
+/// which the app carries out; its keys are the workspace's (⌃⌘3).
+pub const MAXIMIZE: &str = "sawit.maximize";
 
 /// Copy, cut and paste. The engine runs them on its own copy of the layers, but each canvas tab
 /// has its own session, and the system clipboard is Sawit's to read and write, so Sawit carries

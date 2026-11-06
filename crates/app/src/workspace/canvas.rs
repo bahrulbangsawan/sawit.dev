@@ -22,7 +22,7 @@ impl Workspace {
     /// project, saved in its `.nyawit/`), or the app-wide one without a
     /// project. Its file is `.nyawit/canvas.sawit` (else `canvas.sawit`
     /// in Sawit's own folder).
-    fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<Entity<BoardView>> {
+    pub(super) fn open_canvas(&mut self, cx: &mut Context<Self>) -> Option<Entity<BoardView>> {
         let root = self.root(cx);
         self.open_canvas_of(root, cx)
     }
@@ -187,8 +187,8 @@ impl Workspace {
     /// Listens to a new canvas: its Maximize button, and its agents starting or stopping work,
     /// which its tab's dot shows.
     fn watch_board(&mut self, view: &Entity<BoardView>, cx: &mut Context<Self>) {
-        cx.subscribe(view, |this, _, _: &ToggleCanvasMaximize, cx| {
-            this.toggle_canvas_maximized(cx)
+        cx.subscribe(view, |this, board, _: &ToggleCanvasMaximize, cx| {
+            this.toggle_canvas_maximized(board.entity_id(), cx)
         })
         .detach();
         cx.subscribe(view, |_, _, _: &crate::board::AgentActivity, cx| {

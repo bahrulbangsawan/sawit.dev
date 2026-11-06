@@ -52,8 +52,18 @@ pub fn command_keys_all(id: &str, cx: &mut App) -> Vec<String> {
     keys
 }
 
-/// [`command_keys_all`], looked up.
+/// [`command_keys_all`], looked up. Maximize Canvas is the workspace's action, bound there.
 fn live_command_keys(id: &str, cx: &App) -> Vec<String> {
+    if id == sawit_board::policy::MAXIMIZE {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let action = crate::workspace::MaximizeCanvas;
+        return keymap
+            .bindings_for_action(&action)
+            .last()
+            .map(|binding| vec![crate::keymap::names::display(binding.keystrokes())])
+            .unwrap_or_default();
+    }
     use figcraft_engine::keymap::{self as figcraft_keys, Platform};
     let names = crate::keymap::names::normalize_keystrokes;
     // The command's default keys (FigCraft's, or Sawit's for a command FigCraft gives none),

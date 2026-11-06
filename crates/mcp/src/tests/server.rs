@@ -119,6 +119,7 @@ fn every_tool_is_routed() {
         "app_focus",
         "app_show_panel",
         "app_layout",
+        "app_maximize",
         "app_maximize_terminal",
         "app_open_page",
         "app_activate_tab",

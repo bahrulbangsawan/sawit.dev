@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::Modifiers;
 
-use super::areas::{settle_canvas_fill, toggle_canvas_fill};
 use super::browser::browser_key;
 use super::canvas::canvas_project;
 use super::file_tabs::moved_to;
+use super::fill::settle_tab_fill;
 use super::{CENTER_ONLY, bindings};
 use crate::layout::{Area, Layout};
 
@@ -169,42 +169,59 @@ fn no_two_shortcuts_share_a_keystroke() {
     }
 }
 
-/// ⇧⌘↩ fills the window with the canvas and a second ⇧⌘↩ puts the layout back; anything else
-/// that changes what the window shows ends it too, and the tab bar comes back (ruling P8-C3).
-/// The tab bar shows unless the canvas fills the window (`render_center`), and each render
-/// settles the fill against what is on screen (`sync_canvas_maximized`).
+/// ⇧⌘↩ fills the window with the canvas or the browser, and a second ⇧⌘↩ puts the layout back;
+/// anything else that changes what the window shows ends it too, and the tab bar comes back (ruling
+/// P8-C3). The tab bar shows unless a tab fills the window (`render_center`), and each render
+/// settles the fill against what is on screen (`sync_filled`).
 #[test]
-fn maximize_still_works_without_webview() {
-    let before = Layout::default();
-    let (mut maximized, mut layout, mut unmaximized) = (false, before, None);
-    toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
-    assert!(maximized, "the tab bar is hidden");
-    assert_eq!(layout, CENTER_ONLY);
-    // While the canvas stays the tab on screen, renders leave it filling the window.
-    settle_canvas_fill(&mut maximized, &mut unmaximized, layout, true);
-    assert!(maximized);
-    toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
-    assert!(!maximized, "the tab bar is back");
-    assert_eq!(layout, before);
+fn a_filled_tab_ends_once_something_else_shows() {
+    let tab = 7_u32;
+    // While the tab stays the one on screen, alone, renders leave it filling the window.
+    let (mut filled, mut unmaximized) = (Some(tab), Some(Layout::default()));
+    settle_tab_fill(&mut filled, &mut unmaximized, CENTER_ONLY, Some(tab));
+    assert_eq!(filled, Some(tab));
+    assert_eq!(unmaximized, Some(Layout::default()));
 
     // ⌘B shows the sidebar: the next render ends the fill, and the sidebar stays.
-    toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
+    let mut layout = CENTER_ONLY;
     layout.toggle(Area::Sidebar);
-    settle_canvas_fill(&mut maximized, &mut unmaximized, layout, true);
-    assert!(!maximized, "the tab bar is back");
+    settle_tab_fill(&mut filled, &mut unmaximized, layout, Some(tab));
+    assert_eq!(filled, None, "the tab bar is back");
     assert_eq!(unmaximized, None);
-    assert!(layout.sidebar && layout.center && !layout.terminal);
 
-    // Another tab is activated: the canvas is no longer on screen, which ends the fill too.
-    let (mut maximized, mut layout, mut unmaximized) = (false, before, None);
-    toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
-    settle_canvas_fill(&mut maximized, &mut unmaximized, layout, false);
-    assert!(!maximized, "the tab bar is back");
+    // Another tab is activated: the tab is no longer on screen, which ends the fill too.
+    let (mut filled, mut unmaximized) = (Some(tab), Some(Layout::default()));
+    settle_tab_fill(&mut filled, &mut unmaximized, CENTER_ONLY, Some(8));
+    assert_eq!(filled, None);
+    let (mut filled, mut unmaximized) = (Some(tab), Some(Layout::default()));
+    settle_tab_fill(&mut filled, &mut unmaximized, CENTER_ONLY, None);
+    assert_eq!(filled, None);
     assert_eq!(unmaximized, None);
-    // ⇧⌘↩ on the canvas again fills the window from the layout as it is now.
-    toggle_canvas_fill(&mut maximized, &mut layout, &mut unmaximized);
-    assert!(maximized);
-    assert_eq!(unmaximized, Some(CENTER_ONLY));
+}
+
+/// The panels' direct keys, ⌃⌘1–⌃⌘3, are free: no other binding of the app's, and none of the
+/// canvas's (its panels are ⌥1–⌥3), and Escape restores the layout only while a panel fills the
+/// window.
+#[test]
+fn maximize_keys_are_free() {
+    let bound: Vec<(String, Option<String>)> = bindings()
+        .iter()
+        .map(|b| {
+            let keys = crate::keymap::names::unparse(b.keystrokes());
+            (keys, b.predicate().map(|p| p.to_string()))
+        })
+        .collect();
+    for key in ["ctrl-cmd-1", "ctrl-cmd-2", "ctrl-cmd-3"] {
+        assert_eq!(bound.iter().filter(|(k, _)| k == key).count(), 1, "{key}");
+    }
+    let escape = bound.iter().find(|(k, _)| k == "escape").expect("escape");
+    assert!(escape.1.as_deref().unwrap_or("").contains("maximized"));
+    for binding in sawit_board::shortcuts::defaults() {
+        for key in binding.keys {
+            let taken = matches!(*key, "Ctrl+Cmd+1" | "Ctrl+Cmd+2" | "Ctrl+Cmd+3");
+            assert!(!taken, "the canvas's {} takes {key}", binding.id);
+        }
+    }
 }
 
 mod keyboard;
