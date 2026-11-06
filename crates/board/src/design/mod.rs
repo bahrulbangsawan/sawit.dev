@@ -12,13 +12,19 @@ use std::collections::HashSet;
 use figcraft_doc::{Document, NodeId, NodeKind};
 use serde_json::{Map, Value, json};
 
+pub mod comments;
+pub mod component;
+pub mod devmode;
 pub mod export;
+pub mod frame;
 pub mod layout;
+pub mod prototype;
 #[cfg(test)]
 mod testing;
 #[cfg(test)]
 mod tests;
 pub mod typography;
+pub mod variables;
 
 mod fields;
 mod lists;
@@ -49,28 +55,40 @@ pub enum Mixed {
 pub enum Section {
     /// The kind and name of the layer, or the number of layers.
     Header,
+    /// The one selected main component's, set's or instance's properties ([`component`]).
+    Component,
     /// X, Y, W, H, rotation, the proportions lock, and align and distribute.
     Position,
     AutoLayout,
+    /// How a layer follows its frame when the frame is resized (`frame::constraint`).
+    Constraints,
+    /// Minimum and maximum sizes, and whether a layer ignores its auto layout.
+    Resizing,
     /// Opacity, corner radius, blend mode and visibility.
     Appearance,
     Fill,
     Stroke,
     Effects,
+    /// A frame's layout grids (`frame::grids`).
+    LayoutGrid,
     Typography,
     Export,
 }
 
 impl Section {
     /// Every section, in the order the panel shows them.
-    pub const ALL: [Section; 9] = [
+    pub const ALL: [Section; 13] = [
         Section::Header,
+        Section::Component,
         Section::Position,
         Section::AutoLayout,
+        Section::Constraints,
+        Section::Resizing,
         Section::Appearance,
         Section::Fill,
         Section::Stroke,
         Section::Effects,
+        Section::LayoutGrid,
         Section::Typography,
         Section::Export,
     ];
@@ -91,6 +109,9 @@ pub struct DesignSelection {
     pub ids: Vec<NodeId>,
     /// What each of `ids` holds, in the same order.
     layers: Vec<Layer>,
+    /// The one selected main component, set or instance, and its properties
+    /// ([`component::panel`]).
+    pub component: Option<component::ComponentPanel>,
 }
 
 /// One selected layer.
@@ -118,6 +139,7 @@ impl DesignSelection {
         let mut selection = Self {
             ids: Vec::new(),
             layers: Vec::new(),
+            component: None,
         };
         for id in ids {
             if !seen.insert(*id) {
@@ -142,6 +164,7 @@ impl DesignSelection {
                 mixed,
             });
         }
+        selection.component = component::panel(doc, &selection.ids);
         selection
     }
 
@@ -203,7 +226,9 @@ impl DesignSelection {
     /// The sections to show for these layers, in the panel's order. Nothing is selected: none.
     ///
     /// - The header, position, appearance, effects and export sections are always there.
-    /// - Auto layout, when every layer is a frame, component or instance.
+    /// - Auto layout, resizing and layout grids, when every layer is a frame, component or
+    ///   instance.
+    /// - Constraints, when every layer has them: inside a frame, outside its auto layout.
     /// - Fill and stroke, unless every layer is a group.
     /// - Typography, when any layer is a text.
     pub fn sections(&self) -> Vec<Section> {
@@ -216,7 +241,9 @@ impl DesignSelection {
         Section::ALL
             .into_iter()
             .filter(|section| match section {
-                Section::AutoLayout => all_frames,
+                Section::AutoLayout | Section::Resizing | Section::LayoutGrid => all_frames,
+                Section::Constraints => frame::has_constraints(self),
+                Section::Component => self.component.is_some(),
                 Section::Fill | Section::Stroke => !only_groups,
                 Section::Typography => any_text,
                 _ => true,

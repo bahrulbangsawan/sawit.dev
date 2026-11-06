@@ -34,10 +34,12 @@
 //! move the user's tab, page or view.
 
 mod commands;
+mod comments;
 mod context_bar;
 mod copy_paste;
 mod design_panel;
 mod events;
+mod facilitation;
 mod find;
 mod frames;
 mod keymap;
@@ -48,7 +50,9 @@ mod open;
 pub(crate) mod option_icons;
 mod overlay_paint;
 mod paint;
+mod player;
 mod presence;
+mod prompt;
 mod render;
 mod routes;
 mod run;
@@ -60,6 +64,8 @@ mod text_input;
 mod toast;
 mod toolbar;
 mod top_bar;
+mod variables;
+mod versions;
 mod web;
 mod worker;
 
@@ -340,6 +346,26 @@ pub struct BoardView {
     screen_ui: screens::ScreenUi,
     /// Add Routes from Dev Server, the route frames' bar, and agents' routes works ([`routes`]).
     routes_ui: routes::RoutesUi,
+    /// The dialog of a command that needs a value, while it is open ([`prompt`]).
+    prompt_ui: Option<prompt::PromptUi>,
+    /// The Variables window, while it is open ([`variables`]).
+    variables_ui: Option<variables::VariablesUi>,
+    /// Dev Mode, and what its Inspect panel shows ([`design_panel::DevMode`]).
+    dev: design_panel::DevMode,
+    /// The Design panel shows its Prototype tab, and the canvas the connections.
+    proto_tab: bool,
+    /// The prototype player, while it shows ([`player`]).
+    player: Option<player::PlayerUi>,
+    /// The Comments window, while it is open ([`comments`]), and where the Comment tool asked for
+    /// a thread, to open at the next frame.
+    comments_ui: Option<comments::CommentsUi>,
+    pending_comment: Option<(f64, f64)>,
+    /// The Assets tab's pictures of the components ([`layers_panel::Thumbnails`]).
+    thumbnails: layers_panel::Thumbnails,
+    /// A board's timer pill draws itself again in a second ([`facilitation`]).
+    timer_ticking: bool,
+    /// The Version history window, while it is open ([`versions`]).
+    versions_ui: Option<versions::VersionsUi>,
     _frames: Task<()>,
     _quit: Subscription,
     _release: Subscription,

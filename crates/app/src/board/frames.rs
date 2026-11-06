@@ -162,8 +162,16 @@ impl BoardView {
         // as they are painted: it takes a press or a hover on one as on its frame.
         // On a panic, guard::run logs it and this frame paints no overlay and no names to press.
         let composition = self.composition.as_ref();
+        let (proto, dev) = (self.proto_tab, self.dev.on);
         let shapes = figcraft_engine::guard::run("ui.overlay", || {
-            Ok(overlay::overlay_with(&board.session, composition))
+            let mut shapes = overlay::overlay_with(&board.session, composition);
+            if proto {
+                shapes.extend(overlay::prototype_links(&board.session));
+            }
+            if dev {
+                shapes.extend(overlay::annotation_callouts(&board.session));
+            }
+            Ok(shapes)
         })
         .unwrap_or_default();
         let ds = board.session.ds().ok()?;

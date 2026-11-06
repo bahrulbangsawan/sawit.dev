@@ -48,6 +48,10 @@ pub(super) fn run_ui(
     if view.board().is_none() {
         return;
     }
+    if sawit_board::prompts::is_prompt(id) {
+        view.open_prompt(id, window, cx);
+        return;
+    }
     match id {
         "file.import" => import(false, window, cx),
         "file.placeImage" => import(true, window, cx),
@@ -72,6 +76,8 @@ pub(super) fn run_ui(
             copy_as(view, id, cx);
         }
         sawit_board::policy::ADD_ROUTES => view.open_routes_dialog(cx),
+        sawit_board::policy::VARIABLES => view.toggle_variables(window, cx),
+        sawit_board::policy::COMMENTS => view.open_comments(None, None, window, cx),
         sawit_board::policy::MAXIMIZE => cx.emit(super::ToggleCanvasMaximize),
         _ if crate::agents::build_checked(id, cx).is_some() => {
             crate::agents::run_build_setting(id, cx);

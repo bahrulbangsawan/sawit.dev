@@ -211,10 +211,10 @@ fn a_key_the_user_gives_a_command_sawit_carries_out_runs_it(cx: &mut TestAppCont
 }
 
 /// The keymap editor doesn't offer to bind the commands the canvas has no use for, which get
-/// no key and stay off the shortcuts sheet: Dev Mode, the switch to prototyping, cursor chat,
-/// F6's regions, the keyboard box selection and the prototype player's Present and Preview
-/// (CANVAS-UI-6). A key given to `select.area` would bring back a box selection whose box the
-/// canvas never draws, and one given to Present or Preview a player it never shows.
+/// no key and stay off the shortcuts sheet: cursor chat, F6's regions and the keyboard box
+/// selection. A key given to `select.area` would bring back a box selection whose box the canvas
+/// never draws. Dev Mode, the prototype tab and the player's Present and Preview are offered: the
+/// canvas has them.
 #[test]
 fn the_keymap_editor_offers_no_command_the_canvas_has_no_use_for() {
     let offered = offered_to_bind();
@@ -223,14 +223,10 @@ fn the_keymap_editor_offers_no_command_the_canvas_has_no_use_for() {
         "{offered:?}"
     );
     for id in [
-        "view.devMode",
-        "view.designPrototype",
         "collab.cursorChat",
         "view.nextRegion",
         "view.previousRegion",
         "select.area",
-        "proto.present",
-        "proto.preview",
     ] {
         assert!(!offered.iter().any(|o| o == id), "{id} is offered");
     }
@@ -271,7 +267,6 @@ fn the_canvas_chromes_keys_are_rows_of_the_keymap(cx: &mut TestAppContext) {
     for (keys, id) in [
         ("alt-1", "view.layers"),
         ("alt-8", "view.design"),
-        ("cmd-|", "view.leftSidebar"),
         ("cmd-\\", "view.toggleUi"),
         ("cmd-k", "app.actions"),
         ("cmd-/", "app.actions"),

@@ -171,6 +171,8 @@ impl BoardView {
         }
         if policy::is_clipboard(id) {
             self.run_clipboard(id, here, false, cx);
+        } else if sawit_board::prompts::is_prompt(id) {
+            self.open_prompt(id, window, cx);
         } else if policy::is_ui(id) {
             commands::run_ui(self, id, window, cx);
         } else {

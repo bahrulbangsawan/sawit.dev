@@ -58,8 +58,11 @@ fn sheet_has_a_group_for_each_keymap_group_but_prototype() {
             "app.actions",
             "help.shortcuts",
             "view.toggleUi",
+            "edit.pickColor",
             "file.save",
-            "file.saveAs"
+            "file.saveAs",
+            "file.saveVersion",
+            "edit.findReplace"
         ]
     );
 }
@@ -121,10 +124,6 @@ fn sheet_keeps_the_keys_the_canvas_has_while_text_is_edited() {
 #[test]
 fn sheet_skips_what_sawit_does_not_have() {
     for id in [
-        "proto.present",
-        "proto.preview",
-        "view.devMode",
-        "view.designPrototype",
         "collab.cursorChat",
         "view.nextRegion",
         "view.previousRegion",
@@ -136,16 +135,20 @@ fn sheet_skips_what_sawit_does_not_have() {
         );
         assert!(row_of(id).is_none(), "{id} is on the sheet");
     }
+    // Dev Mode has ⇧D, which shows the Inspect panel.
+    assert_eq!(
+        row_of("view.devMode").map(|row| row.keys).as_deref(),
+        Some("⇧D")
+    );
     // The context menu has ⇧F10, which the view opens at the selection.
     assert_eq!(
         row_of("view.contextMenu").map(|row| row.keys).as_deref(),
         Some("⇧F10")
     );
-    // The left sidebar has ⇧⌘\, which the view answers by toggling the layers panel.
-    assert_eq!(
-        row_of("view.leftSidebar").map(|row| row.keys).as_deref(),
-        Some("⇧⌘\\")
-    );
+    // FigCraft 0.15 gives ⇧⌘\ to minimizing its window, which the canvas hides, and the left
+    // sidebar no key: the layers panel keeps ⌥1.
+    assert_eq!(row_of("view.leftSidebar").map(|row| row.keys), None);
+    assert_eq!(row_of("view.minimize").map(|row| row.keys), None);
 }
 
 #[test]
@@ -267,7 +270,7 @@ fn key_bindings_leave_sawits_keys_and_hidden_commands_out() {
 /// or says "no frame to present". The sheet leaves the group out, and so do the key bindings
 /// and the keymap editor. Any command a FigCraft bump adds to the group is held to it too.
 #[test]
-fn the_prototype_players_commands_get_no_key() {
+fn the_prototype_players_commands_are_offered_with_their_keys() {
     let prototype: Vec<&str> = KEYS
         .iter()
         .filter(|binding| binding.group == Group::Prototype)
@@ -276,20 +279,24 @@ fn the_prototype_players_commands_get_no_key() {
     assert!(prototype.contains(&"proto.present"), "{prototype:?}");
     assert!(prototype.contains(&"proto.preview"), "{prototype:?}");
     let bindings = key_bindings();
-    for id in prototype {
-        assert!(!is_offered(id), "{id} is offered");
+    // The canvas's player shows them (`proto.present`, `proto.preview`).
+    for id in ["proto.present", "proto.preview"] {
+        assert!(is_offered(id), "{id} isn't offered");
         assert!(
-            bindings.iter().all(|binding| binding.id != id),
-            "{id} has a key"
+            bindings.iter().any(|binding| binding.id == id),
+            "{id} has no key"
         );
     }
-    // ⇧Space and ⌥⌘↩ are no keys of the canvas.
-    for keystroke in ["shift-space", "alt-cmd-enter"] {
+    // ⇧Space previews and ⌥⌘↩ presents.
+    for (keystroke, id) in [
+        ("shift-space", "proto.preview"),
+        ("alt-cmd-enter", "proto.present"),
+    ] {
         assert!(
             bindings
                 .iter()
-                .all(|binding| binding.keystroke != keystroke),
-            "{keystroke} is bound"
+                .any(|binding| binding.keystroke == keystroke && binding.id == id),
+            "{keystroke} isn't {id}"
         );
     }
 }
@@ -297,13 +304,23 @@ fn the_prototype_players_commands_get_no_key() {
 /// The commands the canvas offers that get no key by default, each with why. Every other one
 /// has a key ([`every_offered_command_has_a_key_but_these`]).
 const LEFT_UNBOUND: &[(&str, &str)] = &[
-    // They need what the canvas has no dialog to ask for yet (`crate::menu::NEEDS_INPUT`): a
-    // key would do nothing. An agent passes it in the command's parameters.
+    // They open a dialog for their value (`crate::prompts`), and are used now and then, from the
+    // menus: a key of their own would be one more to remember. An agent passes the value in the
+    // command's parameters.
     ("object.batchRename", "needs the new names"),
     ("object.moveToPage", "needs the page to move to"),
     ("vector.offset", "needs the offset"),
     ("file.colorProfile", "needs the colour profile"),
     ("pref.nudge", "needs the nudge amounts"),
+    // Used now and then, from the menus: the file's history, its thumbnail, the defaults new
+    // layers take.
+    ("file.versionHistory", "opened from the File menu"),
+    ("object.setThumbnail", "a choice made once for a file"),
+    ("edit.setDefaultProperties", "a choice made once in a while"),
+    // Aids toggled now and then, from the View menu.
+    ("view.slices", "an aid shown from the View menu"),
+    ("view.maskOutlines", "an aid shown from the View menu"),
+    ("view.frameOutlines", "an aid shown from the View menu"),
     // It never applies on the canvas, which saves its file as it is edited.
     ("file.revert", "never applies on the canvas"),
     // Boolean groups ▸ Flatten runs Flatten itself (the engine's vector.flatten), whose keys
@@ -357,9 +374,9 @@ fn every_offered_command_has_a_key_but_these() {
     for id in NOT_OFFERED {
         assert!(!bound.contains(id), "{id} has a key");
     }
-    // What needs a dialog gets no key of Sawit's: text.link keeps FigCraft's while text is
-    // edited, and they do nothing until the dialog comes.
-    for id in crate::menu::NEEDS_INPUT {
+    // What opens a dialog gets no key of Sawit's: text.link keeps FigCraft's while text is
+    // edited, which opens its dialog.
+    for id in crate::prompts::PROMPTS {
         assert!(SAWIT_KEYS.iter().all(|key| key.id != *id), "{id}");
     }
 }

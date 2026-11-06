@@ -18,6 +18,7 @@ pub mod mermaid;
 pub mod ops;
 pub mod overlay;
 pub mod policy;
+pub mod prompts;
 pub mod routes;
 pub mod screens;
 pub mod shortcuts;

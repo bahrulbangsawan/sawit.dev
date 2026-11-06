@@ -394,6 +394,8 @@ pub(crate) fn tool(icon: ToolIcon) -> Lucide {
         ToolIcon::Shapes => Lucide::Shapes,
         ToolIcon::Connector => Lucide::Spline,
         ToolIcon::Stamp => Lucide::Stamp,
+        ToolIcon::Comment => Lucide::MessageSquare,
+        ToolIcon::ShapeBuilder => Lucide::Blend,
         ToolIcon::Image => Lucide::ImagePlus,
     }
 }

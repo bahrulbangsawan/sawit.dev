@@ -189,6 +189,16 @@ impl BoardView {
             web_cover: Default::default(),
             screen_ui: screens::ScreenUi::default(),
             routes_ui: routes::RoutesUi::default(),
+            prompt_ui: None,
+            variables_ui: None,
+            dev: Default::default(),
+            proto_tab: false,
+            player: None,
+            comments_ui: None,
+            pending_comment: None,
+            thumbnails: Default::default(),
+            timer_ticking: false,
+            versions_ui: None,
             _frames: frames,
             // ⌘Q quits without dropping the views: what isn't on disk yet is written first.
             _quit: cx.on_app_quit(|this, _| {

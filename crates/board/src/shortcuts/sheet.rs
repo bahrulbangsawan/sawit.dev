@@ -10,24 +10,17 @@ use crate::policy::is_hidden;
 const MAX_KEYS: usize = 2;
 
 /// Commands that have keys in the keymap and that the policy does not hide, but that the canvas has
-/// no use for: Dev Mode, the switch between design and prototype and a live session's cursor chat
-/// (all three are in the spec's Non-goals), F6's walk through the regions of FigCraft's own window
+/// no use for: a live session's cursor chat, F6's walk through the regions of FigCraft's own window
 /// (toolbar, layers, canvas, properties), which Sawit's chrome does not have, and FigCraft's
 /// keyboard box selection (`select.area`, ⌥Space or F8): it raises a `selectArea` request for a box
-/// that the arrows move and Enter selects with, and the canvas never draws that box. So is the
-/// Prototype group, Present (⌥⌘↩) and Preview (⇧Space): they ask for FigCraft's prototype player,
-/// which the canvas doesn't show (CANVAS-UI-6). The sheet does not advertise them, they get no key
-/// binding ([`key_bindings`](super::key_bindings)), and the keymap editor doesn't offer them to
+/// that the arrows move and Enter selects with, and the canvas never draws that box. The sheet
+/// does not advertise them, they get no key binding ([`key_bindings`](super::key_bindings)), and the keymap editor doesn't offer them to
 /// bind ([`is_offered`]): only a binding written into the keymap file by hand reaches one.
 pub(super) const NOT_OFFERED: &[&str] = &[
-    "view.devMode",
-    "view.designPrototype",
     "collab.cursorChat",
     "view.nextRegion",
     "view.previousRegion",
     "select.area",
-    "proto.present",
-    "proto.preview",
 ];
 
 /// Whether the canvas offers command `id` to the keyboard: the policy doesn't hide it
@@ -83,7 +76,7 @@ fn row(binding: &DefaultKeys) -> Option<ShortcutRow> {
     }
     let mut keys: Vec<String> = Vec::new();
     for spec in binding.keys {
-        if owned_by_sawit(spec) {
+        if owned_by_sawit(spec) || crate::input::gpui_keystroke(spec).is_none() {
             continue;
         }
         // Alternatives that read the same (⌘+ for Cmd+= and for Shift+Cmd+=) show once.

@@ -183,7 +183,35 @@ impl BoardView {
         for request in rest {
             match request.kind.as_str() {
                 "panel.design" => self.show_design = !self.show_design,
+                "panel.devMode" => self.toggle_dev_mode(cx),
+                "panel.prototype" | "panel.designPrototype" => {
+                    self.proto_tab = !self.proto_tab;
+                    if self.proto_tab {
+                        self.show_design = true;
+                        self.dev.on = false;
+                    }
+                }
+                // The pill shows the board's timer and vote as they are ([`facilitation`]).
+                "board.timer" | "board.timerState" | "board.voteResults" => cx.notify(),
+                "panel.versionHistory" => self.toggle_versions(cx),
+                "comment.new" => {
+                    let at = |k: &str| request.data.get(k).and_then(serde_json::Value::as_f64);
+                    if let (Some(x), Some(y)) = (at("x"), at("y")) {
+                        self.pending_comment = Some((x, y));
+                    }
+                }
+                "present" | "preview" => {
+                    let start = request
+                        .data
+                        .get("start")
+                        .and_then(figcraft_engine::params::id_of);
+                    self.open_player(start, cx);
+                }
                 "panel.layers" | "panel.leftSidebar" => self.show_layers = !self.show_layers,
+                "panel.assets" => {
+                    self.layers.assets = !(self.show_layers && self.layers.assets);
+                    self.show_layers = true;
+                }
                 "layers.rename" => self.start_rename(&layers_panel::ids_in(&request.data), cx),
                 "canvas.renameLabel" => {
                     let id = request.data.get("id");

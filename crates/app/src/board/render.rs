@@ -4,8 +4,8 @@
 use gpui_kit::*;
 
 use super::{
-    BoardView, context_bar, design_panel, events, layers_panel, paint, routes, screens, text_input,
-    toolbar, top_bar,
+    BoardView, comments, context_bar, design_panel, events, facilitation, layers_panel, paint,
+    player, prompt, routes, screens, text_input, toolbar, top_bar, variables, versions,
 };
 use crate::states::Placeholder;
 
@@ -42,6 +42,14 @@ impl Render for BoardView {
         // Over all of it, whether the UI is hidden or not (ruling P6-C6).
         let menus = self.render_menus(window, cx);
         let add_routes = routes::render_routes_dialog(self, window, cx);
+        let prompt = prompt::render_prompt(self, cx);
+        let variables = variables::render_variables(self, cx);
+        let player = player::render_player(self, window, cx);
+        if let Some((x, y)) = self.pending_comment.take() {
+            self.comment_at(x, y, window, cx);
+        }
+        let comments = comments::render_comments(self, window, cx);
+        let versions = versions::render_versions(self, cx);
         // A colour picker whose swatch this frame left out ends its scrub.
         self.settle_colour_scrub(cx);
         div()
@@ -84,6 +92,11 @@ impl Render for BoardView {
             )
             .children(menus)
             .children(add_routes)
+            .children(prompt)
+            .children(variables)
+            .children(player)
+            .children(comments)
+            .children(versions)
             .into_any_element()
     }
 }
@@ -126,6 +139,9 @@ impl BoardView {
         let preview = screens::render_preview(self, cx);
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);
+        let facilitation = chrome
+            .then(|| facilitation::render_facilitation(self, cx))
+            .flatten();
         let agents = self.render_agents(cx);
         // Last, so the canvas's own chrome is under it: only what is drawn over the whole canvas
         // tab (a menu, a dialog, a notification) covers its web views.
@@ -186,6 +202,7 @@ impl BoardView {
             .children(over_selection)
             .children(tools)
             .children(preview)
+            .children(facilitation)
             .children(toast)
             .child(cover)
     }

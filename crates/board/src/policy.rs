@@ -3,9 +3,8 @@
 //! canvas hides, the ones Sawit carries out itself instead of the engine, and the keystrokes Sawit
 //! keeps while the canvas has the keyboard.
 //!
-//! The hidden commands also take the View menu's toggles of what the canvas doesn't draw: in
-//! FigCraft its own canvas draws them over the page, and the native canvas's overlay
-//! ([`crate::overlay`]) has none of them, so they would tick and change nothing.
+//! The View menu's toggles of the canvas's aids (layout grids, the pixel grid, rulers, slices, and
+//! mask and frame outlines) are shown: the overlay draws them ([`crate::overlay`]).
 
 /// Commands the canvas never shows and never runs from the keyboard: out of scope, or Sawit owns
 /// them. Whole families are hidden through [`HIDDEN_PREFIXES`].
@@ -18,8 +17,6 @@ pub const HIDDEN: &[&str] = &[
     "file.open",
     "file.openRecent",
     "file.close",
-    "file.saveVersion",
-    "file.versionHistory",
     "file.duplicate",
     "file.rename",
     // Collaboration
@@ -28,40 +25,29 @@ pub const HIDDEN: &[&str] = &[
     "collab.publish",
     // Edit
     "edit.copyLink",
-    "edit.findReplace",
-    "edit.pickColor",
-    "edit.setDefaultProperties",
     // View
-    "view.comments",
     "view.multiplayerCursors",
-    "view.assets",
-    "view.prototype",
     "view.themeLight",
     "view.themeDark",
     "view.themeSystem",
     "view.fullscreen",
+    // FigCraft's window minimizes (⇧⌘\ at its newer revisions); Sawit's window is Sawit's.
+    "view.minimize",
     "view.panelWidths",
-    // View toggles of what the canvas doesn't draw (its overlay has no rulers, grids, slices, or
-    // mask and frame outlines). Shown, they would tick and change nothing.
-    "view.pixelGrid",
-    "view.layoutGrids",
-    "view.rulers",
-    "view.slices",
-    "view.maskOutlines",
-    "view.frameOutlines",
     // Object and Text
-    "object.setThumbnail",
     "text.missingFonts",
-    // Preferences (plugins and libraries are hidden by prefix)
+    // Preferences (plugins and libraries are hidden by prefix). FigCraft's UI scale is its own
+    // window's: Sawit's chrome has its own zoom.
     "app.preferences",
+    "pref.uiScaleUp",
+    "pref.uiScaleDown",
+    "pref.uiScaleReset",
     // Components
     "component.hideWhenPublishing",
     // Help and tools
     "help.gettingStarted",
     "help.page",
     "help.about",
-    "tool.comment",
-    "tool.shapeBuilder",
     // Document tabs
     "doc.nextTab",
     "doc.previousTab",
@@ -123,6 +109,8 @@ pub const SAWIT_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "View",
         BUILD_SOUND,
     ),
+    (VARIABLES, "Variables…", "View", "view.proofSrgb"),
+    (COMMENTS, "Comments…", "View", VARIABLES),
 ];
 
 /// How agents' builds play on the canvas (Full, Fast, Off), whether they click, and whether a
@@ -160,6 +148,14 @@ pub fn is_handoff(id: &str) -> bool {
 /// the app carries out (`crate::frame_code`, `crate::screens::export`).
 pub const EXPORT_HTML: &str = "sawit.exportHtml";
 pub const EXPORT_REACT: &str = "sawit.exportReact";
+
+/// Comments…: the window of the page's comment threads. Sawit's own command, which the app
+/// carries out.
+pub const COMMENTS: &str = "sawit.comments";
+
+/// Variables…: the window of the file's variable collections, their modes and their values.
+/// Sawit's own command, which the app carries out.
+pub const VARIABLES: &str = "sawit.variables";
 
 /// Copy, cut and paste. The engine runs them on its own copy of the layers, but each canvas tab
 /// has its own session, and the system clipboard is Sawit's to read and write, so Sawit carries
@@ -242,11 +238,18 @@ mod tests {
         // and pixel preview (`render_job` in crates/app/src/board/mod.rs), and the engine's own
         // tools snap as the three snapping ones say. Any other would tick and change nothing.
         const CARRIED_OUT: &[&str] = &[
+            "view.pixelGrid",
+            "view.layoutGrids",
+            "view.rulers",
+            "view.slices",
+            "view.comments",
             "view.outlines",
             "view.outlinesSelection",
             "view.outlinesHiddenLayers",
             "view.outlinesObjectBounds",
             "view.pixelPreview",
+            "view.maskOutlines",
+            "view.frameOutlines",
             "view.proofSrgb",
             "view.snapGeometry",
             "view.snapObjects",
@@ -258,7 +261,7 @@ mod tests {
             .filter(|id| !is_hidden(id) && view::checked(&session, id).is_some())
             .collect();
         assert_eq!(ticking, CARRIED_OUT);
-        // What the canvas doesn't draw is out of the menus and off the keyboard.
+        // The aids the overlay draws (`crate::overlay`) are View toggles that are shown.
         for id in [
             "view.pixelGrid",
             "view.layoutGrids",
@@ -271,7 +274,7 @@ mod tests {
                 view::checked(&session, id).is_some(),
                 "{id} is no View toggle"
             );
-            assert!(is_hidden(id), "{id}");
+            assert!(!is_hidden(id), "{id}");
         }
     }
 

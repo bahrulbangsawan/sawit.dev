@@ -28,14 +28,20 @@
 //!   they are done.
 
 mod appearance;
+mod component;
 mod controls;
 mod effects;
 mod export;
+mod frame;
+mod inspect;
+pub(super) use inspect::DevMode;
 mod layout;
 mod number_field;
 mod paints;
 mod position;
+mod prototype;
 mod scrub;
+mod type_details;
 mod typography;
 
 use std::collections::{HashMap, HashSet};
@@ -47,6 +53,7 @@ use figcraft_engine::guard;
 #[cfg(test)]
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::base::actions::Cancel;
+use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::*;
 use sawit_board::design::{DesignSelection, Edit, Mixed, Section};
@@ -163,7 +170,7 @@ pub(super) fn render_design_panel(
     cx: &mut Context<BoardView>,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
-    let panel = v_flex()
+    let mut panel = v_flex()
         .id("board-design-panel")
         .debug_selector(|| "board-design-panel".into())
         .flex_shrink_0()
@@ -179,6 +186,52 @@ pub(super) fn render_design_panel(
         // the picker changed goes back instead of staying (ruling P5-C15).
         .capture_action(cx.listener(|view, _: &Cancel, _, cx| view.cancel_colour_scrub(cx)));
     let muted = theme.muted_foreground;
+    if !view.dev.on {
+        let tab = |id: &'static str, label: &'static str, on: bool, proto: bool| {
+            Button::new(id)
+                .ghost()
+                .small()
+                .label(label)
+                .selected(on)
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.proto_tab = proto;
+                    cx.notify();
+                }))
+        };
+        let tabs = h_flex()
+            .h(px(36.))
+            .px_2()
+            .gap_1()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(tab("design-tab-design", "Design", !view.proto_tab, false))
+            .child(tab(
+                "design-tab-prototype",
+                "Prototype",
+                view.proto_tab,
+                true,
+            ));
+        if view.proto_tab {
+            return panel
+                .child(tabs)
+                .child(prototype::render_prototype(view, window, cx));
+        }
+        panel = panel.child(tabs);
+    }
+    if view.dev.on {
+        let title = h_flex()
+            .h(px(40.))
+            .px_3()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .font_weight(FontWeight::SEMIBOLD)
+            .child("Inspect");
+        return panel
+            .child(title)
+            .child(inspect::render_inspect(view, window, cx));
+    }
     let Some(sel) = view.design_selection().filter(|sel| !sel.ids.is_empty()) else {
         return panel.child(
             div()
@@ -194,8 +247,12 @@ pub(super) fn render_design_panel(
         let shown = match section {
             // Drawn above.
             Section::Header => None,
+            Section::Component => Some(component::render(view, &sel, window, cx)),
             Section::Position => Some(position::render(view, &sel, window, cx)),
             Section::AutoLayout => Some(layout::render(view, &sel, window, cx)),
+            Section::Constraints => Some(frame::render_constraints(view, &sel, cx)),
+            Section::Resizing => Some(frame::render_resizing(view, &sel, window, cx)),
+            Section::LayoutGrid => Some(frame::render_layout_grid(view, &sel, window, cx)),
             Section::Appearance => Some(appearance::render(view, &sel, window, cx)),
             Section::Fill => Some(paints::render_fill(view, &sel, window, cx)),
             Section::Stroke => Some(paints::render_stroke(view, &sel, window, cx)),
