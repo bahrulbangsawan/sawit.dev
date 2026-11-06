@@ -15,9 +15,20 @@ use sawit_core::probe::PortReport;
 use super::{ServerDetail, error_box};
 use crate::servers::{Status, status_color};
 
+/// The DATABASE_URL a .env file sets, if it sets one.
+fn current_url(env: &str) -> Option<String> {
+    env.lines().find_map(|line| {
+        let line = line.trim().strip_prefix("export ").unwrap_or(line.trim());
+        let value = line.strip_prefix("DATABASE_URL=")?;
+        Some(value.trim().trim_matches(['"', '\'']).to_string())
+    })
+}
+
 impl ServerDetail {
     /// Writes this instance's DATABASE_URL into a chosen project's .env.
-    fn write_env(&mut self, cx: &mut Context<Self>) {
+    /// Asks first when the .env already has a DATABASE_URL other than this one: writing it
+    /// replaces that line.
+    fn write_env(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(inst) = self.store.read(cx).selected_instance().cloned() else {
             return;
         };
@@ -28,13 +39,35 @@ impl ServerDetail {
             multiple: false,
             prompt: Some("Choose Project Folder".into()),
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
                 return;
             };
             let Some(dir) = paths.into_iter().next() else {
                 return;
             };
+            let old = sawit_core::db::read_dotenv(&dir)
+                .ok()
+                .and_then(|text| current_url(&text))
+                .filter(|old| *old != url);
+            if let Some(old) = old {
+                let Ok(answer) = this.update_in(cx, |_, window, cx| {
+                    crate::confirm::Confirm::new(
+                        "Replace DATABASE_URL in .env?",
+                        "Replace DATABASE_URL",
+                    )
+                    .detail(format!(
+                        "{} has DATABASE_URL={old}. It becomes {url}; the rest of the file stays.",
+                        dir.join(".env").display()
+                    ))
+                    .ask(window, cx)
+                }) else {
+                    return;
+                };
+                if !answer.await {
+                    return;
+                }
+            }
             let Ok(rx) = this.update(cx, |_, cx| {
                 crate::rt::spawn(
                     cx,
@@ -144,8 +177,24 @@ impl ServerDetail {
                     .icon(IconName::Square)
                     .label("Stop")
                     .disabled(busy || !running)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.store.update(cx, |s, cx| s.stop(&n2, cx))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let answer = crate::confirm::Confirm::new(
+                            format!("Stop the instance {n2}?"),
+                            "Stop Instance",
+                        )
+                        .thing(n2.clone())
+                        .detail(
+                            "Apps and terminals connected to it lose their connection. Its data \
+                             stays, and Start brings it back.",
+                        )
+                        .ask(window, cx);
+                        let (store, name) = (this.store.clone(), n2.clone());
+                        cx.spawn(async move |_, cx| {
+                            if answer.await {
+                                store.update(cx, |s, cx| s.stop(&name, cx));
+                            }
+                        })
+                        .detach();
                     })),
             )
             .child(
@@ -164,7 +213,7 @@ impl ServerDetail {
                     .ghost()
                     .label(".env")
                     .tooltip("Write DATABASE_URL to the Project's .env File")
-                    .on_click(cx.listener(move |this, _, _, cx| this.write_env(cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| this.write_env(window, cx))),
             )
             .child(
                 Button::new("forget")
@@ -173,8 +222,24 @@ impl ServerDetail {
                     .icon(Lucide::X)
                     .tooltip("Remove from List (keeps the data directory)")
                     .disabled(busy || running)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.store.update(cx, |s, cx| s.forget(&n4, cx))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let answer = crate::confirm::Confirm::new(
+                            format!("Remove {n4} from the list?"),
+                            "Remove Instance",
+                        )
+                        .thing(n4.clone())
+                        .detail(
+                            "Sawit stops showing it. Its data directory stays on disk, so its \
+                             databases aren't deleted.",
+                        )
+                        .ask(window, cx);
+                        let (store, name) = (this.store.clone(), n4.clone());
+                        cx.spawn(async move |_, cx| {
+                            if answer.await {
+                                store.update(cx, |s, cx| s.forget(&name, cx));
+                            }
+                        })
+                        .detach();
                     })),
             );
 

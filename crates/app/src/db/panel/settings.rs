@@ -17,8 +17,6 @@ pub(super) struct SettingsForm {
     url: Entity<InputState>,
     password: Entity<InputState>,
     error: Option<String>,
-    /// "Remove" was clicked once; the next click removes.
-    confirm_remove: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -65,7 +63,6 @@ impl DatabasePanel {
             url,
             password,
             error: None,
-            confirm_remove: false,
             _subscriptions: subscriptions,
         });
         cx.notify();
@@ -95,21 +92,42 @@ impl DatabasePanel {
         cx.notify();
     }
 
-    /// The first click asks; the second removes.
-    fn remove_from_settings(&mut self, cx: &mut Context<Self>) {
-        let Some(form) = &mut self.settings else {
+    /// Asks first (the shared confirm), then removes the connection and its password.
+    fn remove_from_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &self.settings else {
             return;
         };
-        if !form.confirm_remove {
-            form.confirm_remove = true;
-            cx.notify();
-            return;
-        }
         let name = form.profile.clone();
-        self.settings = None;
-        self.expanded.remove(&name);
-        self.store.update(cx, |s, cx| s.remove(&name, cx));
-        cx.notify();
+        let shown = self
+            .store
+            .read(cx)
+            .profile(&name)
+            .map(|p| p.display_name().to_string())
+            .unwrap_or_else(|| name.clone());
+        let answer = crate::confirm::Confirm::new(
+            format!("Remove the connection {shown}?"),
+            "Remove Connection",
+        )
+        .thing(shown)
+        .detail(
+            "Sawit forgets it and deletes its password from the Keychain. The database itself \
+             isn't touched.",
+        )
+        .ask(window, cx);
+        cx.spawn(async move |this, cx| {
+            if !answer.await {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                if this.settings.as_ref().is_some_and(|f| f.profile == name) {
+                    this.settings = None;
+                }
+                this.expanded.remove(&name);
+                this.store.update(cx, |s, cx| s.remove(&name, cx));
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
@@ -130,7 +148,6 @@ impl DatabasePanel {
                 .child(Input::new(input).small())
                 .child(div().text_xs().text_color(muted).child(hint))
         };
-        let confirm = form.confirm_remove;
         let postgres = self
             .store
             .read(cx)
@@ -198,13 +215,13 @@ impl DatabasePanel {
                             Button::new("db-settings-remove")
                                 .small()
                                 .danger()
-                                .when(!confirm, |b| b.ghost())
+                                .ghost()
                                 .icon(Lucide::Trash)
-                                .label(if confirm { "Confirm Remove" } else { "Remove" })
+                                .label("Remove…")
                                 .tooltip("Removes the connection and its Keychain password")
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.remove_from_settings(cx)),
-                                ),
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.remove_from_settings(window, cx)
+                                })),
                         ),
                 )
                 .into_any_element(),

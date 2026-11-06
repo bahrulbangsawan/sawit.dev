@@ -177,22 +177,21 @@ impl McpPage {
             .iter()
             .map(|&t| target_label(&self.targets[t]))
             .collect();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!(
+        let answer = crate::confirm::Confirm::new(
+            format!(
                 "Uninstall {} from {}?",
                 SERVERS[s].name,
                 plural(targets.len(), "client", "clients")
             ),
-            Some(&format!(
-                "Its entry is removed from: {}. Restart those clients to drop it.",
-                names.join(", ")
-            )),
-            &["Uninstall", "Cancel"],
-            cx,
-        );
+            "Uninstall Server",
+        )
+        .detail(format!(
+            "Its entry is removed from: {}. Restart those clients to drop it.",
+            names.join(", ")
+        ))
+        .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     for t in targets {
                         this.act((s, t), true, cx);
@@ -218,22 +217,21 @@ impl McpPage {
             .iter()
             .map(|&t| target_label(&self.targets[t]))
             .collect();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!(
+        let answer = crate::confirm::Confirm::new(
+            format!(
                 "Remove {} from {}?",
                 SERVERS[s].name,
                 plural(targets.len(), "client", "clients")
             ),
-            Some(&format!(
-                "Its entry is removed from: {}. Restart those clients to drop it.",
-                names.join(", ")
-            )),
-            &["Remove", "Cancel"],
-            cx,
-        );
+            "Remove Server",
+        )
+        .detail(format!(
+            "Its entry is removed from: {}. Restart those clients to drop it.",
+            names.join(", ")
+        ))
+        .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     for t in targets {
                         this.act((s, t), true, cx);

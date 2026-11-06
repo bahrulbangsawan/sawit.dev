@@ -243,9 +243,9 @@ fn backspace_asks_before_moving_a_config_file_to_the_trash(cx: &mut TestAppConte
 
     // A Trash this started would fail the test at once: no runtime is installed.
     cx.simulate_keystrokes(window, "backspace");
-    let (question, _) = cx.pending_prompt().expect("⌫ asks");
+    let (question, _) = crate::confirm::testing::pending(cx).expect("⌫ asks");
     assert_eq!(question, "Move “.zshrc” to the Trash?");
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
     cx.update(|cx| assert_eq!(panel.read(cx).error, None));
 }

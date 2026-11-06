@@ -248,9 +248,9 @@ impl KeymapEditor {
                                 .icon(remove_icon)
                                 .accessibility_label(remove_tip)
                                 .tooltip(remove_tip)
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
-                                    this.remove(ix, cx)
+                                    this.remove(ix, window, cx)
                                 })),
                         )
                     }),

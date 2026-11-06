@@ -142,13 +142,33 @@ impl RunPanel {
         cx.notify();
     }
 
-    fn delete_saved(&mut self, id: &str, cx: &mut Context<Self>) {
+    /// Asks first, then deletes the saved command `id`.
+    fn delete_saved(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else {
             return;
         };
-        self.store.update(cx, |s, cx| s.remove(&root, id, cx));
-        self.editor = None;
-        cx.notify();
+        let name = self
+            .editor
+            .as_ref()
+            .map(|e| e.name.read(cx).value().to_string())
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| "this command".into());
+        let answer = crate::confirm::Confirm::new(format!("Delete {name}?"), "Delete Command")
+            .thing(name)
+            .detail("It leaves this project's saved commands. This can't be undone.")
+            .ask(window, cx);
+        let id = id.to_string();
+        cx.spawn(async move |this, cx| {
+            if !answer.await {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.store.update(cx, |s, cx| s.remove(&root, &id, cx));
+                this.editor = None;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn render_editor(&self, editor: &Editor, cx: &mut Context<Self>) -> AnyElement {
@@ -258,10 +278,10 @@ impl RunPanel {
                                 .danger()
                                 .xsmall()
                                 .icon(Lucide::Trash)
-                                .label("Delete")
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.delete_saved(&id, cx)),
-                                ),
+                                .label("Delete…")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.delete_saved(&id, window, cx)
+                                })),
                         )
                     })
                     .child(div().flex_1())

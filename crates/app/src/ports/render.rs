@@ -131,9 +131,9 @@ impl Render for PortsPanel {
                                 .xsmall()
                                 .icon(Lucide::X)
                                 .label(format!("Stop {selected} Selected"))
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_click(cx.listener(|this, _, window, cx| {
                                     let roots: Vec<u32> = this.selected.iter().copied().collect();
-                                    this.stop_jobs(&roots, cx)
+                                    this.ask_stop_jobs(roots, window, cx)
                                 })),
                         )
                     })
@@ -145,14 +145,32 @@ impl Render for PortsPanel {
                                 .xsmall()
                                 .icon(Lucide::Zap)
                                 .label(format!("Force Stop {} (SIGKILL)", self.stubborn.len()))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let pids = std::mem::take(&mut this.stubborn);
-                                    let n = pids.len();
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    let n = this.stubborn.len();
                                     let what = format!(
                                         "{n} {}",
                                         if n == 1 { "process" } else { "processes" }
                                     );
-                                    this.signal(pids, true, what, cx)
+                                    let answer = crate::confirm::Confirm::new(
+                                        format!("Force stop {what}?"),
+                                        "Force Stop",
+                                    )
+                                    .detail(
+                                        "They didn't exit when asked. SIGKILL ends them at \
+                                         once: they can't save or clean up.",
+                                    )
+                                    .items(this.stubborn.iter().map(|pid| format!("PID {pid}")))
+                                    .ask(window, cx);
+                                    cx.spawn(async move |this, cx| {
+                                        if !answer.await {
+                                            return;
+                                        }
+                                        let _ = this.update(cx, |this, cx| {
+                                            let pids = std::mem::take(&mut this.stubborn);
+                                            this.signal(pids, true, what, cx)
+                                        });
+                                    })
+                                    .detach();
                                 })),
                         )
                     }),

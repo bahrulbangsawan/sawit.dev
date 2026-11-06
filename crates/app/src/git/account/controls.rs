@@ -41,18 +41,12 @@ pub fn sign_in_link(id: impl Into<ElementId>) -> Button {
 
 /// Asks, then signs out of GitHub everywhere.
 pub fn confirm_sign_out(window: &mut Window, cx: &mut App) {
-    let answer = window.prompt(
-        PromptLevel::Warning,
-        "Sign out of GitHub?",
-        Some(
-            "Sawit forgets your sign-in, and its GitHub features turn off until you sign in again: pull requests and issues, cloning your repositories, saving shell files. Pushing and pulling keep working with your own Git credentials. Your repositories and local changes stay as they are.",
-        ),
-        &["Sign Out", "Cancel"],
-        cx,
-    );
+    let answer = crate::confirm::Confirm::new("Sign out of GitHub?", "Sign Out")
+            .detail("Sawit forgets your sign-in, and its GitHub features turn off until you sign in again: pull requests and issues, cloning your repositories, saving shell files. Pushing and pulling keep working with your own Git credentials. Your repositories and local changes stay as they are.",)
+            .ask(window, cx);
     let account = global(cx);
     cx.spawn(async move |cx| {
-        if answer.await == Ok(0) {
+        if answer.await {
             account.update(cx, |a, cx| a.sign_out(cx));
         }
     })

@@ -226,23 +226,23 @@ impl SkillsPage {
             .iter()
             .map(|&t| self.report.targets[t].label.as_str())
             .collect();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!(
+        let answer = crate::confirm::Confirm::new(
+            format!(
                 "Remove {} from {}?",
                 pack.name,
                 plural(targets.len(), "agent", "agents")
             ),
-            Some(&format!(
-                "From: {}.\n\nRuns:\n{}",
-                names.join(", "),
-                lines.join("\n")
-            )),
-            &["Remove", "Cancel"],
-            cx,
-        );
+            "Remove Skills",
+        )
+        .thing(pack.name)
+        .detail(format!(
+            "From: {}.\n\nRuns:\n{}",
+            names.join(", "),
+            lines.join("\n")
+        ))
+        .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     this.sheet = None;
                     this.refocus = true;

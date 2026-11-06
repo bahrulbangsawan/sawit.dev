@@ -208,17 +208,16 @@ fn show(job: Job, result: Result<Outcome, String>, window: AnyWindowHandle, cx: 
 /// Asks before removing: what goes, and that an MCP entry that was there before stays.
 pub fn confirm_remove(window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
-    let answer = window.prompt(
-        PromptLevel::Warning,
+    let answer = crate::confirm::Confirm::new(
         "Remove Sawit Skills from every agent?",
-        Some(
+        "Remove Sawit Skills",
+    )
+    .detail(
             "The Sawit skills come out of each agent's skills folder (only Sawit's own copies), and the Sawit block out of each agent's instruction file; everything else in those files stays. A file Sawit made is deleted once it holds nothing else.\n\nSawit's MCP server comes out of the AI clients Install Skills added it to; an entry that was there before stays.",
-        ),
-        &["Remove", "Cancel"],
-        cx,
-    );
+    )
+    .ask(window, cx);
     cx.spawn(async move |cx| {
-        if matches!(answer.await, Ok(0)) {
+        if answer.await {
             cx.update(|cx| run(Job::Remove, None, handle, cx));
         }
     })

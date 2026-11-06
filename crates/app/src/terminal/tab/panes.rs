@@ -151,10 +151,35 @@ impl TerminalTab {
         cx.notify();
     }
 
-    /// Closes `pane`, ending its process. The last pane closes the tab: its
+    /// Closes `pane` for the user, ending its process: while a command or an SSH session runs
+    /// there, after asking (the shared confirm), naming it. The last pane closes the tab: its
     /// terminal goes with the tab, which the panel drops on `Closed`.
     pub fn close_pane(&mut self, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
-        self.remove_pane(pane, true, window, cx);
+        let running = self.views.get(&pane).and_then(|view| {
+            crate::terminal::panel::running::running_in(self, pane, view.read(cx))
+        });
+        let Some(name) = running else {
+            self.remove_pane(pane, true, window, cx);
+            return;
+        };
+        let what = if self.state.is_split() {
+            "pane"
+        } else {
+            "terminal"
+        };
+        let answer = crate::confirm::Confirm::new(
+            format!("Close this {what} and stop {name}?"),
+            "Close and Stop",
+        )
+        .thing(name)
+        .detail(format!("Closing the {what} ends what runs in it."))
+        .ask(window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await {
+                let _ = this.update_in(cx, |t, window, cx| t.remove_pane(pane, true, window, cx));
+            }
+        })
+        .detach();
     }
 
     /// Closes `pane` like `close_pane`. Only when `refocus` is set does the

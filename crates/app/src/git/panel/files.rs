@@ -77,16 +77,12 @@ impl GitPanel {
                 "Discard Changes",
             )
         };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &title,
-            Some("This can't be undone."),
-            &[button, "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(title, button)
+            .detail("This can't be undone.")
+            .ask(window, cx);
         let store = self.store.clone();
         cx.spawn(async move |_, cx| {
-            if answer.await == Ok(0) {
+            if answer.await {
                 store.update(cx, |s, cx| {
                     s.run("Discarding…", cx, move |repo, _| async move {
                         git::discard(&repo, &file).await.map(|_| String::new())

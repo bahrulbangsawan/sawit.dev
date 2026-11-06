@@ -21,24 +21,24 @@ fn quitting_asks_while_a_terminal_runs_something(cx: &mut TestAppContext) {
     ready(cx, &shell);
     try_quit(cx, w, &panel, &quits);
     assert_eq!(quits.get(), 1, "an idle shell held up quitting");
-    assert!(!cx.has_pending_prompt());
+    assert!(!crate::confirm::testing::has_pending(cx));
 
     start_sleep(cx, &panel);
     try_quit(cx, w, &panel, &quits);
     assert_eq!(quits.get(), 1, "quitting didn't ask");
     assert_eq!(
-        cx.pending_prompt(),
+        crate::confirm::testing::pending(cx),
         Some((
             "Quit Sawit?".to_string(),
             "A terminal is still running: sleep. Quitting stops it.".to_string()
         ))
     );
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
     assert_eq!(quits.get(), 1, "Cancel quit");
 
     try_quit(cx, w, &panel, &quits);
-    cx.simulate_prompt_answer("Quit");
+    crate::confirm::testing::answer(cx, "Quit and Stop");
     cx.run_until_parked();
     assert_eq!(quits.get(), 2);
 }
@@ -82,7 +82,10 @@ fn the_question_comes_forward_with_its_window(cx: &mut TestAppContext) {
         cx.run_until_parked();
     };
     quit(cx);
-    assert!(cx.has_pending_prompt(), "quitting didn't ask");
+    assert!(
+        crate::confirm::testing::has_pending(cx),
+        "quitting didn't ask"
+    );
     assert_eq!(
         front(cx),
         Some(busy_window),
@@ -96,9 +99,12 @@ fn the_question_comes_forward_with_its_window(cx: &mut TestAppContext) {
         Some(busy_window),
         "⌘Q again left the question behind"
     );
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
-    assert!(!cx.has_pending_prompt(), "a second question was stacked");
+    assert!(
+        !crate::confirm::testing::has_pending(cx),
+        "a second question was stacked"
+    );
     assert_eq!(quits.get(), 0, "Cancel quit");
 }
 
@@ -119,7 +125,10 @@ fn closing_while_the_question_is_up_brings_it_forward(cx: &mut TestAppContext) {
     let windows = vec![(asked, asked_panel.clone()), (other, other_panel.clone())];
     cx.update(|cx| end_all(windows, Ending::Quit, cx, |_| {}));
     cx.run_until_parked();
-    assert!(cx.has_pending_prompt(), "quitting didn't ask");
+    assert!(
+        crate::confirm::testing::has_pending(cx),
+        "quitting didn't ask"
+    );
 
     for (w, which) in [(other, "another window"), (asked, "the asked window")] {
         bring_forward(cx, other);
@@ -132,9 +141,12 @@ fn closing_while_the_question_is_up_brings_it_forward(cx: &mut TestAppContext) {
             "closing {which} left the question behind"
         );
     }
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
-    assert!(!cx.has_pending_prompt(), "a second question was stacked");
+    assert!(
+        !crate::confirm::testing::has_pending(cx),
+        "a second question was stacked"
+    );
     assert!(cx.windows().contains(&asked) && cx.windows().contains(&other));
 }
 
@@ -152,20 +164,20 @@ fn closing_a_window_asks_while_a_terminal_runs_something(cx: &mut TestAppContext
     ready(cx, &shell);
     let mut vcx = VisualTestContext::from_window(w, cx);
     assert!(vcx.simulate_close(), "a window of idle shells asked");
-    assert!(!cx.has_pending_prompt());
+    assert!(!crate::confirm::testing::has_pending(cx));
 
     start_sleep(cx, &panel);
     let mut vcx = VisualTestContext::from_window(w, cx);
     assert!(!vcx.simulate_close(), "the window closed without asking");
-    let (question, _) = cx.pending_prompt().expect("a question");
+    let (question, _) = crate::confirm::testing::pending(cx).expect("a question");
     assert_eq!(question, "Close this window?");
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
     assert!(cx.windows().contains(&w), "Cancel closed the window");
 
     let mut vcx = VisualTestContext::from_window(w, cx);
     assert!(!vcx.simulate_close());
-    cx.simulate_prompt_answer("Close Window");
+    crate::confirm::testing::answer(cx, "Close and Stop");
     cx.run_until_parked();
     assert!(!cx.windows().contains(&w), "the window is still open");
 }

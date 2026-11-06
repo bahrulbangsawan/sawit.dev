@@ -7,7 +7,7 @@ mod groups;
 mod jobs;
 mod open;
 mod render;
-mod running;
+pub(super) mod running;
 #[cfg(test)]
 mod tests;
 
@@ -247,10 +247,37 @@ impl TerminalPanel {
         let Some(ix) = self.index_of(tab) else {
             return;
         };
-        self.close(ix, cx);
-        if had_keyboard {
-            self.focus_active(window, cx);
+        let running = self.running_in_tab(ix, cx);
+        if running.is_empty() {
+            self.close(ix, cx);
+            if had_keyboard {
+                self.focus_active(window, cx);
+            }
+            return;
         }
+        let label = self.tabs[ix].read(cx).label(cx);
+        let answer = crate::confirm::Confirm::new(
+            format!("Close {label} and stop {}?", running.join(", ")),
+            "Close and Stop",
+        )
+        .thing(label)
+        .detail("Closing the terminal ends what runs in it.")
+        .ask(window, cx);
+        let tab = tab.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            if !answer.await {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Some(ix) = this.index_of(&tab) {
+                    this.close(ix, cx);
+                    if had_keyboard {
+                        this.focus_active(window, cx);
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     /// Drops a tab whose last pane closed (handing the keyboard to the next

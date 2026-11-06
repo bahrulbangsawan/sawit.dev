@@ -30,14 +30,14 @@ fn retrying_a_failed_uninstall_never_runs_the_installer(cx: &mut TestAppContext)
     retry_bun(cx, window, &page);
     assert_eq!(queued(cx, &page), [], "Retry ran something without asking");
     assert_eq!(
-        cx.pending_prompt(),
+        crate::confirm::testing::pending(cx),
         Some((
             "Uninstall Bun?".to_string(),
             r#"Runs: rm -rf "$HOME/.bun""#.to_string()
         )),
         "Retry didn't ask to uninstall again"
     );
-    cx.simulate_prompt_answer("Uninstall");
+    crate::confirm::testing::answer(cx, "Uninstall Tool");
     cx.run_until_parked();
     assert_eq!(queued(cx, &page), [("bun", remove_bun())]);
 }
@@ -73,7 +73,7 @@ fn a_copy_found_after_its_uninstall_is_never_installed_over(cx: &mut TestAppCont
     });
     assert_eq!(queued(cx, &page), [], "↩ on the copy still found");
     retry_bun(cx, window, &page);
-    assert!(!cx.has_pending_prompt());
+    assert!(!crate::confirm::testing::has_pending(cx));
     assert_eq!(queued(cx, &page), [], "Retry on the copy still found");
     // Once that copy is gone too, the row is a missing tool's again, with Install.
     page.update(cx, |page, cx| {
@@ -130,8 +130,8 @@ fn removing_homebrew_says_puremac_only_stops_getting_updates(cx: &mut TestAppCon
         })
         .unwrap();
         cx.run_until_parked();
-        let prompt = cx.pending_prompt();
-        cx.simulate_prompt_answer("Cancel");
+        let prompt = crate::confirm::testing::pending(cx);
+        crate::confirm::testing::answer(cx, "Cancel");
         cx.run_until_parked();
         prompt
     };

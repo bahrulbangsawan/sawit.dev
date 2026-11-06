@@ -208,28 +208,39 @@ impl DatabasePanel {
         &mut self,
         profile: String,
         message: String,
+        thing: String,
         detail: String,
-        buttons: Vec<&'static str>,
+        buttons: Vec<String>,
         sql: Vec<String>,
         label: String,
         done: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (level, detail) = match self.store.read(cx).route(&profile) {
-            Some(route @ WriteRoute::Remote { .. }) => (
-                PromptLevel::Critical,
-                format!("{detail}\n\n{}", route.describe()),
-            ),
-            Some(route) => (
-                PromptLevel::Warning,
-                format!("{detail}\n\n{}", route.describe()),
-            ),
-            None => (PromptLevel::Warning, detail),
+        let (remote, detail) = match self.store.read(cx).route(&profile) {
+            Some(route @ WriteRoute::Remote { .. }) => {
+                (true, format!("{detail}\n\n{}", route.describe()))
+            }
+            Some(route) => (false, format!("{detail}\n\n{}", route.describe())),
+            None => (false, detail),
         };
-        let answer = window.prompt(level, &message, Some(&detail), &buttons, cx);
+        // The red buttons, the strongest first: `buttons` lists them the other way (the last
+        // cancels), and `sql` follows `buttons`.
+        let mut confirm = crate::confirm::Confirm::new(message, buttons[0].clone())
+            .thing(thing)
+            .detail(detail);
+        if let Some(second) = buttons.get(1).filter(|_| buttons.len() > 2) {
+            confirm = confirm.second(second.clone());
+        }
+        // A remote (production) database: the user types the relation's name.
+        if remote {
+            confirm = confirm.type_to_confirm();
+        }
+        let answer = confirm.ask(window, cx);
         cx.spawn(async move |this, cx| {
-            let Ok(choice) = answer.await else { return };
+            let Some(choice) = answer.choice().await else {
+                return;
+            };
             let Some(sql) = sql.into_iter().nth(choice) else {
                 return;
             };
@@ -248,12 +259,19 @@ impl DatabasePanel {
         cx: &mut Context<Self>,
     ) {
         let noun = kind_noun(t.kind);
+        let verb = format!("Delete {}", title_case(noun));
         // SQLite has no CASCADE: one way to delete.
         let (detail, buttons, sql) = if t.db.is_postgres() {
             (
-                "This can't be undone. If views or foreign keys depend on it, \
-                 “Delete with Dependents” removes those too.",
-                vec!["Delete", "Delete with Dependents", "Cancel"],
+                format!(
+                    "This can't be undone. If views or foreign keys depend on it, \
+                     “{verb} with Dependents” removes those too."
+                ),
+                vec![
+                    verb.clone(),
+                    format!("{verb} with Dependents"),
+                    "Cancel".into(),
+                ],
                 vec![
                     db::drop_sql(&t.schema, &t.name, t.kind, false),
                     db::drop_sql(&t.schema, &t.name, t.kind, true),
@@ -261,15 +279,16 @@ impl DatabasePanel {
             )
         } else {
             (
-                "This can't be undone.",
-                vec!["Delete", "Cancel"],
+                "This can't be undone.".to_string(),
+                vec![verb.clone(), "Cancel".into()],
                 vec![db::drop_sql_for(t.db, &t.schema, &t.name, t.kind, false)],
             )
         };
         self.confirm_sql(
             t.profile.clone(),
             format!("Delete the {noun} {}.{}?", t.schema, t.name),
-            detail.into(),
+            format!("{}.{}", t.schema, t.name),
+            detail,
             buttons,
             sql,
             format!("Deleting {}", t.name),
@@ -283,8 +302,9 @@ impl DatabasePanel {
         self.confirm_sql(
             t.profile.clone(),
             format!("Delete every row in {}.{}?", t.schema, t.name),
+            format!("{}.{}", t.schema, t.name),
             "The table stays, empty. This can't be undone.".into(),
-            vec!["Empty Table", "Cancel"],
+            vec!["Empty Table".into(), "Cancel".into()],
             vec![db::empty_sql_for(t.db, &t.schema, &t.name)],
             format!("Emptying {}", t.name),
             format!("Emptied {}.", t.name),
@@ -315,4 +335,17 @@ fn file_name(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// `noun` with each word capitalized, for a button ("materialized view" → "Materialized View").
+fn title_case(noun: &str) -> String {
+    noun.split(' ')
+        .map(|w| {
+            let mut c = w.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }

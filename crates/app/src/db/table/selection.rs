@@ -225,18 +225,21 @@ impl TableView {
                 "Update Rows",
             ),
         };
-        let (level, detail) = match self.db.read(cx).route(&self.profile) {
-            Some(route @ db::WriteRoute::Remote { .. }) => (
-                PromptLevel::Critical,
-                format!("{detail}\n\n{}", route.describe()),
-            ),
-            Some(route) => (
-                PromptLevel::Warning,
-                format!("{detail}\n\n{}", route.describe()),
-            ),
-            None => (PromptLevel::Warning, detail),
+        let (remote, detail) = match self.db.read(cx).route(&self.profile) {
+            Some(route @ db::WriteRoute::Remote { .. }) => {
+                (true, format!("{detail}\n\n{}", route.describe()))
+            }
+            Some(route) => (false, format!("{detail}\n\n{}", route.describe())),
+            None => (false, detail),
         };
-        let answer = window.prompt(level, &message, Some(&detail), &[verb, "Cancel"], cx);
+        let mut confirm = crate::confirm::Confirm::new(message, verb)
+            .thing(relation.to_string())
+            .detail(detail);
+        // Every row of a table, or a remote (production) database: the user types its name.
+        if remote || (whole_table && matches!(change, BulkChange::Delete)) {
+            confirm = confirm.type_to_confirm();
+        }
+        let answer = confirm.ask(window, cx);
         let columns = self.column_names(cx);
         let sql = db::bulk_sql_for(
             self.kind(cx),
@@ -248,7 +251,7 @@ impl TableView {
         );
         let deleting = matches!(change, BulkChange::Delete);
         cx.spawn_in(window, async move |this, window| {
-            if answer.await != Ok(0) {
+            if !answer.await {
                 return;
             }
             let _ = this.update_in(window, |this, window, cx| {

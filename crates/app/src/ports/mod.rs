@@ -172,6 +172,44 @@ impl PortsPanel {
         .detach();
     }
 
+    /// Asks first, naming the jobs and their ports, then stops them ([`Self::stop_jobs`]).
+    fn ask_stop_jobs(&mut self, roots: Vec<u32>, window: &mut Window, cx: &mut Context<Self>) {
+        let jobs: Vec<&PortJob> = self
+            .jobs
+            .iter()
+            .filter(|j| roots.contains(&j.root))
+            .collect();
+        let Some(first) = jobs.first() else {
+            return;
+        };
+        let line = |j: &PortJob| {
+            let ports: Vec<String> = j.ports.iter().map(|(p, _)| format!(":{p}")).collect();
+            format!("{} {}", j.label, ports.join(" "))
+        };
+        let (title, thing) = match jobs.len() {
+            1 => (format!("Stop {}?", first.label), Some(first.label.clone())),
+            n => (format!("Stop {n} {}?", noun(n)), None),
+        };
+        let verb = if jobs.len() == 1 {
+            "Stop Process"
+        } else {
+            "Stop Processes"
+        };
+        let mut confirm = crate::confirm::Confirm::new(title, verb)
+            .detail("Each gets SIGTERM, with every process it started; its ports free up.")
+            .items(jobs.iter().map(|j| line(j)));
+        if let Some(thing) = thing {
+            confirm = confirm.thing(thing);
+        }
+        let answer = confirm.ask(window, cx);
+        cx.spawn(async move |this, cx| {
+            if answer.await {
+                let _ = this.update(cx, |this, cx| this.stop_jobs(&roots, cx));
+            }
+        })
+        .detach();
+    }
+
     /// Stops the jobs rooted at `roots`, each with all its processes.
     fn stop_jobs(&mut self, roots: &[u32], cx: &mut Context<Self>) {
         let pids: Vec<u32> = self

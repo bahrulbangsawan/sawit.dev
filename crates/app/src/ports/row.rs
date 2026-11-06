@@ -179,7 +179,9 @@ impl PortsPanel {
                     } else {
                         "Stop (SIGTERM)".to_string()
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| this.stop_jobs(&[root], cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.ask_stop_jobs(vec![root], window, cx)
+                    })),
             )
             .into_any_element()
     }

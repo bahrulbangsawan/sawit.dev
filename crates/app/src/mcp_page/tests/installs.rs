@@ -209,16 +209,16 @@ fn the_sheets_remove_asks_first(cx: &mut TestAppContext) {
     click(cx, "mcp-sheet-remove");
     assert!(has_sawit(cx), "removed without asking");
     assert_eq!(
-        cx.pending_prompt(),
+        crate::confirm::testing::pending(cx),
         Some((
             "Remove Sawit from 1 client?".to_string(),
             "Its entry is removed from: Cursor. Restart those clients to drop it.".to_string()
         ))
     );
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     assert!(has_sawit(cx), "Cancel removed it");
 
     click(cx, "mcp-sheet-remove");
-    cx.simulate_prompt_answer("Remove");
+    crate::confirm::testing::answer(cx, "Remove Server");
     assert!(removed(cx), "Remove didn't remove it");
 }

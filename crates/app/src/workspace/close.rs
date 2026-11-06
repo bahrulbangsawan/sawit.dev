@@ -158,15 +158,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let notes = browser_notes(&browser.clone().into(), cx);
-        let answer = window.prompt(
-            PromptLevel::Warning,
+        let answer = crate::confirm::Confirm::new(
             "Close the browser with its annotations?",
-            Some(&crate::browser::notes_lost(notes)),
-            &["Close Anyway", "Cancel"],
-            cx,
-        );
+            "Close and Discard Notes",
+        )
+        .detail(crate::browser::notes_lost(notes))
+        .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if let Ok(0) = answer.await {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(ix) = this.tabs.iter().position(|t| {
                         matches!(&t.item, PaneItem::Other { view, .. }

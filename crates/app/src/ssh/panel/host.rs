@@ -201,12 +201,35 @@ fn host_menu(
                 }))),
             )
             .separator()
-            .item(
-                PopupMenuItem::new("Delete").on_click(act(Box::new(move |panel, cx| {
+            .item({
+                let this = this.clone();
+                PopupMenuItem::new("Delete…").on_click(move |_, window, cx| {
+                    let Some(panel) = this.upgrade() else { return };
+                    let store = panel.read(cx).store.clone();
+                    let Some(host) = store.read(cx).list.get(&r).cloned() else {
+                        return;
+                    };
+                    let label = host.label();
+                    let mut detail = format!("{label} ({}) leaves your saved servers.", host.host);
+                    if store.read(cx).passwords.contains(&r) {
+                        detail.push_str(" Its password is deleted from the Keychain.");
+                    }
+                    let answer = crate::confirm::Confirm::new(
+                        format!("Delete the server {label}?"),
+                        "Delete Server",
+                    )
+                    .thing(label)
+                    .detail(detail)
+                    .ask(window, cx);
                     let id = r.clone();
-                    panel.store.update(cx, |s, cx| s.remove(&id, cx));
-                }))),
-            )
+                    cx.spawn(async move |cx| {
+                        if answer.await {
+                            store.update(cx, |s, cx| s.remove(&id, cx));
+                        }
+                    })
+                    .detach();
+                })
+            })
         }
         None => {
             let alias = key

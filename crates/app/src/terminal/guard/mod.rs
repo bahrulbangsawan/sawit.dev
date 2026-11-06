@@ -36,9 +36,9 @@ impl Ending {
     /// The button that goes on.
     fn answer(self) -> &'static str {
         match self {
-            Ending::Quit => "Quit",
-            Ending::Restart => "Restart",
-            Ending::CloseWindow => "Close Window",
+            Ending::Quit => "Quit and Stop",
+            Ending::Restart => "Restart and Stop",
+            Ending::CloseWindow => "Close and Stop",
         }
     }
 
@@ -189,29 +189,35 @@ fn ask(
     cx.default_global::<Asking>().0 = Some(window.window_handle());
     window.activate_window();
     let files: Vec<String> = unsaved.iter().map(|e| e.read(cx).title()).collect();
-    let saving = !files.is_empty();
-    let (question, detail, answers) = if saving {
-        let save = if files.len() == 1 { "Save" } else { "Save All" };
-        (
-            save_question(&files, ending),
-            save_detail(&files, running, tools, ending),
-            vec![save, "Don't Save", "Cancel"],
-        )
-    } else {
-        (
-            ending.question().to_string(),
-            detail(running, tools, ending),
-            vec![ending.answer(), "Cancel"],
-        )
-    };
-    let answer = window.prompt(PromptLevel::Warning, &question, Some(&detail), &answers, cx);
-    async move {
-        match (answer.await, saving) {
-            (Ok(0), true) => Answer::SaveAndGo,
-            (Ok(0), false) | (Ok(1), true) => Answer::Go,
+    if files.is_empty() {
+        // Only processes would end: the shared confirm, its red button saying what ends them.
+        let answer = crate::confirm::Confirm::new(ending.question(), ending.answer())
+            .detail(detail(running, tools, ending))
+            .ask(window, cx);
+        return futures::future::Either::Left(async move {
+            if answer.await {
+                Answer::Go
+            } else {
+                Answer::Stay
+            }
+        });
+    }
+    // Unsaved files: Save, Don't Save or Cancel (not destructive in itself), as macOS asks.
+    let save = if files.len() == 1 { "Save" } else { "Save All" };
+    let answer = window.prompt(
+        PromptLevel::Warning,
+        &save_question(&files, ending),
+        Some(&save_detail(&files, running, tools, ending)),
+        &[save, "Don't Save", "Cancel"],
+        cx,
+    );
+    futures::future::Either::Right(async move {
+        match answer.await {
+            Ok(0) => Answer::SaveAndGo,
+            Ok(1) => Answer::Go,
             _ => Answer::Stay,
         }
-    }
+    })
 }
 
 /// Does what the user answered with the `unsaved` files, and says whether the ending goes on.

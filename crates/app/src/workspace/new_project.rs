@@ -130,17 +130,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Close New Project while it creates?",
-            Some(&format!(
+        let answer = crate::confirm::Confirm::new("Close New Project while it creates?", "Close New Project")
+            .detail(format!(
                 "{work}. The create goes on in its terminal, but Sawit won't open the project when it's done."
-            )),
-            &["Close Anyway", "Cancel"],
-            cx,
-        );
+            ))
+            .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(ix) = this.tabs.iter().position(
                         |t| matches!(&t.item, PaneItem::Other { key, .. } if key.as_ref() == KEY),

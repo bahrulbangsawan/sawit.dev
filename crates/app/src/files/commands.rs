@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{ClipboardItem, Context, PromptLevel, Window};
+use gpui_kit::{ClipboardItem, Context, Window};
 use sawit_core::files;
 
 use super::{After, Clip, FilesPanel, Op, Request, ask_to_trash};
@@ -174,7 +174,7 @@ impl FilesPanel {
         let answer = ask_to_trash(&path, detail, window, cx);
         let folder = self.folder;
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await != Ok(0) {
+            if !answer.await {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {
@@ -195,16 +195,15 @@ impl FilesPanel {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("Delete “{name}” permanently?"),
-            Some("It won't go to the Trash, and this can't be undone."),
-            &["Delete", "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(
+            format!("Delete “{name}” permanently?"),
+            "Delete Permanently",
+        )
+        .detail("It won't go to the Trash, and this can't be undone.")
+        .ask(window, cx);
         let folder = self.folder;
         cx.spawn(async move |this, cx| {
-            if !matches!(answer.await, Ok(0)) {
+            if !answer.await {
                 return;
             }
             let gone = path.clone();

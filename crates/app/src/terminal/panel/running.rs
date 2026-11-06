@@ -60,6 +60,17 @@ impl TerminalPanel {
         (told, busy)
     }
 
+    /// What runs in the tab at `ix`, one name per busy pane ([`running_in`]).
+    pub fn running_in_tab(&self, ix: usize, cx: &App) -> Vec<String> {
+        let Some(tab) = self.tabs.get(ix) else {
+            return Vec::new();
+        };
+        let t = tab.read(cx);
+        t.views()
+            .filter_map(|(pane, view)| running_in(t, pane, view.read(cx)))
+            .collect()
+    }
+
     /// Every coding agent running in the terminals, in the tab strip's order and then each
     /// tab's reading order, background tabs too. One pane is `focused`: the one with the
     /// keyboard, else the one that had it last (the active tab's focused pane, when no pane
@@ -186,7 +197,11 @@ pub(super) const ENTER_AFTER: std::time::Duration = std::time::Duration::from_mi
 /// command in the foreground (by the pane's name, the name of a tab it is alone in, its script's,
 /// its coding agent's, else the program's) or a live SSH session. `None` for a shell at its prompt, a script's terminal
 /// between runs or an ended session.
-pub(super) fn running_in(tab: &TerminalTab, pane: PaneId, view: &TerminalView) -> Option<String> {
+pub(in crate::terminal) fn running_in(
+    tab: &TerminalTab,
+    pane: PaneId,
+    view: &TerminalView,
+) -> Option<String> {
     if view.exited {
         return None;
     }

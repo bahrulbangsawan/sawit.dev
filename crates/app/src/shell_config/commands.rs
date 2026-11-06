@@ -49,7 +49,7 @@ impl ShellConfigPanel {
         let detail = "You can put it back from the Trash in Finder.";
         let answer = crate::files::ask_to_trash(&path, detail, window, cx);
         cx.spawn(async move |this, cx| {
-            if answer.await == Ok(0) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     this.run(move || Op::Trash(path).run().map(drop), cx)
                 });
@@ -63,18 +63,17 @@ impl ShellConfigPanel {
         let Some(path) = self.selected_writable() else {
             return;
         };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &delete_question(
+        let answer = crate::confirm::Confirm::new(
+            delete_question(
                 &path,
                 std::env::var_os("HOME").map(PathBuf::from).as_deref(),
             ),
-            Some("It won't go to the Trash, and this can't be undone."),
-            &["Delete", "Cancel"],
-            cx,
-        );
+            "Delete Permanently",
+        )
+        .detail("It won't go to the Trash, and this can't be undone.")
+        .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     this.run(move || files::remove(&path).map_err(|e| e.to_string()), cx)
                 });

@@ -332,17 +332,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Stop the Dev Tools installs?",
-            Some(&format!(
+        let answer = crate::confirm::Confirm::new("Stop the Dev Tools installs?", "Stop and Close")
+            .detail(format!(
                 "{work}. Closing the tab stops it, and what's queued doesn't run."
-            )),
-            &["Stop and Close", "Cancel"],
-            cx,
-        );
+            ))
+            .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(ix) = this.tabs.iter().position(
                         |t| matches!(&t.item, PaneItem::Other { key, .. } if key.as_ref() == "tools"),
@@ -362,17 +358,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Stop the skill installs?",
-            Some(&format!(
+        let answer = crate::confirm::Confirm::new("Stop the skill installs?", "Stop and Close")
+            .detail(format!(
                 "{work}. Closing the tab stops it, and what's queued doesn't run."
-            )),
-            &["Stop and Close", "Cancel"],
-            cx,
-        );
+            ))
+            .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(ix) = this.tabs.iter().position(
                         |t| matches!(&t.item, PaneItem::Other { key, .. } if key.as_ref() == "skills"),

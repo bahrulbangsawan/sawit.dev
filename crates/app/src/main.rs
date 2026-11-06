@@ -6,6 +6,7 @@ mod catalog;
 mod changelog_page;
 mod cli;
 mod code_actions;
+mod confirm;
 mod db;
 mod editor;
 mod file_icons;

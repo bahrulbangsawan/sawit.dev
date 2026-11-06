@@ -377,15 +377,11 @@ impl AnnotatePanel {
         }
         detail.push_str("Their screenshots stay in .nyawit/annotations. You can undo right after.");
         let confirm = clear_label(count);
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &title,
-            Some(&detail),
-            &[confirm.as_str(), "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(title, confirm)
+            .detail(detail)
+            .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if let Ok(0) = answer.await {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| this.clear_with_undo(cx));
             }
         })

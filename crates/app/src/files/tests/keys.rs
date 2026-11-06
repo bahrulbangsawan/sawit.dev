@@ -139,14 +139,14 @@ fn backspace_asks_before_moving_anything_to_the_trash(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes(window, "backspace");
     assert_eq!(changes.started(), [], "moved to the Trash without asking");
-    let (question, _) = cx.pending_prompt().expect("⌫ asks");
+    let (question, _) = crate::confirm::testing::pending(cx).expect("⌫ asks");
     assert_eq!(question, "Move “notes.txt” to the Trash?");
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
     assert_eq!(changes.started(), []);
 
     cx.simulate_keystrokes(window, "backspace");
-    cx.simulate_prompt_answer("Move to Trash");
+    crate::confirm::testing::answer(cx, "Move to Trash");
     cx.run_until_parked();
     assert_eq!(changes.started(), [Op::Trash(notes.clone())]);
     let back = Op::Restore {
@@ -157,7 +157,7 @@ fn backspace_asks_before_moving_anything_to_the_trash(cx: &mut TestAppContext) {
 
     select(cx, window, &panel, &notes);
     cx.simulate_keystrokes(window, "cmd-backspace");
-    assert!(!cx.has_pending_prompt(), "⌘⌫ asked");
+    assert!(!crate::confirm::testing::has_pending(cx), "⌘⌫ asked");
     assert_eq!(changes.started()[1..], [Op::Trash(notes)]);
 }
 

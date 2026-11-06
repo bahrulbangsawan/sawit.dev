@@ -88,27 +88,24 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-/// Asks before `path` goes to the Trash (⌫ in Files and Config Files): 0 is yes. `detail` says
+/// Asks before `path` goes to the Trash (⌫ in Files and Config Files): true is yes. `detail` says
 /// how to get it back.
 pub(crate) fn ask_to_trash(
     path: &Path,
     detail: &str,
     window: &mut Window,
     cx: &mut App,
-) -> oneshot::Receiver<usize> {
+) -> crate::confirm::Answer {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let question = if path.is_dir() {
         format!("Move the folder “{name}” and everything in it to the Trash?")
     } else {
         format!("Move “{name}” to the Trash?")
     };
-    window.prompt(
-        PromptLevel::Warning,
-        &question,
-        Some(detail),
-        &["Move to Trash", "Cancel"],
-        cx,
-    )
+    crate::confirm::Confirm::new(question, "Move to Trash")
+        .thing(format!("“{name}”"))
+        .detail(detail.to_string())
+        .ask(window, cx)
 }
 
 pub enum FilesEvent {

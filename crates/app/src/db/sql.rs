@@ -205,14 +205,16 @@ impl SqlView {
                 .map(WriteRoute::describe)
                 .unwrap_or_else(|| "Sawit looks for a running dev server first.".into())
         );
-        let level = if remote {
-            PromptLevel::Critical
-        } else {
-            PromptLevel::Warning
-        };
-        let answer = window.prompt(level, &message, Some(&detail), &["Run", "Cancel"], cx);
+        let mut confirm = crate::confirm::Confirm::new(message, "Run Changes")
+            .thing(name.to_string())
+            .detail(detail);
+        // A remote (production) database: the user types its name.
+        if remote {
+            confirm = confirm.type_to_confirm();
+        }
+        let answer = confirm.ask(window, cx);
         cx.spawn_in(window, async move |this, window| {
-            let go = answer.await == Ok(0);
+            let go = answer.await;
             let _ = this.update_in(window, |this, window, cx| {
                 if go {
                     this.write(lite, sql, window, cx);

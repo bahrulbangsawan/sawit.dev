@@ -96,15 +96,12 @@ impl ToolsPage {
             // Per kind: a cask's app keeps working, without Homebrew's updates.
             detail = format!("{}.\n\n{detail}", needed_by_warning(&needed_by));
         }
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("Uninstall {}?", tool.name),
-            Some(&detail),
-            &["Uninstall", "Cancel"],
-            cx,
-        );
+        let answer =
+            crate::confirm::Confirm::new(format!("Uninstall {}?", tool.name), "Uninstall Tool")
+                .detail(detail)
+                .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     if in_terminal(tool, &command) {
                         this.states.insert(tool.id, State::InTerminal);

@@ -39,18 +39,18 @@ fn closing_or_quitting_asks_while_dev_tools_installs(cx: &mut TestAppContext) {
         vcx.simulate_close(),
         "another window's install held this one"
     );
-    assert!(!cx.has_pending_prompt());
+    assert!(!crate::confirm::testing::has_pending(cx));
 
     let mut vcx = VisualTestContext::from_window(w, cx);
     assert!(!vcx.simulate_close(), "the window closed without asking");
     assert_eq!(
-        cx.pending_prompt(),
+        crate::confirm::testing::pending(cx),
         Some((
             "Close this window?".to_string(),
             "Dev Tools is still running: Installing Bun. Closing the window stops it.".to_string()
         ))
     );
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
     assert!(cx.windows().contains(&w), "Cancel closed the window");
 
@@ -58,7 +58,7 @@ fn closing_or_quitting_asks_while_dev_tools_installs(cx: &mut TestAppContext) {
     let quits = Rc::new(Cell::new(0));
     try_quit(cx, w, &panel, &quits);
     assert_eq!(
-        cx.pending_prompt(),
+        crate::confirm::testing::pending(cx),
         Some((
             "Quit Sawit?".to_string(),
             "A terminal is still running: sleep. Dev Tools is still running: Installing Bun. \
@@ -66,11 +66,11 @@ fn closing_or_quitting_asks_while_dev_tools_installs(cx: &mut TestAppContext) {
                 .to_string()
         ))
     );
-    cx.simulate_prompt_answer("Cancel");
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
     assert_eq!(quits.get(), 0, "Cancel quit");
     try_quit(cx, w, &panel, &quits);
-    cx.simulate_prompt_answer("Quit");
+    crate::confirm::testing::answer(cx, "Quit and Stop");
     cx.run_until_parked();
     assert_eq!(quits.get(), 1);
     drop(page);

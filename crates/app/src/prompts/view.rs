@@ -165,16 +165,15 @@ impl PromptView {
     }
 
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("Delete prompt “{}”?", self.title(cx)),
-            Some("This can't be undone."),
-            &["Delete Prompt", "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(
+            format!("Delete prompt “{}”?", self.title(cx)),
+            "Delete Prompt",
+        )
+        .detail("This can't be undone.")
+        .ask(window, cx);
         let (store, id) = (self.store.clone(), self.id.clone());
         cx.spawn(async move |_, cx| {
-            if answer.await == Ok(0) {
+            if answer.await {
                 store.update(cx, |s, cx| s.remove(&id, cx));
             }
         })

@@ -19,7 +19,7 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
 use super::recorder::{Changed, Done, KeystrokeRecorder};
-use super::{KeymapStore, Row, store};
+use super::{KeymapStore, Row, Source, store};
 use form::{BindingForm, FormTarget};
 
 actions!(
@@ -194,9 +194,9 @@ impl KeymapEditor {
         }
     }
 
-    fn remove_selected(&mut self, _: &RemoveBinding, _: &mut Window, cx: &mut Context<Self>) {
+    fn remove_selected(&mut self, _: &RemoveBinding, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self.selected {
-            self.remove(ix, cx);
+            self.remove(ix, window, cx);
         }
     }
 
@@ -229,11 +229,34 @@ impl KeymapEditor {
 
     /// Takes row `ix` out: a user's binding leaves the file, a default is turned off, and a
     /// removed default comes back.
-    fn remove(&mut self, ix: usize, cx: &mut Context<Self>) {
+    /// A binding of the user's own is gone for good, so it asks first (the shared confirm); a
+    /// default can be put back from its row, so it goes at once.
+    fn remove(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(row) = self.rows.get(ix) else {
             return;
         };
         let source = row.source;
+        if matches!(source, Source::User(_)) {
+            let keys = row.display.clone();
+            let answer = crate::confirm::Confirm::new(
+                format!("Remove your binding {keys} for {}?", row.label),
+                "Remove Binding",
+            )
+            .thing(keys)
+            .detail("It leaves your keymap file, and the key does what it did before you bound it.")
+            .ask(window, cx);
+            cx.spawn(async move |this, cx| {
+                if answer.await {
+                    let _ = this.update(cx, |this, cx| this.remove_now(source, cx));
+                }
+            })
+            .detach();
+            return;
+        }
+        self.remove_now(source, cx);
+    }
+
+    fn remove_now(&mut self, source: Source, cx: &mut Context<Self>) {
         let result = self.store.update(cx, |store, cx| store.remove(source, cx));
         self.error = result.err().map(Into::into);
         cx.notify();

@@ -354,15 +354,17 @@ impl Workspace {
                 crate::browser::notes_lost(notes),
             )
         };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &message,
-            Some(&detail),
-            &["Close Anyway", "Cancel"],
-            cx,
-        );
+        let verb = if unsaved > 0 {
+            "Close and Discard Changes"
+        } else {
+            "Close and Discard Notes"
+        };
+        let answer = crate::confirm::Confirm::new(message, verb)
+            .thing(name.clone())
+            .detail(detail)
+            .ask(window, cx);
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(0) = answer.await {
+            if answer.await {
                 let _ = this.update_in(cx, |this, window, cx| {
                     this.remove_project(&root, window, cx)
                 });

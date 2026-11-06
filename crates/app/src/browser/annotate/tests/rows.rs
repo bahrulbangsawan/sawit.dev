@@ -9,8 +9,16 @@ use crate::browser::annotate::AnnotatePanel;
 /// before several; a lone note already sent goes at once, with Undo.
 #[gpui_kit::test]
 fn clear_asks_before_dropping_notes_not_sent(cx: &mut gpui_kit::TestAppContext) {
-    use gpui_kit::VisualTestContext;
-    let (panel, cx) = panel(cx);
+    use gpui_kit::{AppContext as _, VisualTestContext};
+    // In a window with gpui-kit's root, where the confirm question opens.
+    cx.update(gpui_kit::init);
+    let (window, panel) = cx.update(|cx| {
+        gpui_kit::open_window(Default::default(), cx, |window, cx| {
+            cx.new(|cx| AnnotatePanel::new(window, cx))
+        })
+        .unwrap()
+    });
+    let cx = &mut VisualTestContext::from_window(window, cx);
     let rows = |cx: &mut VisualTestContext| cx.update(|_, cx| panel.read(cx).annotations(cx).len());
     let add = |note: &str, cx: &mut VisualTestContext| {
         cx.update(|window, cx| {
@@ -27,12 +35,15 @@ fn clear_asks_before_dropping_notes_not_sent(cx: &mut gpui_kit::TestAppContext) 
     add("Make it blue", cx);
     assert_eq!(cx.update(|_, cx| panel.read(cx).unsent(cx)), 1);
     clear(cx);
-    assert!(cx.has_pending_prompt(), "a note would be lost");
-    cx.simulate_prompt_answer("Cancel");
+    assert!(
+        crate::confirm::testing::has_pending(cx),
+        "a note would be lost"
+    );
+    crate::confirm::testing::answer(cx, "Cancel");
     cx.run_until_parked();
     assert_eq!(rows(cx), 1);
     clear(cx);
-    cx.simulate_prompt_answer("Clear annotation");
+    crate::confirm::testing::answer(cx, "Clear annotation");
     cx.run_until_parked();
     assert_eq!(rows(cx), 0);
 
@@ -49,7 +60,10 @@ fn clear_asks_before_dropping_notes_not_sent(cx: &mut gpui_kit::TestAppContext) 
     assert_eq!(cx.update(|_, cx| panel.read(cx).unsent(cx)), 1);
     cx.update(|_, cx| panel.update(cx, |p, cx| p.mark_sent(cx)));
     clear(cx);
-    assert!(!cx.has_pending_prompt(), "one note, and it was sent");
+    assert!(
+        !crate::confirm::testing::has_pending(cx),
+        "one note, and it was sent"
+    );
     assert_eq!(rows(cx), 0);
     // Undo brings it back.
     cx.update(|_, cx| panel.update(cx, |p, cx| p.undo(cx)));
@@ -59,8 +73,11 @@ fn clear_asks_before_dropping_notes_not_sent(cx: &mut gpui_kit::TestAppContext) 
     add("Make it green", cx);
     cx.update(|_, cx| panel.update(cx, |p, cx| p.mark_sent(cx)));
     clear(cx);
-    assert!(cx.has_pending_prompt(), "two notes go at once");
-    cx.simulate_prompt_answer("Clear 2 annotations");
+    assert!(
+        crate::confirm::testing::has_pending(cx),
+        "two notes go at once"
+    );
+    crate::confirm::testing::answer(cx, "Clear 2 annotations");
     cx.run_until_parked();
     assert_eq!(rows(cx), 0);
 }
