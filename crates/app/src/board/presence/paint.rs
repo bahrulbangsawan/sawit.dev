@@ -95,6 +95,54 @@ pub(in crate::board) fn paint(
                     }
                 }
             }
+            Mark::Box {
+                rect,
+                color,
+                alpha,
+                dashed,
+                fill: shade,
+            } => {
+                let style = if dashed {
+                    BorderStyle::Dashed
+                } else {
+                    BorderStyle::Solid
+                };
+                window.paint_quad(quad(
+                    rect_bounds(rect),
+                    px(2.0),
+                    color.opacity(shade),
+                    px(if alpha > 0.0 { 1.5 } else { 0.0 }),
+                    color.opacity(alpha),
+                    style,
+                ));
+            }
+            Mark::Line {
+                from,
+                to,
+                color,
+                width,
+            } => {
+                let mut line = PathBuilder::stroke(px(width));
+                line.move_to(at(from));
+                line.line_to(at(to));
+                if let Ok(path) = line.build() {
+                    window.paint_path(path, color);
+                }
+            }
+            Mark::Caret {
+                at: tip,
+                height,
+                color,
+            } => {
+                let top = at(tip);
+                let caret = Bounds::new(top, size(px(2.0), px(height as f32)));
+                window.paint_quad(fill(caret, color));
+            }
+            Mark::Badge {
+                at: spot,
+                text,
+                color,
+            } => paint_badge(at(spot), &text, color, window, cx),
             Mark::Pill {
                 tip, color, alpha, ..
             } => {
@@ -198,4 +246,33 @@ fn paint_ghost(
         );
         let _ = mark.paint(at, px(16.0), TextAlign::Left, None, window, cx);
     }
+}
+
+/// A small badge at `at` (its top-left): white text on `color`, 10 px, as a live size or a
+/// distance shows in a design tool.
+fn paint_badge(at: Point<Pixels>, text: &str, color: Hsla, window: &mut Window, cx: &mut App) {
+    let runs = [TextRun {
+        len: text.len(),
+        font: Font {
+            weight: FontWeight::SEMIBOLD,
+            ..font(window.text_style().font_family.clone())
+        },
+        color: hsla(0.0, 0.0, 1.0, 1.0),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    }];
+    let line = window
+        .text_system()
+        .shape_line(text.to_string().into(), px(10.0), &runs, None);
+    let bounds = Bounds::new(at, size(line.width + px(8.0), px(15.0)));
+    window.paint_quad(fill(bounds, color).corner_radii(px(3.0)));
+    let _ = line.paint(
+        point(at.x + px(4.0), at.y),
+        px(15.0),
+        TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }

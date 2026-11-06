@@ -287,10 +287,11 @@ fn an_agent_may_not_move_the_view(cx: &mut TestAppContext) {
     assert_eq!(zoom, after);
 }
 
-/// New text shows a word at a time in what is drawn, never in the document; under reduced
-/// motion it shows whole.
+/// New text is typed in what is drawn, never in the document: hidden until its box is placed,
+/// then shown a few characters at a time, whole once its play is over; under reduced motion it
+/// shows whole at once.
 #[gpui_kit::test]
-fn new_text_is_revealed_a_word_at_a_time(cx: &mut TestAppContext) {
+fn new_text_is_typed_in_what_is_drawn(cx: &mut TestAppContext) {
     let (_tmp, view, id) = begun("work-reveal", cx);
     let copy = json!({"type": "text", "x": 14, "y": 40, "text": "Unlimited canvases for teams"});
     let reply = agent(
@@ -300,22 +301,35 @@ fn new_text_is_revealed_a_word_at_a_time(cx: &mut TestAppContext) {
         cx,
     );
     let text: NodeId = reply["ids"][0].as_str().unwrap().parse().unwrap();
-    let hidden = |cx: &mut TestAppContext| {
+    // What the drawn copy shows of the text: hidden, the char its unpainted tail starts at, or
+    // whole (`None`).
+    let drawn = |cx: &mut TestAppContext| {
         view.update(cx, |view, cx| {
             let now = cx.background_executor().now();
             let doc = view.board().unwrap().session.ds().unwrap().doc.clone();
-            let drawn = view.agents.reveals.document(&doc, now)?;
-            let runs = drawn.node(text)?.kind.text()?.runs.clone();
+            assert!(doc.node(text).unwrap().visible, "the document is whole");
+            let drawn = view.agents.replays.document(&doc, &[], now)?;
+            let node = drawn.node(text)?;
+            if !node.visible {
+                return Some(0);
+            }
+            let runs = node.kind.text()?.runs.clone();
             runs.iter()
                 .find(|r| r.style.fills == Some(Vec::new()))
-                .map(|r| (r.start, r.end))
+                .map(|r| r.start.max(1))
         })
     };
-    assert_eq!(hidden(cx), Some((9, 28)), "the first word shows");
-    cx.executor().advance_clock(Duration::from_millis(45));
-    assert_eq!(hidden(cx), Some((18, 28)), "the second word");
-    cx.executor().advance_clock(Duration::from_millis(800));
-    assert_eq!(hidden(cx), None, "whole within 0.8 s");
+    assert_eq!(drawn(cx), Some(0), "hidden until its box is placed");
+    let mut typed = Vec::new();
+    for _ in 0..30 {
+        cx.executor().advance_clock(Duration::from_millis(60));
+        typed.push(drawn(cx));
+    }
+    assert!(
+        typed.iter().any(|t| t.is_some_and(|c| c > 0)),
+        "typed part way: {typed:?}"
+    );
+    assert_eq!(typed.last(), Some(&None), "whole once played");
     cx.update(|cx| cx.set_reduce_motion(true));
     let more = json!({"type": "text", "x": 14, "y": 80, "text": "Agent presence for five"});
     agent(
@@ -324,7 +338,7 @@ fn new_text_is_revealed_a_word_at_a_time(cx: &mut TestAppContext) {
         json!({"op": "add", "work": id, "elements": [more]}),
         cx,
     );
-    assert_eq!(hidden(cx), None, "reduced motion");
+    assert_eq!(drawn(cx), None, "reduced motion");
 }
 
 /// A free pointer's name shows for 2 s after its op, and again while the user's pointer rests on

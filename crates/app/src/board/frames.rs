@@ -136,9 +136,11 @@ impl BoardView {
         };
         if let Some(wanted) = view::render_view(&ds.view, viewport, quality) {
             let mut job = render_job(ds, self.composition.as_ref(), kind, wanted);
-            // Text an agent just wrote shows a word at a time ([`presence`]).
-            if let Some(revealing) = self.agents.reveals.document(&job.doc, now) {
-                job.doc = revealing;
+            // What agents just built plays over the canvas ([`presence::replay`]): the copy drawn
+            // hides what isn't placed yet and types text as it goes.
+            let selected = ds.selection.clone();
+            if let Some(playing) = self.agents.replays.document(&job.doc, &selected, now) {
+                job.doc = playing;
             }
             let key = job_key(&job, ds.view.zoom, dark);
             let asked = (self.requested.as_ref())

@@ -224,9 +224,22 @@ impl BoardView {
             let sentence = crate::agents::sentence(look, &action.done);
             self.agents.announcer.op(&look.id, sentence, now);
         }
-        let reveal = self.shown && crate::agents::shown(cx) && !crate::agents::reduce_motion(cx);
-        if let Some((before, after)) = changed.as_ref().filter(|_| reveal && reveals(name)) {
-            self.agents.reveals.wrote(before, after, now);
+        // A canvas loaded or cleared in place: nothing of before plays on.
+        if matches!(name, Some("replace" | "clear")) {
+            self.agents.replays.cancel();
+        }
+        // The op is in the document already: its build plays over it, never before it.
+        let plays = self.shown && crate::agents::shown(cx) && plays(name);
+        if let (Some((before, after)), Some(page), true) = (&changed, page, plays) {
+            let reduce = crate::agents::reduce_motion(cx);
+            let visible = self.visible_page_rect();
+            let at = (self.agents.agents.iter())
+                .find(|a| a.look.id == look.id)
+                .and_then(|a| a.at.map(|s| s.point))
+                .unwrap_or_default();
+            self.agents
+                .replays
+                .play(look, before, after, page, visible, at, now, reduce);
         }
         if let Some(ghost) = ghost {
             match changed.filter(|_| ok) {
@@ -336,8 +349,21 @@ impl BoardView {
     }
 }
 
-/// Whether the text an op named `name` writes is revealed at reading speed: what an agent draws,
-/// changes or runs, not a canvas loaded in its place.
-fn reveals(name: Option<&str>) -> bool {
-    matches!(name, Some("add" | "update" | "mermaid" | "command"))
+/// Whether what an op named `name` does is played over the canvas: what an agent draws, changes,
+/// deletes or runs, not a canvas loaded in its place or cleared.
+fn plays(name: Option<&str>) -> bool {
+    matches!(
+        name,
+        Some("add" | "update" | "delete" | "mermaid" | "command" | "routes")
+    )
+}
+
+impl BoardView {
+    /// The part of the page on show that is on screen, in page units.
+    pub(in crate::board) fn visible_page_rect(&self) -> Option<[f64; 4]> {
+        let view = &self.board()?.session.ds().ok()?.view;
+        let (x0, y0) = view.screen_to_page(0.0, 0.0);
+        let (x1, y1) = view.screen_to_page(view.vw, view.vh);
+        Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
+    }
 }

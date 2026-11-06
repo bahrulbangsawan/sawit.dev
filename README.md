@@ -978,8 +978,18 @@ their own cursor.
   with a skeleton that gives way as content lands, and a row above it: the component's name and step ("Pricing
   card · Writing copy"), the agent's name and a badge, a spinner while it runs, a check when done, "!" and the
   reason when it failed, which stays until the agent retries or you dismiss it. A component with no word from its
-  agent for a minute shows as stalled, with a dismiss button. New text writes itself at reading speed. Everything
+  agent for a minute shows as stalled, with a dismiss button. New text types itself in. Everything
   one component's agent did undoes as one step, while nothing else edits in between.
+- **The build plays live.** What an agent's op adds or changes is in the canvas at once (saved, undoable, in
+  `canvas_get` and exports); what you see is played over it as a designer would make it, in the agent's colour: frames
+  and shapes dragged out with the crosshair and a live `W × H` badge (an auto layout frame shows its padding and gap
+  in pink), text typed behind an I-beam and a caret, lines drawn with the pen, repeated cards ⌥-dragged from the first
+  with a red distance mark and their text retyped, images wiping in, components with a purple outline and instances
+  with ◇, moves and resizes dragged from the old box to the new, deletions shrinking away. Parents come before their
+  children, the first card before its copies, and everything in reading order. Each agent (each lane) plays in its own
+  queue, so several play at once. An op plays for 2.5 s at most; an agent that sends more while it plays speeds up
+  (2×, 4×, then it snaps). What you select, undo or edit, what another op changes and what is off screen show whole at
+  once.
 - **Many agents in one session.** Claude Code's subagents, a workflow's agents and parallel calls share their parent's
   `sawit-mcp`, so they used to share one cursor. Each canvas tool that draws takes `agent` (`"header"` or `{id: "header",
   name: "Header agent"}`): each id is a cursor of its own, in its own colour (none reused while on screen), with its

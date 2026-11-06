@@ -18,7 +18,9 @@
 //!   a minute without word, "!" and the reason when it failed ([`Work`]).
 //! - **The roster** in the top bar ([`roster`]) and a chip per edge for agents at work off screen
 //!   ([`edges`]); both list the agents, and the user's click takes the view there.
-//! - **Text** an agent writes reveals at reading speed ([`reveal`]).
+//! - **The build plays live** ([`replay`]): what an op added or changed is drawn as a designer would
+//!   make it (boxes dragged out, text typed, lines drawn with the pen, copies ⌥-dragged), each
+//!   lane in its own queue, over a document that already holds the result.
 //! - **Screen readers** hear one polite sentence per change, queued per agent ([`announce`]).
 //!
 //! None of it is the user's: an agent's op leaves the user's selection, keyboard, view and page as
@@ -36,7 +38,7 @@ mod marks;
 mod ops;
 mod paint;
 pub(super) mod pointer;
-mod reveal;
+pub(super) mod replay;
 mod roster;
 mod rows;
 mod target;
@@ -62,9 +64,6 @@ pub(super) use work::Work;
 
 use crate::agents::Look;
 
-/// How long a pointer glides to its new place at most (a short trip takes less,
-/// [`pointer::trip_time`]).
-pub(super) const GLIDE: Duration = Duration::from_millis(450);
 /// How long the layers a free op touched stay outlined, fading out over the last half.
 const TOUCHED_TIME: Duration = Duration::from_millis(1200);
 /// How long a slow op's placeholder shows before the op runs.
@@ -190,8 +189,8 @@ pub(super) struct Presence {
     pub draining: bool,
     /// The polite status line's sentences, one at a time.
     pub announcer: announce::Announcer,
-    /// The text agents' ops wrote, revealed at reading speed.
-    pub reveals: reveal::Reveals,
+    /// The agents' ops played over the canvas, a queue per lane.
+    pub replays: replay::Replays,
     /// The agent whose pointer the user's pointer rests on: its name shows.
     pub hovered: Option<SharedString>,
     next_ghost: u64,
@@ -221,7 +220,7 @@ impl Presence {
                     seen: now,
                     work: None,
                     trip: Duration::ZERO,
-                    side: if self.agents.len() % 2 == 0 {
+                    side: if self.agents.len().is_multiple_of(2) {
                         1.0
                     } else {
                         -1.0
@@ -321,7 +320,7 @@ impl Presence {
 
     /// The render thread handed over a frame of `doc`: the placeholders whose result it shows go.
     pub fn rendered(&mut self, doc: &Arc<Document>) {
-        let doc = self.reveals.source_of(doc);
+        let doc = self.replays.source_of(doc);
         self.ghosts.retain(|g| match &g.state {
             GhostState::Landed { doc: landed, .. } => !Arc::ptr_eq(landed, &doc),
             _ => true,
@@ -382,7 +381,7 @@ impl Presence {
         (self.agents.iter()).any(|a| gliding(a) || touched(a) || fading(a))
             || self.ghosts.iter().any(shimmer)
             || self.works.iter().any(|w| w.animating(now, reduce))
-            || (!reduce && self.reveals.active(now))
+            || (!reduce && self.replays.active(now))
     }
 
     /// The agent at work here most recently, while one is: its op in the last

@@ -45,6 +45,33 @@ pub(in crate::board) enum Mark {
         tool: super::pointer::Tool,
         scale: f32,
     },
+    /// A replay's box: an outline (`alpha`, dashed or not) over a fill (`fill`), both in `color`.
+    Box {
+        rect: [f64; 4],
+        color: Hsla,
+        alpha: f32,
+        dashed: bool,
+        fill: f32,
+    },
+    /// A small label at `at`: a box's live size, a distance, a component's ◇.
+    Badge {
+        at: (f64, f64),
+        text: SharedString,
+        color: Hsla,
+    },
+    /// The pen's rubber band, a distance mark.
+    Line {
+        from: (f64, f64),
+        to: (f64, f64),
+        color: Hsla,
+        width: f32,
+    },
+    /// The caret of text being typed.
+    Caret {
+        at: (f64, f64),
+        height: f64,
+        color: Hsla,
+    },
     /// A free pointer's name, beside its tip.
     Pill {
         tip: (f64, f64),
@@ -138,6 +165,12 @@ impl Presence {
                 failed: matches!(ghost.state, GhostState::Failed { .. }),
             });
         }
+        // What the lanes' replays draw: boxes being dragged out, carets, rubber bands.
+        if !reduce {
+            for lane in self.replays.lanes.iter().filter(|l| l.page == page) {
+                super::replay::marks::lane_marks(lane, now, &screen, &mut marks);
+            }
+        }
         // The most recent agent last, on top.
         let mut agents: Vec<_> = self.agents.iter().collect();
         agents.sort_by_key(|a| a.seen);
@@ -146,8 +179,13 @@ impl Presence {
         let mut tips: Vec<(f64, f64)> = Vec::new();
         for agent in agents {
             let idle = now.saturating_duration_since(agent.seen);
-            let (Some(alpha), Some(point)) = (model::opacity(idle), agent.point(now, reduce))
-            else {
+            // While its replay plays, the pointer follows the build, with the build's tool.
+            let playing = (!reduce)
+                .then(|| self.replays.pointer(&agent.look.id, now))
+                .flatten();
+            let point = playing.map(|(p, _)| p).or_else(|| agent.point(now, reduce));
+            let tool = playing.map_or(agent.tool, |(_, tool)| tool);
+            let (Some(alpha), Some(point)) = (model::opacity(idle), point) else {
                 continue;
             };
             if agent.at.is_none_or(|at| at.page != page) {
@@ -165,7 +203,7 @@ impl Presence {
                 tip,
                 color,
                 alpha,
-                tool: agent.tool,
+                tool,
                 scale,
             });
             let on_row = (agent.work.as_deref())
@@ -174,7 +212,7 @@ impl Presence {
             let hovered = self.hovered.as_ref() == Some(&agent.look.id);
             if !on_row && (agent.named(now) || hovered) {
                 // While it works, the pill says what it does: "Header agent · typing".
-                let verb = agent.tool.verb().filter(|_| model::shows_action(idle));
+                let verb = tool.verb().filter(|_| model::shows_action(idle));
                 let label = match verb {
                     Some(verb) => format!("{} · {verb}", agent.look.label).into(),
                     None => agent.look.label.clone(),

@@ -14,7 +14,7 @@ use super::super::edges::{Toward, edge_of};
 use super::super::labels::{kept, pill_rect};
 use super::super::marks::Mark;
 use super::super::target::{Target, ghost_rect, target, union};
-use super::super::{ANNOUNCE_GAP, EDGE_INSET, FAILED_TIME, GLIDE, Presence, TOUCHED_TIME};
+use super::super::{ANNOUNCE_GAP, EDGE_INSET, FAILED_TIME, Presence, TOUCHED_TIME};
 use super::look;
 
 /// A board with two stickies, and the same board after `op`, run as an agent's op runs.
@@ -174,7 +174,7 @@ fn placeholders_land_or_fail() {
     assert_eq!(ghosts(&presence), 1);
     assert!(presence.animating(t0, false), "it shimmers");
     assert!(
-        !presence.animating(t0 + GLIDE, true),
+        !presence.animating(t0 + Duration::from_millis(450), true),
         "not under reduced motion"
     );
     let doc = Arc::new(Document::default());
