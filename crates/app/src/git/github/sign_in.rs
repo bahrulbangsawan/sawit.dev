@@ -10,7 +10,7 @@ use gpui_kit::*;
 use sawit_core::github;
 
 use super::GitHubView;
-use crate::git::account::SignIn;
+use crate::git::account::{SignIn, UNREADABLE};
 use crate::states::Banner;
 
 impl GitHubView {
@@ -19,7 +19,40 @@ impl GitHubView {
         let signed_in = account.is_signed_in();
         let notice = account.notice().map(String::from);
         let muted = cx.theme().muted_foreground;
+        let unreadable = account.unreadable().map(String::from);
         let card = match &account.sign_in {
+            SignIn::Idle if unreadable.is_some() => {
+                let why = unreadable.unwrap_or_default();
+                v_flex()
+                    .gap_5()
+                    .child(card_heading(
+                        UNREADABLE,
+                        "Your sign-in is still saved: Sawit didn't sign you out. The Keychain may be locked, or an access prompt was denied or closed.",
+                        cx,
+                    ))
+                    .child(Banner::error("gh-keychain-error", why))
+                    .child(
+                        Button::new("gh-keychain-try-again")
+                            .primary()
+                            .w_full()
+                            .icon(Lucide::RefreshCw)
+                            .label("Try Again")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.account.update(cx, |a, cx| a.load(cx))
+                            })),
+                    )
+                    .child(
+                        Button::new("gh-keychain-sign-in")
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .label("Sign In Again Instead")
+                            .tooltip("Replaces the saved sign-in with a new one")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.account.update(cx, |a, cx| a.sign_in(cx))
+                            })),
+                    )
+            }
             SignIn::Waiting(device) => {
                 let (code, url) = (device.user_code.clone(), device.verification_uri.clone());
                 let page = url.trim_start_matches("https://").to_string();

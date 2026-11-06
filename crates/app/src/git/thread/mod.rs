@@ -132,8 +132,9 @@ impl ThreadView {
         self.item.number
     }
 
-    /// When `error` is GitHub refusing this thread's sign-in itself: the app signs out
-    /// everywhere, and the GitHub page closes this thread for its sign-in card. True then.
+    /// When `error` is a 401 for this thread's sign-in: the account asks `GET /user`, which alone
+    /// can sign out (the GitHub page then closes this thread for its sign-in card). True only for
+    /// a stale token; otherwise the thread shows the error as any other.
     fn refused(&self, error: &sawit_core::CoreError, cx: &mut App) -> bool {
         super::account::note_refusal(error, &self.token, cx)
     }

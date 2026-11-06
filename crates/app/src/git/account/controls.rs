@@ -11,7 +11,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::sync::Arc;
 
-use super::{GitHubAccount, OpenGitHub, Session, SignInToGitHub, global};
+use super::{GitHubAccount, OpenGitHub, Session, SignInToGitHub, UNREADABLE, global};
 
 // ---------------------------------------------------------------- controls
 
@@ -143,6 +143,24 @@ fn menu_with(menu: PopupMenu, account: &GitHubAccount, pages: Option<Pages>) -> 
 /// The title bar's menu while nobody is signed in: why GitHub features are off, the one sign-in
 /// (an item like the others, so the arrow keys reach it and ↩ signs in), then the pages.
 fn signed_out_menu(menu: PopupMenu, account: &GitHubAccount, pages: Pages) -> PopupMenu {
+    if let Some(why) = account.unreadable() {
+        // Not signed out: the sign-in is still saved, the Keychain didn't hand it over.
+        let menu = menu
+            .min_w(px(240.))
+            .max_w(px(320.))
+            .item(header(
+                Picture::Icon(Lucide::TriangleAlert),
+                UNREADABLE.into(),
+                Some((why.to_string(), true)),
+                format!("{UNREADABLE}. {why}"),
+            ))
+            .item(
+                PopupMenuItem::new("Try Again")
+                    .icon(Lucide::RefreshCw)
+                    .on_click(|_, _, cx| global(cx).update(cx, |a, cx| a.load(cx))),
+            );
+        return pages(menu.separator());
+    }
     let (detail, warn) = match account.notice() {
         Some(notice) => (notice.to_string(), true),
         None => (
@@ -245,9 +263,16 @@ pub fn account_control(account: &Entity<GitHubAccount>, pages: Pages, cx: &App) 
     }
     let menu_account = account.clone();
     if !a.is_signed_in() || a.flow_under_way() {
-        let notice = a.notice.clone();
+        let unreadable = a.unreadable().is_some() && !a.flow_under_way();
+        let notice = if unreadable {
+            Some(format!("{UNREADABLE}. Open this menu to try again."))
+        } else {
+            a.notice.clone()
+        };
         let label = if a.flow_under_way() {
             "Finish Signing In"
+        } else if unreadable {
+            "GitHub"
         } else {
             "Sign In"
         };
@@ -260,7 +285,11 @@ pub fn account_control(account: &Entity<GitHubAccount>, pages: Pages, cx: &App) 
             })
             .label(label)
             // An ellipsis, as on any Mac: a menu of choices opens, nothing signs in yet.
-            .accessibility_label(format!("{label} to GitHub…"))
+            .accessibility_label(if unreadable {
+                format!("{UNREADABLE}…")
+            } else {
+                format!("{label} to GitHub…")
+            })
             .tooltip(notice.unwrap_or_else(|| {
                 "One sign-in for every GitHub feature: pull requests, issues, cloning and more"
                     .into()

@@ -143,8 +143,9 @@ impl GitHubView {
         self.store.read(cx).slug.clone()
     }
 
-    /// When `error` is GitHub refusing `token` itself: the app signs out everywhere and this
-    /// page goes back to its sign-in card, which says why. True then.
+    /// When `error` is a 401 for `token`: the account asks `GET /user`, which alone can sign out
+    /// (the page then goes back to its sign-in card, which says why). True only for a stale
+    /// token, whose answer says nothing; otherwise the page shows the error as any other.
     fn refused(error: &sawit_core::CoreError, token: &str, cx: &mut App) -> bool {
         account::note_refusal(error, token, cx)
     }

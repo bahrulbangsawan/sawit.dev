@@ -254,3 +254,31 @@ fn times() {
     assert_eq!(ago(0, 3600), "1 hour ago");
     assert_eq!(ago(0, 3 * 86400), "3 days ago");
 }
+
+/// Why a sign-in ended is kept with the time, the newest lines only, one reason a line.
+#[test]
+fn the_session_log_keeps_why_a_sign_in_ended() {
+    assert_eq!(super::session_log::stamp(0), "1970-01-01T00:00:00Z");
+    assert_eq!(
+        super::session_log::stamp(1_793_961_302),
+        "2026-11-06T10:35:02Z"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested").join(SESSION_LOG);
+    note_session(&path, "signed out: the user pressed Sign Out");
+    note_session(&path, "kept: a 401\nfrom /repos");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].ends_with("Z signed out: the user pressed Sign Out"));
+    assert!(
+        lines[1].ends_with("kept: a 401 from /repos"),
+        "one line per reason"
+    );
+    for i in 0..250 {
+        note_session(&path, &format!("line {i}"));
+    }
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text.lines().count(), 200);
+    assert!(text.lines().last().unwrap().ends_with("line 249"));
+}

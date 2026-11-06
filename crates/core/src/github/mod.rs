@@ -7,6 +7,7 @@ mod account;
 mod backup;
 mod http;
 mod issues;
+mod session_log;
 mod sign_in;
 mod time;
 mod timeline;
@@ -19,6 +20,7 @@ pub use issues::{
     Comment, Item, PullState, add_comment, comments, create_issue, create_pull, default_branch,
     items, merge_pull, parse_comments, parse_items, pull_diff, pull_state, set_open,
 };
+pub use session_log::{FILE as SESSION_LOG, note_session};
 pub use sign_in::{DeviceCode, Poll, parse_device_code, parse_poll, start_sign_in, wait_for_token};
 pub use time::{ago, now, parse_time};
 pub use timeline::{

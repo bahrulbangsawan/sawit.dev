@@ -5,6 +5,7 @@
 //! the sign-in, turns them all off again. The token is kept in the Keychain and nowhere else,
 //! and nothing here signs in by itself: the device flow only starts from the user's click.
 
+mod check;
 mod controls;
 
 use std::sync::Arc;
@@ -16,6 +17,8 @@ use sawit_core::{CoreError, Result};
 use crate::rt;
 
 pub use controls::{account_control, account_menu, gate, sign_in_link};
+
+use check::{Check, fetch_avatar, image, saved_session};
 
 actions!(
     github,
@@ -46,6 +49,9 @@ pub enum Session {
     /// The Keychain hasn't answered yet (a moment at launch).
     Loading,
     SignedOut,
+    /// The Keychain couldn't be read (locked, an access prompt denied or timed out, `security`
+    /// failing): why. Not signed out: the item is kept, and **Try Again** reads it again.
+    Unreadable(String),
     /// A saved sign-in GitHub hasn't confirmed: being checked (`error` none), or GitHub couldn't
     /// be reached (`error` why). It is kept and used: it most likely still works, and git may
     /// well reach GitHub when its API didn't.
@@ -63,6 +69,9 @@ pub enum Session {
 /// GitHub control is off again, and the sign-in card and the title bar say why.
 pub const REVOKED_NOTICE: &str = "GitHub no longer accepts the sign-in Sawit saved (it was revoked or expired), so Sawit signed you out. Sign in again to use GitHub.";
 
+/// What the app says while the Keychain can't be read: never "signed out".
+pub const UNREADABLE: &str = "Couldn't read your GitHub sign-in from the Keychain";
+
 pub struct GitHubAccount {
     store: Arc<dyn TokenStore>,
     session: Session,
@@ -70,6 +79,12 @@ pub struct GitHubAccount {
     avatar: Option<Arc<Image>>,
     /// [`REVOKED_NOTICE`], until a new sign-in or the user dismisses it.
     notice: Option<String>,
+    /// `GET /user`: the one answer that can end a saved sign-in.
+    check: Check,
+    /// The token a 401 from another call is being checked for, so a burst of them asks once.
+    rechecking: Option<String>,
+    /// Where why a sign-in ended is noted ([`github::note_session`]); none in tests.
+    log: Option<std::path::PathBuf>,
     _flow: Task<()>,
 }
 
@@ -106,17 +121,17 @@ pub fn init(cx: &mut App) {
     account.update(cx, |a, cx| a.load(cx));
 }
 
-/// When `error` is GitHub refusing `token` itself ([`github::is_revoked`]): signs out everywhere
-/// ([`GitHubAccount::refused`]) and returns true, so the caller shows nothing more of its own,
-/// the sign-in card taking over.
+/// When `error` is a 401 ([`github::is_revoked`]) from a call made with `token`. A 401 from any
+/// call but `GET /user` never signs out by itself (another endpoint, a GitHub incident, a scope
+/// the token lacks): it has `GET /user` asked with the same token ([`GitHubAccount::refused`]),
+/// and only a 401 there ends the sign-in. Returns false while `token` is the sign-in in use, so
+/// the caller shows the error as any other; true for a token since replaced or signed out, whose
+/// request is stale and says nothing.
 pub fn note_refusal(error: &CoreError, token: &str, cx: &mut App) -> bool {
     if !github::is_revoked(error) {
         return false;
     }
-    global(cx).update(cx, |a, cx| {
-        a.refused(token, cx);
-    });
-    true
+    !global(cx).update(cx, |a, cx| a.refused(token, cx))
 }
 
 impl GitHubAccount {
@@ -127,7 +142,18 @@ impl GitHubAccount {
             sign_in: SignIn::Idle,
             avatar: None,
             notice: None,
+            check: check::default_check(),
+            rechecking: None,
+            log: check::default_log(),
             _flow: Task::ready(()),
+        }
+    }
+
+    /// Notes why the sign-in ended or wasn't read (never the token), for a report to show.
+    fn note(&self, why: &str) {
+        log::warn!("github sign-in: {why}");
+        if let Some(path) = &self.log {
+            github::note_session(path, why);
         }
     }
 
@@ -145,7 +171,15 @@ impl GitHubAccount {
     pub fn token(&self) -> Option<&str> {
         match &self.session {
             Session::SignedIn { token, .. } | Session::Unconfirmed { token, .. } => Some(token),
-            Session::Loading | Session::SignedOut => None,
+            Session::Loading | Session::SignedOut | Session::Unreadable(_) => None,
+        }
+    }
+
+    /// Why the Keychain couldn't be read, while it can't.
+    pub fn unreadable(&self) -> Option<&str> {
+        match &self.session {
+            Session::Unreadable(why) => Some(why),
+            _ => None,
         }
     }
 
@@ -188,36 +222,51 @@ impl GitHubAccount {
     /// Why a GitHub control can't be used yet, as its tooltip says it: `to` is what the control
     /// does ("create a pull request"). `None` once signed in.
     pub fn blocked(&self, to: &str) -> Option<SharedString> {
+        if self.unreadable().is_some() {
+            return Some(format!("{UNREADABLE}. Try Again from the account menu to {to}").into());
+        }
         (!self.is_signed_in()).then(|| format!("Sign in to GitHub to {to}").into())
     }
 
     /// Reads the saved sign-in, then asks GitHub whose it is. Found, it is used at once: the
-    /// controls don't wait on GitHub's answer.
+    /// controls don't wait on GitHub's answer. Also **Try Again** after a Keychain error.
     pub fn load(&mut self, cx: &mut Context<Self>) {
         self.session = Session::Loading;
         cx.notify();
         let store = self.store.clone();
         let rx = rt::spawn_blocking(cx, move || store.load());
         cx.spawn(async move |this, cx| {
-            let saved = rx.await.ok().and_then(|r| r.ok()).flatten();
-            let _ = this.update(cx, |this, cx| {
-                if this.session != Session::Loading {
-                    return;
-                }
-                match saved {
-                    Some(token) => {
-                        this.session = Session::Unconfirmed {
-                            token: token.clone(),
-                            error: None,
-                        };
-                        this.confirm(token, cx);
-                    }
-                    None => this.session = Session::SignedOut,
-                }
-                cx.notify();
+            let saved = rx.await.unwrap_or_else(|_| {
+                Err(CoreError::Config("Keychain: the read was cut short".into()))
             });
+            let _ = this.update(cx, |this, cx| this.loaded(saved, cx));
         })
         .detach();
+    }
+
+    /// What the store answered at launch (or on Try Again). An error is not "signed out": the
+    /// item is kept, and the app says it couldn't read it, with Try Again.
+    pub(crate) fn loaded(&mut self, saved: Result<Option<String>>, cx: &mut Context<Self>) {
+        if self.session != Session::Loading {
+            return;
+        }
+        match saved {
+            Ok(Some(token)) if !token.trim().is_empty() => {
+                self.session = Session::Unconfirmed {
+                    token: token.clone(),
+                    error: None,
+                };
+                self.confirm(token, cx);
+            }
+            Ok(_) => self.session = Session::SignedOut,
+            Err(e) => {
+                self.note(&format!(
+                    "couldn't read the sign-in from the Keychain, kept it and stayed out of the signed-out state: {e}"
+                ));
+                self.session = Session::Unreadable(e.to_string());
+            }
+        }
+        cx.notify();
     }
 
     /// Asks GitHub again about a saved sign-in it couldn't be asked about.
@@ -235,10 +284,11 @@ impl GitHubAccount {
 
     /// Asks GitHub whose `token` is, with the account's picture.
     fn confirm(&mut self, token: String, cx: &mut Context<Self>) {
+        let check = self.check.clone();
         let rx = rt::spawn(cx, {
             let token = token.clone();
             async move {
-                let account = github::account(&token).await;
+                let account = check(token).await;
                 let avatar = fetch_avatar(&account).await;
                 (account, avatar)
             }
@@ -266,14 +316,13 @@ impl GitHubAccount {
         }
         let (session, notice) = saved_session(token, account);
         if notice.is_some() {
-            // Revoked for good: the next launch starts signed out, without saying it again.
-            let _ = self.store.delete();
-            self.avatar = None;
-        } else {
-            self.avatar = avatar.as_deref().and_then(image);
+            return self.revoked(
+                "GET /user with the saved sign-in answered 401 at launch",
+                cx,
+            );
         }
+        self.avatar = avatar.as_deref().and_then(image);
         self.session = session;
-        self.notice = notice.map(String::from);
         cx.notify();
     }
 
@@ -337,6 +386,9 @@ impl GitHubAccount {
         cx: &mut Context<Self>,
     ) {
         if let Err(e) = self.store.save(&token) {
+            self.note(&format!(
+                "a new sign-in couldn't be saved to the Keychain: {e}"
+            ));
             self.sign_in = SignIn::Failed(format!("The Keychain didn't keep the sign-in. {e}"));
             cx.notify();
             return;
@@ -358,28 +410,19 @@ impl GitHubAccount {
     pub fn sign_out(&mut self, cx: &mut Context<Self>) {
         self._flow = Task::ready(());
         self.sign_in = match self.store.delete() {
-            Ok(()) => SignIn::Idle,
-            Err(e) => SignIn::Failed(e.to_string()),
+            Ok(()) => {
+                self.note("signed out: the user chose Sign Out");
+                SignIn::Idle
+            }
+            Err(e) => {
+                self.note(&format!("signed out: the user chose Sign Out; the Keychain item couldn't be deleted: {e}"));
+                SignIn::Failed(e.to_string())
+            }
         };
         self.session = Session::SignedOut;
         self.avatar = None;
         self.notice = None;
         cx.notify();
-    }
-
-    /// GitHub refused `token` itself (401: revoked, expired). When it is the sign-in in use, the
-    /// app returns to signed out everywhere and says so, once: the requests still out with it
-    /// find it gone and say nothing. A refusal of a sign-in since replaced changes nothing.
-    pub fn refused(&mut self, token: &str, cx: &mut Context<Self>) -> bool {
-        if self.token() != Some(token) {
-            return false;
-        }
-        let _ = self.store.delete();
-        self.session = Session::SignedOut;
-        self.avatar = None;
-        self.notice = Some(REVOKED_NOTICE.into());
-        cx.notify();
-        true
     }
 
     pub fn dismiss_notice(&mut self, cx: &mut Context<Self>) {
@@ -392,54 +435,19 @@ impl GitHubAccount {
 
     /// For `app_state`: whether agents' GitHub work can go ahead, and as whom. Never the token.
     pub fn describe(&self) -> serde_json::Value {
+        let state = match &self.session {
+            Session::Loading => "loading",
+            Session::SignedOut => "signed_out",
+            Session::Unreadable(_) => "keychain_error",
+            Session::Unconfirmed { .. } => "unconfirmed",
+            Session::SignedIn { .. } => "signed_in",
+        };
         serde_json::json!({
             "signed_in": self.is_signed_in(),
             "login": self.login(),
+            "state": state,
         })
     }
-}
-
-/// What the Keychain's sign-in `token` is once GitHub was asked whose it is (`account`), and
-/// what to say of it:
-///
-/// - GitHub knows it: signed in.
-/// - GitHub couldn't be reached: kept, unconfirmed, with why. It may well still work for git.
-/// - GitHub no longer accepts it (revoked, expired): signed out, saying so, so git goes back to
-///   the user's own credentials instead of sending a token GitHub refuses (which read as an
-///   account without access to the remote; SMOKE-5).
-fn saved_session(token: String, account: Result<Account>) -> (Session, Option<&'static str>) {
-    match account {
-        Ok(account) => (Session::SignedIn { token, account }, None),
-        Err(e) if github::is_revoked(&e) => (Session::SignedOut, Some(REVOKED_NOTICE)),
-        Err(e) => (
-            Session::Unconfirmed {
-                token,
-                error: Some(e.to_string()),
-            },
-            None,
-        ),
-    }
-}
-
-async fn fetch_avatar(account: &Result<Account>) -> Option<Vec<u8>> {
-    let url = account.as_ref().ok()?.avatar_url.clone()?;
-    github::avatar(&url).await.ok()
-}
-
-/// The picture GitHub sent, by its first bytes: a PNG, JPEG, GIF or WebP.
-fn image(bytes: &[u8]) -> Option<Arc<Image>> {
-    let format = if bytes.starts_with(b"\x89PNG") {
-        ImageFormat::Png
-    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        ImageFormat::Jpeg
-    } else if bytes.starts_with(b"GIF8") {
-        ImageFormat::Gif
-    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(&b"WEBP"[..]) {
-        ImageFormat::Webp
-    } else {
-        return None;
-    };
-    Some(Arc::new(Image::from_bytes(format, bytes.to_vec())))
 }
 
 #[cfg(test)]

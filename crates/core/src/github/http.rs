@@ -92,9 +92,10 @@ pub(super) async fn curl(
     Ok(parse_reply(&String::from_utf8_lossy(&out.stdout)))
 }
 
-/// What a call says when GitHub no longer accepts the token it was made with (401: revoked or
-/// expired). Said where the user is signed in, so Sign Out is at hand.
-pub const REVOKED: &str = "GitHub no longer accepts this sign-in. Sign out, then sign in again.";
+/// What a call says when GitHub answered it 401. From `GET /user` that means the token was
+/// revoked or expired; from any other call it may not (another endpoint, a GitHub incident), so
+/// the app asks `GET /user` before it forgets anything, and says so meanwhile.
+pub const REVOKED: &str = "GitHub refused this request's sign-in (401). Sawit is checking whether your sign-in still works; if GitHub revoked it, Sawit asks you to sign in again.";
 
 /// Whether `error` is GitHub refusing the token itself ([`REVOKED`]), not a call that couldn't
 /// reach GitHub or that GitHub refused for another reason.

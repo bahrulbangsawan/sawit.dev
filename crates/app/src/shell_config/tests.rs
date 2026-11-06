@@ -53,13 +53,14 @@ fn saving_waits_for_the_one_sign_in(cx: &mut TestAppContext) {
     }
 }
 
-/// Final seams m5: GitHub refusing the sign-in Sawit saved (revoked, expired) is like having
-/// none: the app signs out everywhere and says so once (the account's notice), and Save
-/// turns off with Sign In to GitHub beside it, so the panel says nothing of its own. Other
-/// failures still say why, and sign nobody out.
+/// Final seams m5, as item 19 changed it: a 401 from the backup's calls says why and signs
+/// nobody out by itself; the account asks `GET /user` with the same token, and only a 401 there
+/// signs out (the account's tests cover that). Other failures say why too.
 #[gpui_kit::test]
-fn a_refused_github_sign_in_signs_out_everywhere(cx: &mut TestAppContext) {
+fn a_refused_backup_call_keeps_the_sign_in(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
     cx.update(|cx| {
+        cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start()));
         gpui_kit::init(cx);
         super::init(cx);
     });
@@ -76,12 +77,12 @@ fn a_refused_github_sign_in_signs_out_everywhere(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|cx| {
         let p = panel.read(cx);
-        assert_eq!(p.error, None, "it said more than the account's notice");
-        assert!(p.save_blocked(cx).is_some(), "Save is still on");
-        assert_eq!(
-            account.read(cx).notice(),
-            Some(crate::git::account::REVOKED_NOTICE)
+        assert_eq!(p.error.as_deref(), Some(sawit_core::github::REVOKED));
+        assert!(
+            account.read(cx).is_signed_in(),
+            "a 401 from another call signed out"
         );
+        assert_eq!(account.read(cx).notice(), None);
     });
 
     account.update(cx, |a, cx| a.signed_in("gho_2".into(), me(), None, cx));

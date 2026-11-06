@@ -1,5 +1,5 @@
 //! The sign-in's tests: what GitHub says of a saved sign-in, the controls it turns on and off,
-//! refusals, and avatars.
+//! refusals, Keychain errors, restarts, and avatars.
 
 use std::sync::Arc;
 
@@ -77,7 +77,7 @@ fn controls_are_off_until_signed_in(cx: &mut TestAppContext) {
         );
         assert_eq!(
             a.describe(),
-            serde_json::json!({"signed_in": false, "login": null})
+            serde_json::json!({"signed_in": false, "login": null, "state": "signed_out"})
         );
     });
     account.update(cx, |a, cx| a.signed_in("gho_1".into(), me(), None, cx));
@@ -86,7 +86,7 @@ fn controls_are_off_until_signed_in(cx: &mut TestAppContext) {
         assert_eq!(a.token(), Some("gho_1"));
         assert_eq!(
             a.describe(),
-            serde_json::json!({"signed_in": true, "login": "me"})
+            serde_json::json!({"signed_in": true, "login": "me", "state": "signed_in"})
         );
     });
     account.update(cx, |a, cx| {
@@ -129,23 +129,65 @@ fn one_sign_in_turns_on_every_follower(cx: &mut TestAppContext) {
     drop(followers);
 }
 
-/// GitHub refusing the sign-in in use signs out everywhere, forgets it and says so once;
-/// refusals of the same token still on their way change nothing more, and nor does one of a
-/// token since replaced.
+/// A 401 from any call but `GET /user` never signs out by itself: the app asks `GET /user` with
+/// the same token. GitHub still knowing it, or not answering, keeps it (in the store too) and
+/// the caller shows its error; only a 401 there forgets it, says so once and notes why. A
+/// refusal of a token since replaced is stale: it changes nothing and says nothing.
 #[gpui_kit::test]
-fn a_revoked_sign_in_returns_to_signed_out_once(cx: &mut TestAppContext) {
+fn only_a_401_from_get_user_forgets_the_sign_in(cx: &mut TestAppContext) {
+    runtime(cx);
     let account = account_with(Some("gho_old"), cx);
-    account.update(cx, |a, cx| a.signed_in("gho_old".into(), me(), None, cx));
+    let log = tempfile::tempdir().unwrap();
+    let log_file = log.path().join(github::SESSION_LOG);
+    account.update(cx, |a, cx| {
+        a.log = Some(log_file.clone());
+        a.check = answers(Ok(me()));
+        a.signed_in("gho_old".into(), me(), None, cx)
+    });
     let refused = CoreError::GitHub(github::REVOKED.into());
-    let first = cx.update(|cx| note_refusal(&refused, "gho_old", cx));
-    assert!(first);
+
+    // A 401 from another endpoint; GET /user still accepts the token: kept.
+    assert!(
+        !cx.update(|cx| note_refusal(&refused, "gho_old", cx)),
+        "the caller shows its error"
+    );
+    settle(cx, &account, |a| a.rechecking.is_none());
     account.read_with(cx, |a, _| {
-        assert!(!a.is_signed_in());
+        assert_eq!(a.token(), Some("gho_old"));
+        assert_eq!(a.store.load().unwrap().as_deref(), Some("gho_old"));
+        assert_eq!(a.notice(), None);
+    });
+
+    // GET /user can't be reached: kept too.
+    account.update(cx, |a, _| {
+        a.check = answers(Err(CoreError::GitHub("offline".into())))
+    });
+    cx.update(|cx| note_refusal(&refused, "gho_old", cx));
+    settle(cx, &account, |a| a.rechecking.is_none());
+    account.read_with(cx, |a, _| {
+        assert_eq!(a.store.load().unwrap().as_deref(), Some("gho_old"))
+    });
+
+    // GET /user with the same token answers 401: forgotten, said once, noted.
+    account.update(cx, |a, _| {
+        a.check = answers(Err(CoreError::GitHub(github::REVOKED.into())))
+    });
+    cx.update(|cx| note_refusal(&refused, "gho_old", cx));
+    settle(cx, &account, |a| !a.is_signed_in());
+    account.read_with(cx, |a, _| {
+        assert_eq!(a.session, Session::SignedOut);
         assert_eq!(a.notice(), Some(REVOKED_NOTICE));
         assert_eq!(a.store.load().unwrap(), None);
     });
+    let noted = std::fs::read_to_string(&log_file).unwrap();
+    assert!(
+        noted.contains("signed out: GET /user answered 401"),
+        "{noted}"
+    );
+    assert!(!noted.contains("gho_old"), "the log never holds the token");
+
+    // The same refusal again (another view's request): stale, says nothing more.
     account.update(cx, |a, cx| a.dismiss_notice(cx));
-    // The same refusal again (another view's request): handled, said nothing more.
     assert!(cx.update(|cx| note_refusal(&refused, "gho_old", cx)));
     account.read_with(cx, |a, _| assert_eq!(a.notice(), None));
 
@@ -158,6 +200,158 @@ fn a_revoked_sign_in_returns_to_signed_out_once(cx: &mut TestAppContext) {
     let offline = CoreError::GitHub("Unable to reach GitHub.".into());
     assert!(!cx.update(|cx| note_refusal(&offline, "gho_new", cx)));
     account.read_with(cx, |a, _| assert!(a.is_signed_in()));
+}
+
+/// A store whose reads fail, as a locked Keychain or a denied access prompt does, and that
+/// counts what deletes it.
+struct Unreadable {
+    token: std::sync::Mutex<Option<String>>,
+    readable: std::sync::atomic::AtomicBool,
+    deletes: std::sync::atomic::AtomicUsize,
+}
+
+impl TokenStore for Unreadable {
+    fn load(&self) -> sawit_core::Result<Option<String>> {
+        if !self.readable.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(CoreError::Config(
+                "Keychain: User interaction is not allowed.".into(),
+            ));
+        }
+        Ok(self.token.lock().unwrap().clone())
+    }
+    fn save(&self, token: &str) -> sawit_core::Result<()> {
+        *self.token.lock().unwrap() = Some(token.into());
+        Ok(())
+    }
+    fn delete(&self) -> sawit_core::Result<()> {
+        self.deletes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *self.token.lock().unwrap() = None;
+        Ok(())
+    }
+}
+
+/// A Keychain read error is not "signed out": the item is kept (nothing deletes it), the app
+/// says it couldn't read it and notes why, and Try Again reads it once the Keychain answers.
+#[gpui_kit::test]
+fn a_keychain_error_keeps_the_sign_in(cx: &mut TestAppContext) {
+    runtime(cx);
+    let store = Arc::new(Unreadable {
+        token: std::sync::Mutex::new(Some("gho_saved".into())),
+        readable: false.into(),
+        deletes: 0.into(),
+    });
+    let log = tempfile::tempdir().unwrap();
+    let log_file = log.path().join(github::SESSION_LOG);
+    let account = cx.update(|cx| {
+        let account = cx.new(|_| GitHubAccount::with_store(store.clone()));
+        cx.set_global(GlobalAccount(account.clone()));
+        account
+    });
+    account.update(cx, |a, cx| {
+        a.log = Some(log_file.clone());
+        a.check = answers(Ok(me()));
+        a.load(cx)
+    });
+    settle(cx, &account, |a| a.session != Session::Loading);
+    account.read_with(cx, |a, _| {
+        assert_eq!(
+            a.session,
+            Session::Unreadable("Keychain: User interaction is not allowed.".into())
+        );
+        assert!(a.unreadable().is_some());
+        assert!(!a.is_signed_in());
+        assert_eq!(a.notice(), None, "no revoked notice");
+        assert!(a.blocked("clone").unwrap().starts_with(super::UNREADABLE));
+        assert_eq!(a.describe()["state"], "keychain_error");
+    });
+    assert_eq!(store.deletes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(store.token.lock().unwrap().as_deref(), Some("gho_saved"));
+    assert!(
+        std::fs::read_to_string(&log_file)
+            .unwrap()
+            .contains("couldn't read the sign-in from the Keychain")
+    );
+
+    // Try Again, the Keychain answering now: signed in as before.
+    store
+        .readable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    account.update(cx, |a, cx| a.load(cx));
+    settle(cx, &account, |a| a.account().is_some());
+    account.read_with(cx, |a, _| assert_eq!(a.token(), Some("gho_saved")));
+}
+
+/// A restart with a saved sign-in is signed in: confirmed when GitHub answers, and kept,
+/// unconfirmed, when it can't be reached (offline): never signed out.
+#[gpui_kit::test]
+fn a_restart_with_a_saved_sign_in_is_signed_in(cx: &mut TestAppContext) {
+    runtime(cx);
+    for (answer, confirmed) in [
+        (Ok(me()), true),
+        (
+            Err(CoreError::GitHub("Unable to reach GitHub.".into())),
+            false,
+        ),
+        (
+            Err(CoreError::GitHub(
+                "GitHub refused (502): Bad gateway.".into(),
+            )),
+            false,
+        ),
+    ] {
+        let account = account_with(Some("gho_saved"), cx);
+        account.update(cx, |a, cx| {
+            a.check = answers(answer);
+            a.load(cx)
+        });
+        settle(cx, &account, |a| match &a.session {
+            Session::SignedIn { .. } => true,
+            Session::Unconfirmed { error, .. } => error.is_some(),
+            _ => false,
+        });
+        account.read_with(cx, |a, _| {
+            assert_eq!(a.token(), Some("gho_saved"));
+            assert_eq!(a.account().is_some(), confirmed);
+            assert_eq!(a.store.load().unwrap().as_deref(), Some("gho_saved"));
+        });
+    }
+}
+
+/// The runtime the store and `GET /user` answer on; its threads wake the app's tasks.
+fn runtime(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start())));
+    cx.executor().allow_parking();
+}
+
+/// `GET /user` answering `answer` every time it is asked.
+fn answers(answer: sawit_core::Result<Account>) -> super::Check {
+    let answer = std::sync::Arc::new(answer.map_err(|e| e.to_string()));
+    Arc::new(move |_| {
+        let answer = answer.clone();
+        Box::pin(async move {
+            match &*answer {
+                Ok(account) => Ok(account.clone()),
+                Err(e) => Err(CoreError::GitHub(e.clone())),
+            }
+        })
+    })
+}
+
+/// Runs the app and the runtime until `done`, for at most two seconds.
+fn settle(
+    cx: &mut TestAppContext,
+    account: &Entity<GitHubAccount>,
+    done: impl Fn(&GitHubAccount) -> bool,
+) {
+    for _ in 0..200 {
+        cx.run_until_parked();
+        if account.read_with(cx, |a, _| done(a)) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the account never settled");
 }
 
 /// A saved sign-in found revoked at launch is forgotten and said once; an answer about a

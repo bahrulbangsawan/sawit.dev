@@ -133,11 +133,17 @@ pub fn set(service: &str, account: &str, secret: &str) -> Result<()> {
         quote(account),
         quote(MARKER),
     );
+    // The old item is gone by now: one more try before saying so, so a passing `security`
+    // hiccup doesn't lose a sign-in an older build saved (`get_legacy` re-saves it here).
     let out = security(&["-i"], Some(&line))?;
     if out.status.success() {
+        return Ok(());
+    }
+    let again = security(&["-i"], Some(&line))?;
+    if again.status.success() {
         Ok(())
     } else {
-        Err(error(&out))
+        Err(error(&again))
     }
 }
 

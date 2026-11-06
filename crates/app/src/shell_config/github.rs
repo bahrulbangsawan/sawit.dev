@@ -90,9 +90,8 @@ impl ShellConfigPanel {
         .detach();
     }
 
-    /// A save GitHub didn't take: why. GitHub refusing the sign-in `token` itself (revoked,
-    /// expired) signs the app out everywhere, which says so once; the button then turns off
-    /// with Sign In to GitHub beside it, so this says nothing more.
+    /// A save GitHub didn't take: why. A 401 has the account ask `GET /user` with `token`, which
+    /// alone can end the sign-in; a 401 for a token since replaced says nothing.
     pub(super) fn github_failed(&mut self, e: CoreError, token: &str, cx: &mut Context<Self>) {
         if !account::note_refusal(&e, token, cx) {
             self.error = Some(e.to_string());
