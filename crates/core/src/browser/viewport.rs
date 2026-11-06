@@ -90,30 +90,68 @@ pub struct Fit {
 
 /// `size` (CSS px) at the largest scale up to 1 that fits `area`.
 ///
-/// Scaled down, the view gets a whole number of points (WebKit rounds the
-/// view's size, then `innerWidth` is that size over the scale, whole), and
-/// the scale is set so the width comes out a quarter pixel over the device's:
-/// `innerWidth` is exactly the device width. The height lands within a pixel
-/// or so of the device's.
+/// Scaled down, the view gets a whole number of points (WebKit rounds the view's size), and the
+/// page's `innerWidth` and `innerHeight` are the view's size over the scale, cut to whole pixels.
+/// So the view's width and height are whole points that over one scale both come out within half
+/// a pixel above the device's size: the page sees exactly the device's width and height (393 ×
+/// 852, not 851). The scale gives up a hair of the largest fit when it must to find such a pair.
 pub fn fit(size: (u32, u32), area: (f32, f32)) -> Fit {
     let (w, h) = (f64::from(size.0), f64::from(size.1));
-    let scale = (f64::from(area.0) / w)
+    let largest = (f64::from(area.0) / w)
         .min(f64::from(area.1) / h)
         .clamp(0.0, 1.0);
-    if scale >= 1.0 {
+    if largest >= 1.0 {
         return Fit {
             scale: 1.0,
             width: w as f32,
             height: h as f32,
         };
     }
-    let width = (w * scale).floor().max(1.0);
-    let scale = width / (w + 0.25);
-    Fit {
-        scale,
-        width: width as f32,
-        height: ((h + 0.25) * scale).round().max(1.0) as f32,
+    exact_fit(w, h, largest, area).unwrap_or_else(|| {
+        // No exact pair this small (a view a few points across): the width exact, as before.
+        let width = (w * largest).floor().max(1.0);
+        let scale = width / (w + 0.25);
+        Fit {
+            scale,
+            width: width as f32,
+            height: ((h + 0.25) * scale).round().max(1.0) as f32,
+        }
+    })
+}
+
+/// The largest scale up to `largest` at which a view of whole points `W` × `H` shows `w` × `h`
+/// CSS px: `W / scale` and `H / scale` both in `[w, w + 0.5)`. Narrower views are tried until
+/// one has a height that fits too; the scale is the middle of the range both allow.
+fn exact_fit(w: f64, h: f64, largest: f64, area: (f32, f32)) -> Option<Fit> {
+    let (max_w, max_h) = (f64::from(area.0).floor(), f64::from(area.1).floor());
+    let top = ((w + 0.5) * largest).floor().min(max_w);
+    for step in 0..64 {
+        let width = top - f64::from(step);
+        if width < 1.0 {
+            return None;
+        }
+        // The scales that show this width: (width / (w + 0.5), width / w], and no larger than
+        // the area allows.
+        let (lo, hi) = (width / (w + 0.5), (width / w).min(largest));
+        if lo >= hi {
+            continue;
+        }
+        // The heights those scales allow, whole: the tallest fitting one first.
+        let mut height = ((h + 0.5) * hi).floor().min(max_h);
+        while height >= (h * lo).ceil().max(1.0) {
+            let lo = lo.max(height / (h + 0.5));
+            let hi = hi.min(height / h);
+            if lo < hi {
+                return Some(Fit {
+                    scale: (lo + hi) / 2.0,
+                    width: width as f32,
+                    height: height as f32,
+                });
+            }
+            height -= 1.0;
+        }
     }
+    None
 }
 
 /// The mode an agent asks for: a device name, `responsive`, or a size.

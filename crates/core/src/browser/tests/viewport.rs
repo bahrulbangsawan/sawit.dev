@@ -36,14 +36,59 @@ fn scaled_devices_keep_their_css_width() {
         assert_eq!(f.width, f.width.round(), "{size:?} in {area:?}");
         assert_eq!(f.height, f.height.round(), "{size:?} in {area:?}");
         assert!(f.width <= area.0, "{size:?} in {area:?}");
+        assert!(f.height <= area.1, "{size:?} in {area:?}");
         let css_width = f64::from(f.width) / f.scale;
         assert_eq!(css_width as u32, size.0, "{size:?} in {area:?}");
         let css_height = f64::from(f.height) / f.scale;
-        assert!(
-            (css_height - f64::from(size.1)).abs() < 1.0 / f.scale,
-            "{size:?}"
-        );
+        assert_eq!(css_height as u32, size.1, "{size:?} in {area:?}");
     }
+}
+
+/// Every panel size: the page sees the device's very width and height, rounded or cut, and
+/// the scale gives up little of the largest fit. (At 0.4908, 852 came out 851.)
+#[test]
+fn every_area_shows_the_exact_device_size() {
+    let devices = [
+        (393, 852),
+        (852, 393),
+        (412, 915),
+        (744, 1133),
+        (834, 1194),
+        (1440, 900),
+    ];
+    for size in devices {
+        let mut h = 120.;
+        while h < 1400. {
+            for w in [300., 641., 1000., 1999.] {
+                let area = (w, h);
+                let f = fit(size, area);
+                if f.scale >= 1.0 {
+                    continue;
+                }
+                let (cw, ch) = (f64::from(f.width) / f.scale, f64::from(f.height) / f.scale);
+                for (css, want) in [(cw, size.0), (ch, size.1)] {
+                    assert_eq!(css.floor() as u32, want, "{size:?} in {area:?}: {f:?}");
+                    assert_eq!(css.round() as u32, want, "{size:?} in {area:?}: {f:?}");
+                }
+                assert!(
+                    f.width <= area.0 && f.height <= area.1,
+                    "{size:?} in {area:?}"
+                );
+                let largest =
+                    (f64::from(w) / f64::from(size.0)).min(f64::from(h) / f64::from(size.1));
+                // A view a hundred points across has few pairs to choose from.
+                let keep = if largest >= 0.3 { 0.97 } else { 0.8 };
+                assert!(
+                    f.scale > largest * keep,
+                    "{size:?} in {area:?}: {f:?} vs {largest}"
+                );
+            }
+            h += 7.3;
+        }
+    }
+    // The full-screen case that measured 851 (a scale of 0.4908).
+    let f = fit((393, 852), (2000., 418.2));
+    assert_eq!((f64::from(f.height) / f.scale) as u32, 852);
 }
 
 #[test]

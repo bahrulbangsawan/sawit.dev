@@ -93,6 +93,27 @@ sawitTest("device: iPhone 15 lays out at 393 × 852 with its text unclamped, at 
     assert.equal(r.h, 852);
     assert.ok(Math.abs(r.dpr - 3) < 1e-3, `the iPhone's pixel ratio at scale ${scale}: ${r.dpr}`);
   }
+  // The iPad mini, at each window size again (its height came out 1134 once).
+  await ctx.call({ cmd: "browser", op: { op: "resize", device: "iPad mini" } });
+  scale = null;
+  for (const [i, size] of [[1100, 760], [820, 600], null].entries()) {
+    if (size) await win.resize(...size);
+    else await win.fill();
+    const v = await settledScale(ctx, scale);
+    scale = v.scale;
+    const r = await until(async () => {
+      const m = await measure(ctx);
+      return m?.w === 744 && m?.h === 1133 ? m : null;
+    }, { what: `the page to see 744 × 1133 at scale ${scale}` }).catch(async (e) => {
+      ctx.log(`measured: ${JSON.stringify(await measure(ctx))}`);
+      throw e;
+    });
+    await win.screenshot(path.join(dir, `ipad-${i}-scale-${Math.round(scale * 100)}.png`)).catch(() => {});
+    assert.equal(r.fs, "12px");
+    assert.ok(Math.abs(r.dpr - 2) < 1e-3, `the iPad's pixel ratio: ${r.dpr}`);
+  }
+  await ctx.call({ cmd: "browser", op: { op: "resize", device: "iPhone 15" } });
+
   // Turned on its side, the page sees the size swapped.
   await ctx.call({ cmd: "browser", op: { op: "resize", width: 852, height: 393 } });
   const side = await until(async () => {

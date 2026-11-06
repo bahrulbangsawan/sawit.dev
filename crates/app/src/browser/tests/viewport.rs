@@ -41,7 +41,16 @@ fn devices_are_centered_below_the_caption() {
         height: 440.,
     };
     let (f, scale) = page_frame(small, &phone);
-    assert!((scale - 384. / 852.).abs() < 1e-3 && f.x >= 26. && (f.y - 60.).abs() < 1e-3);
+    // The scale gives up a hair so the height is exact too: the view may be points short, and
+    // stays centered.
+    assert!(
+        scale <= 384. / 852. && scale > 0.97 * 384. / 852.,
+        "{scale}"
+    );
+    assert!(
+        f.x >= 26. && f.y == (60. + (384. - f.height) / 2.).round(),
+        "{f:?}"
+    );
 }
 
 #[test]
@@ -122,7 +131,7 @@ fn a_scaled_device_lays_out_at_its_own_size() {
         // The page's viewport, as WebKit sizes it: the view's points over the scale.
         let (css_w, css_h) = (f64::from(f.width) / scale, f64::from(f.height) / scale);
         assert_eq!(css_w.floor(), 393., "{w}×{h}: width {css_w}");
-        assert!((css_h - 852.).abs() < 1.5, "{w}×{h}: height {css_h}");
+        assert_eq!(css_h.floor(), 852., "{w}×{h}: height {css_h}");
         // Whole points, inside the area, below the caption.
         assert_eq!(f.width, f.width.round());
         assert!(f.x >= 0. && f.x + f.width <= w && f.y >= 24. && f.y + f.height <= h);
