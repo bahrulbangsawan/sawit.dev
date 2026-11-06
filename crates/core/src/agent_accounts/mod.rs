@@ -8,7 +8,12 @@
 //! list of accounts, which one is active, and usage the agent itself reported.
 
 pub mod claude;
+pub mod collector;
+pub mod run;
+pub mod statusline;
 mod store;
+pub mod tracking;
+pub mod usage;
 
 pub use store::{Accounts, Settings, active_path, read_active, write_active};
 

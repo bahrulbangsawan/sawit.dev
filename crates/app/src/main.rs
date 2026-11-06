@@ -108,6 +108,13 @@ fn save_login_path(cache: &std::path::Path, path: &str) {
 /// Whether this process was started as `sawit-mcp`. The app bundle ships
 /// one binary: `sawit-mcp` is a symlink to `sawit`, so the MCP server
 /// doesn't carry a second copy of sawit-core (QuickJS, Postgres, TLS, …).
+/// Whether this process was started under the name `name` (a link to the one binary).
+fn invoked_as(name: &str) -> bool {
+    std::env::args_os()
+        .next()
+        .is_some_and(|arg0| std::path::Path::new(&arg0).file_name() == Some(name.as_ref()))
+}
+
 fn invoked_as_mcp() -> bool {
     std::env::args_os()
         .next()
@@ -115,6 +122,12 @@ fn invoked_as_mcp() -> bool {
 }
 
 fn main() -> std::process::ExitCode {
+    // An Agent Account's `statusLine` runs Sawit as its usage collector: first, and nothing else,
+    // since Claude Code runs it on every status line update.
+    if invoked_as(sawit_core::agent_accounts::collector::PROGRAM) {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        std::process::exit(sawit_core::agent_accounts::collector::main(&args));
+    }
     // `RUST_LOG=sawit=debug` prints the debug log (the canvas's render times, …) on stderr. Without
     // RUST_LOG no logger is installed, and log calls do nothing.
     if std::env::var_os("RUST_LOG").is_some() {
