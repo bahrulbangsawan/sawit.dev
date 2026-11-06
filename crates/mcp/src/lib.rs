@@ -62,6 +62,7 @@ pub mod scripts;
 pub mod shell_sync;
 pub mod skills;
 pub mod ssh;
+pub mod tabs;
 
 use hints::hints;
 pub(crate) use paths::{
@@ -262,6 +263,7 @@ impl Sawit {
             + Self::app_router()
             + Self::browser_router()
             + Self::browser_design_router()
+            + Self::tabs_router()
             + Self::keymap_router()
     }
 

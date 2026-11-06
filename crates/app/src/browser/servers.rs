@@ -1,7 +1,7 @@
 //! The local servers beside the address: a button whose popover lists the dev servers listening
 //! right now (port, what runs them, their project), scanned each time it opens and never while it
-//! is closed. Choosing one opens `http://localhost:<port>/` in this tab (⌘-click too, until the
-//! browser has tabs of its own).
+//! is closed. Choosing one opens `http://localhost:<port>/` in this tab; ⌘-click opens it in a new
+//! tab behind this one.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -49,10 +49,16 @@ impl BrowserView {
         .detach();
     }
 
-    /// Opens a server from the list, and closes it.
-    fn open_server(&mut self, server: &LocalServer, cx: &mut Context<Self>) {
+    /// Opens a server from the list in this tab, or with ⌘ in a new tab behind it, and closes
+    /// the list.
+    fn open_server(&mut self, server: &LocalServer, new_tab: bool, cx: &mut Context<Self>) {
         self.servers = None;
-        self.navigate(&server.url(), cx);
+        if new_tab {
+            cx.emit(super::BrowserEvent::OpenTab { url: server.url() });
+            cx.notify();
+        } else {
+            self.navigate(&server.url(), cx);
+        }
     }
 
     /// The button beside the address, and its list while open.
@@ -121,8 +127,9 @@ fn servers_list(scan: Option<&Scan>, view: &WeakEntity<BrowserView>, cx: &App) -
                                     .child(detail),
                             ),
                     )
-                    .on_click(move |_, _, cx| {
-                        let _ = view.update(cx, |this, cx| this.open_server(&server, cx));
+                    .on_click(move |event: &ClickEvent, _, cx| {
+                        let new_tab = event.modifiers().platform;
+                        let _ = view.update(cx, |this, cx| this.open_server(&server, new_tab, cx));
                     })
                     .into_any_element()
             })

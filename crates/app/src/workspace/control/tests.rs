@@ -7,9 +7,8 @@ use sawit_core::files::FileKind;
 use serde_json::json;
 
 use super::targets::canvas_file_kind;
-use super::{
-    BrowserRoute, agent_project, browser_route, close_answer, script_answer, shell_folder,
-};
+use super::targets::{BrowserRoute, browser_route};
+use super::{agent_project, close_answer, script_answer, shell_folder};
 use super::{agent_shell_folder, split_dir};
 
 /// An agent that opens the GitHub page while the user is signed out is told to wait for

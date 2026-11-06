@@ -330,11 +330,10 @@ impl Workspace {
             .tabs
             .iter()
             .filter(|t| t.group.as_ref() == Some(&root))
-            .filter_map(|t| match &t.item {
-                PaneItem::Other { view, .. } => view.clone().downcast::<BrowserView>().ok(),
-                _ => None,
+            .map(|t| match &t.item {
+                PaneItem::Other { view, .. } => super::close::browser_notes(view, cx),
+                _ => 0,
             })
-            .map(|b| b.read(cx).unsent_notes(cx))
             .sum();
         if unsaved == 0 && notes == 0 {
             self.remove_project(&root, window, cx);

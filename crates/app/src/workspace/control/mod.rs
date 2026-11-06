@@ -12,14 +12,14 @@ use serde_json::{Value, json};
 use super::*;
 
 mod answers;
+mod tabs;
 mod targets;
 #[cfg(test)]
 mod tests;
 
 use answers::{close_answer, panel_name, script_answer};
 use targets::{
-    BrowserRoute, agent_project, agent_shell_folder, browser_route, mermaid_op, shell_folder,
-    sidebar_tab, split_dir,
+    agent_project, agent_shell_folder, mermaid_op, shell_folder, sidebar_tab, split_dir,
 };
 
 /// What `app_open_page github` says while signed out: the GitHub work an agent asked for waits on
@@ -332,23 +332,20 @@ impl Workspace {
                 }
                 Ok(board.update(cx, |b, cx| b.agent_op(op, agent, cx)))
             }
-            // The browser of the agent's project ([`agent_project`]). One brought forward comes
-            // with its project, as on a click on its tab; one used in the background changes
-            // nothing on screen.
-            Command::Browser { op } => {
+            // The browser of the agent's project ([`agent_project`]), or one of its tabs.
+            Command::Browser { op, tab } => {
                 let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
-                let open = self.browser_tab(root.as_deref()).map(|(_, b)| b);
-                let shown = open.is_some() && open == self.active_browser();
-                let browser = match (browser_route(open.is_some(), shown, op.shows_tab()), open) {
-                    (BrowserRoute::Use, Some(browser)) => browser,
-                    (BrowserRoute::Closed, _) => {
-                        return Err(sawit_core::browser::NOT_OPEN.into());
-                    }
-                    _ => self.open_browser_of(root, None, window, cx),
-                };
-                Ok(Answer::Later(
-                    browser.update(cx, |b, cx| b.apply_as(op, agent, cx)),
-                ))
+                self.agent_browser_op(root, op, tab, agent, window, cx)
+            }
+            Command::BrowserTabs {
+                action,
+                tab,
+                url,
+                show,
+            } => {
+                let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
+                self.agent_browser_tabs(root, &action, tab, url, show, window, cx)
+                    .map(Answer::Now)
             }
             // ⌘D or ⇧⌘D for an agent: the new pane shows as terminal_run's terminal does, and the
             // keyboard stays where the user has it. The dock shows first, as for terminal_run: one

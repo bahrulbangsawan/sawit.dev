@@ -31,25 +31,7 @@ impl BrowserView {
             cx.defer_in(window, |_, _, cx| cx.notify());
         }
         if self.engine.is_none() {
-            match self.build(bounds, window) {
-                Ok(engine) => {
-                    // The page shares the keyboard with this view only ([`engine::keyboard`]).
-                    engine.set_keyboard_host(Some(&self.focus));
-                    self.engine = Some(Rc::new(engine));
-                    self.bounds = Some(bounds);
-                    self.apply_layout();
-                    for (op, reply) in std::mem::take(&mut self.queued) {
-                        self.run(op, reply, cx);
-                    }
-                }
-                Err(e) => {
-                    self.error = Some(e.clone().into());
-                    for (_, reply) in self.queued.drain(..) {
-                        let _ = reply.send(Err(format!("The browser couldn't start: {e}")));
-                    }
-                }
-            }
-            self.bounds = Some(bounds);
+            self.start(bounds, window, cx);
             return;
         }
         if self.bounds != Some(bounds) {
@@ -58,11 +40,52 @@ impl BrowserView {
         }
     }
 
+    /// Builds the web view at `bounds`: on the first layout, after the tab gave its view up
+    /// ([`super::suspend`]), or off screen for an agent's op on a tab not on show. It has the
+    /// keyboard's host only while on show; the ops sent meanwhile run once it is up.
+    pub(super) fn start(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.build(bounds, window) {
+            Ok(engine) => {
+                // The page shares the keyboard with this view only ([`engine::keyboard`]), and
+                // only once the tab is on show: a tab woken off screen never takes it.
+                if self.page_shown() {
+                    engine.set_keyboard_host(Some(&self.focus));
+                    self.suspended.keyboard_host = true;
+                }
+                if let Some(history) = self.suspended.history.take() {
+                    engine.restore_history(&history);
+                }
+                self.engine = Some(Rc::new(engine));
+                self.bounds = Some(bounds);
+                self.apply_layout();
+                for (op, reply) in std::mem::take(&mut self.queued) {
+                    self.run(op, reply, cx);
+                }
+            }
+            Err(e) => {
+                self.error = Some(e.clone().into());
+                for (_, reply) in self.queued.drain(..) {
+                    let _ = reply.send(Err(format!("The browser couldn't start: {e}")));
+                }
+            }
+        }
+        self.bounds = Some(bounds);
+    }
+
     fn build(&self, bounds: Bounds<Pixels>, window: &Window) -> Result<Engine, String> {
         let to_view = self.to_view.clone();
         Engine::build(
             EngineSpec {
-                url: self.url.clone(),
+                // A page coming back with its history goes to it from a blank start.
+                url: match self.suspended.history {
+                    Some(_) => "about:blank".into(),
+                    None => self.url.clone(),
+                },
                 init_script: page_script(&self.token),
                 data_store: self
                     .project
@@ -178,6 +201,14 @@ impl BrowserView {
         if !visible {
             self.menu_open = false;
             self.forget_cover();
+        }
+        // A page built off screen gets the keyboard's host once its tab is on show.
+        if visible
+            && !self.suspended.keyboard_host
+            && let Some(engine) = &self.engine
+        {
+            engine.set_keyboard_host(Some(&self.focus));
+            self.suspended.keyboard_host = true;
         }
         self.show_page(was);
     }

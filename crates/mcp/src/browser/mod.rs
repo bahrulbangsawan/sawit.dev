@@ -25,7 +25,7 @@ mod tests;
 mod tests_mesurer;
 
 pub use args::{
-    AnnotationsArgs, ClickArgs, ConsoleArgs, ElementArgs, EvaluateArgs, GuideArg, KeyArgs,
+    AnnotationsArgs, At, ClickArgs, ConsoleArgs, ElementArgs, EvaluateArgs, GuideArg, KeyArgs,
     LayoutGuideArg, MesurerArgs, NavigateArgs, NetworkArgs, PageArgs, ResizeArgs, ScreenshotArgs,
     ScrollArgs, SelectArgs, TypeArgs, WaitArgs,
 };
@@ -48,13 +48,13 @@ impl Sawit {
         let op = match tri!(navigate_op(a.url, a.action.as_deref())) {
             Some(op) => op,
             None => BrowserOp::Navigate {
-                url: tri!(self.dev_server_url(&a.project).await),
+                url: tri!(self.dev_server_url(&a.at.project).await),
             },
         };
-        tri!(self.browser(&a.project, op).await);
+        tri!(self.browser(&a.at, op).await);
         tokio::time::sleep(SETTLE).await;
         let limit = timeout(a.timeout_ms, DEFAULT_LOAD_TIMEOUT);
-        let mut state = tri!(self.wait_loaded(&a.project, limit).await);
+        let mut state = tri!(self.wait_loaded(&a.at, limit).await);
         if state["timed_out"] == true {
             state["note"] = "Still loading; browser_snapshot works on what has arrived.".into();
         }
@@ -65,7 +65,7 @@ impl Sawit {
         description = "Read the browser tab's page as an accessibility outline: roles, names, values and states, each element with a ref (e12) for browser_click, browser_type and the others. Refs reset on every snapshot and navigation"
     )]
     async fn browser_snapshot(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
-        let v = tri!(self.browser(&a.project, BrowserOp::Snapshot).await);
+        let v = tri!(self.browser(&a.at, BrowserOp::Snapshot).await);
         let mut out = format!(
             "Page: {}\nURL: {}\n",
             v["title"].as_str().unwrap_or_default(),
@@ -94,8 +94,8 @@ impl Sawit {
             double: a.double,
             button: a.button,
         };
-        let v = tri!(self.browser(&a.project, op).await);
-        self.after_action(&a.project, v).await
+        let v = tri!(self.browser(&a.at, op).await);
+        self.after_action(&a.at, v).await
     }
 
     #[tool(
@@ -105,7 +105,7 @@ impl Sawit {
         let op = BrowserOp::Hover {
             target: tri!(required(target(a.reference, a.selector))),
         };
-        let v = tri!(self.browser(&a.project, op).await);
+        let v = tri!(self.browser(&a.at, op).await);
         ok(pretty(&v))
     }
 
@@ -120,9 +120,9 @@ impl Sawit {
             clear: a.clear,
             submit,
         };
-        let v = tri!(self.browser(&a.project, op).await);
+        let v = tri!(self.browser(&a.at, op).await);
         if submit {
-            return self.after_action(&a.project, v).await;
+            return self.after_action(&a.at, v).await;
         }
         ok(pretty(&v))
     }
@@ -131,11 +131,8 @@ impl Sawit {
         description = "Press a key in the browser tab's focused element: Enter, Tab, Escape, Backspace, arrows, PageDown, Meta+a, one character. Two keys go to Sawit instead, as the user's do: Meta+Shift+. opens or closes the Annotate panel (with Annotate open and its picker off, it picks again; the answer has the panel and what the picker picks), and Escape while Sawit's picker is on (Annotate, or Design's inspect) turns it off"
     )]
     async fn browser_press_key(&self, Parameters(a): Parameters<KeyArgs>) -> CallToolResult {
-        let v = tri!(
-            self.browser(&a.project, BrowserOp::Press { key: a.key })
-                .await
-        );
-        self.after_action(&a.project, v).await
+        let v = tri!(self.browser(&a.at, BrowserOp::Press { key: a.key }).await);
+        self.after_action(&a.at, v).await
     }
 
     #[tool(description = "Pick options in a <select> in the browser tab by value or visible label")]
@@ -147,7 +144,7 @@ impl Sawit {
             target: tri!(required(target(a.reference, a.selector))),
             values: a.values,
         };
-        let v = tri!(self.browser(&a.project, op).await);
+        let v = tri!(self.browser(&a.at, op).await);
         ok(pretty(&v))
     }
 
@@ -163,7 +160,7 @@ impl Sawit {
             dy
         };
         let v = tri!(
-            self.browser(&a.project, BrowserOp::Scroll { target, dx, dy })
+            self.browser(&a.at, BrowserOp::Scroll { target, dx, dy })
                 .await
         );
         ok(pretty(&v))
@@ -195,7 +192,7 @@ impl Sawit {
                 text: text.clone(),
                 selector: a.selector.clone(),
             };
-            match self.browser(&a.project, op).await {
+            match self.browser(&a.at, op).await {
                 Ok(v) if v["found"].as_bool() == Some(!gone) => {
                     return ok(format!(
                         "Done after {} ms: {}",
@@ -241,7 +238,7 @@ impl Sawit {
             target: target(a.reference, a.selector),
             mesurer: tri!(screenshot_mesurer(a.mesurer.as_deref())),
         };
-        let v = tri!(self.browser(&a.project, op).await);
+        let v = tri!(self.browser(&a.at, op).await);
         let encoded = v["png_base64"].as_str().unwrap_or_default().to_string();
         let bytes = tri!(base64_decode(&encoded, "The browser"));
         if bytes.is_empty() {
@@ -276,7 +273,7 @@ impl Sawit {
             limit: a.limit,
             clear: a.clear,
         };
-        let v = tri!(self.browser(&a.project, op).await);
+        let v = tri!(self.browser(&a.at, op).await);
         ok(pretty(&v))
     }
 
@@ -290,7 +287,7 @@ impl Sawit {
             limit: a.limit,
             clear: a.clear,
         };
-        let v = tri!(self.browser(&a.project, op).await);
+        let v = tri!(self.browser(&a.at, op).await);
         ok(pretty(&v))
     }
 
@@ -303,7 +300,7 @@ impl Sawit {
         }
         let v = tri!(
             self.browser(
-                &a.project,
+                &a.at,
                 BrowserOp::Resize {
                     device: a.device,
                     width: a.width,
@@ -323,7 +320,7 @@ impl Sawit {
         Parameters(a): Parameters<AnnotationsArgs>,
     ) -> CallToolResult {
         let v = tri!(
-            self.browser(&a.project, BrowserOp::Annotations { clear: a.clear })
+            self.browser(&a.at, BrowserOp::Annotations { clear: a.clear })
                 .await
         );
         match v["markdown"].as_str() {
@@ -347,7 +344,7 @@ impl Sawit {
     )]
     async fn browser_mesurer(&self, Parameters(a): Parameters<MesurerArgs>) -> CallToolResult {
         let op = tri!(mesurer_op(&a));
-        let v = tri!(self.browser(&a.project, op).await);
+        let v = tri!(self.browser(&a.at, op).await);
         ok(pretty(&v))
     }
 
@@ -356,7 +353,7 @@ impl Sawit {
     )]
     async fn browser_evaluate(&self, Parameters(a): Parameters<EvaluateArgs>) -> CallToolResult {
         let v = tri!(
-            self.browser(&a.project, BrowserOp::Evaluate { script: a.script })
+            self.browser(&a.at, BrowserOp::Evaluate { script: a.script })
                 .await
         );
         let Some(id) = v["pending"].as_u64() else {
@@ -364,7 +361,7 @@ impl Sawit {
         };
         let deadline = Instant::now() + timeout(a.timeout_ms, Duration::from_secs(10));
         loop {
-            let v = tri!(self.browser(&a.project, BrowserOp::Settled { id }).await);
+            let v = tri!(self.browser(&a.at, BrowserOp::Settled { id }).await);
             if v["done"] == true {
                 return ok(pretty(&v["value"]));
             }

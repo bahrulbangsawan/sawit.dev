@@ -279,6 +279,7 @@ fn browser_ops_round_trip() {
             op: crate::browser::BrowserOp::Navigate {
                 url: "http://localhost:5173".into(),
             },
+            tab: None,
         },
     };
     let bytes = encode(&request);

@@ -53,9 +53,12 @@ impl Workspace {
             "tabs": tabs,
             "terminals": self.terminal.read(cx).describe(cx),
             "canvas_open": self.boards.iter().any(|b| b.upgrade().is_some()),
-            "browser": self
-                .browser_tab(self.root(cx).as_deref())
-                .map(|(_, b)| b.read(cx).describe()),
+            "browser": self.browser_tabs_of(self.root(cx).as_deref()).map(|(_, tabs)| {
+                let tabs = tabs.read(cx);
+                let mut state = tabs.active_view().read(cx).describe();
+                state["tabs"] = tabs.describe(cx);
+                state
+            }),
             "agents": self.describe_agents(cx),
         })
     }
@@ -70,9 +73,11 @@ impl Workspace {
             .collect();
         for tab in &self.tabs {
             if let PaneItem::Other { view, .. } = &tab.item
-                && let Ok(browser) = view.clone().downcast::<BrowserView>()
+                && let Ok(tabs) = view.clone().downcast::<BrowserTabs>()
             {
-                agents.extend(browser.read(cx).describe_agents(cx));
+                for browser in tabs.read(cx).views() {
+                    agents.extend(browser.read(cx).describe_agents(cx));
+                }
             }
         }
         agents

@@ -17,7 +17,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::board::{BoardView, ToggleCanvasMaximize};
-use crate::browser::BrowserView;
+use crate::browser::{BrowserTabs, BrowserView, TabsEvent};
 use crate::changelog_page::ChangelogPage;
 use crate::cli::{CliStatus, cli_status};
 use crate::db::{DatabasePanel, DbEvent, DbStore, DiagramView, SqlView, TableView};
@@ -291,7 +291,7 @@ pub struct Workspace {
     split_v: Entity<gpui_kit::component::resizable::ResizableState>,
     /// The browser tabs' views (owned by their tabs): one per project at most, and one for
     /// no project.
-    browsers: Vec<WeakEntity<BrowserView>>,
+    browsers: Vec<WeakEntity<BrowserTabs>>,
     /// Shown instead of the panels until something is opened.
     welcome: Option<Entity<Welcome>>,
     tab_scroll: ScrollHandle,

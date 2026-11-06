@@ -149,6 +149,7 @@ const DESTRUCTIVE: &[&str] = &[
     "browser_export_design",
     "keymap_bind",
     "keymap_unbind",
+    "browser_tabs",
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on
@@ -237,6 +238,7 @@ const OPEN_WORLD: &[&str] = &[
     "browser_design",
     "browser_mesurer",
     "browser_export_design",
+    "browser_tabs",
 ];
 
 /// MCP's hints for the tool `name`, from [`READ_ONLY`], [`DESTRUCTIVE`], [`ADDS`] and

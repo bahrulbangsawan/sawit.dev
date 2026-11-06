@@ -31,7 +31,7 @@ impl Workspace {
     pub(super) fn open_local_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let root = self.root(cx);
         let browser_port = self
-            .browser_tab(root.as_deref())
+            .browser_tab(root.as_deref(), cx)
             .and_then(|(_, b)| {
                 let url = b.read(cx).describe()["url"].as_str()?.to_string();
                 crate::local_explorer::origin(&url)

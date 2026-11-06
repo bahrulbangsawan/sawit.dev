@@ -36,14 +36,16 @@ pub struct InspectArgs {
     pub selector: Option<String>,
     #[schemars(description = "json (default), css, tailwind or html")]
     pub format: Option<String>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: crate::browser::At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DesignArgs {
     #[schemars(description = "summary (default), colors, fonts, assets, tokens or variables")]
     pub part: Option<String>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: crate::browser::At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -56,7 +58,8 @@ pub struct ExportDesignArgs {
     )]
     #[serde(default)]
     pub replace: bool,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: crate::browser::At,
 }
 
 /// The op for `browser_inspect`, or what's wrong with the arguments.
@@ -128,7 +131,7 @@ impl Sawit {
     )]
     async fn browser_inspect(&self, Parameters(a): Parameters<InspectArgs>) -> CallToolResult {
         let op = tri!(inspect_op(a.reference, a.selector, a.format));
-        let v = tri!(self.browser(&a.project, op).await);
+        let v = tri!(self.browser(&a.at, op).await);
         let text = match (
             v["css"].as_str(),
             v["tailwind"].as_str(),
@@ -147,7 +150,7 @@ impl Sawit {
     )]
     async fn browser_design(&self, Parameters(a): Parameters<DesignArgs>) -> CallToolResult {
         let v = tri!(
-            self.browser(&a.project, BrowserOp::Design { part: a.part })
+            self.browser(&a.at, BrowserOp::Design { part: a.part })
                 .await
         );
         ok(clip_out(pretty(&v)))
@@ -162,7 +165,7 @@ impl Sawit {
     ) -> CallToolResult {
         tri!(
             self.browser(
-                &a.project,
+                &a.at,
                 BrowserOp::ExportDesign {
                     include_videos: a.include_videos,
                     replace: a.replace,
@@ -173,7 +176,7 @@ impl Sawit {
         let deadline = Instant::now() + EXPORT_LIMIT;
         loop {
             tokio::time::sleep(EXPORT_POLL).await;
-            let v = tri!(self.browser(&a.project, BrowserOp::ExportStatus).await);
+            let v = tri!(self.browser(&a.at, BrowserOp::ExportStatus).await);
             if v["done"] == true {
                 return match export_report(&v) {
                     Ok(t) => ok(t),

@@ -72,12 +72,9 @@ pub(super) fn waits_out(error: &str) -> bool {
 }
 
 impl Sawit {
-    pub(crate) async fn browser(
-        &self,
-        project: &Option<String>,
-        op: BrowserOp,
-    ) -> Result<Value, String> {
-        self.app_call(project.clone(), Command::Browser { op })
+    pub(crate) async fn browser(&self, at: &super::At, op: BrowserOp) -> Result<Value, String> {
+        let tab = at.tab.clone().filter(|t| !t.trim().is_empty());
+        self.app_call(at.project.clone(), Command::Browser { op, tab })
             .await
     }
 
@@ -85,7 +82,7 @@ impl Sawit {
     /// with `"timed_out": true` when it was still loading.
     pub(super) async fn wait_loaded(
         &self,
-        project: &Option<String>,
+        project: &super::At,
         limit: Duration,
     ) -> Result<Value, String> {
         let deadline = Instant::now() + limit;
@@ -107,7 +104,7 @@ impl Sawit {
     /// then waits for it, so the answer shows where the page ended up.
     pub(super) async fn after_action(
         &self,
-        project: &Option<String>,
+        project: &super::At,
         mut result: Value,
     ) -> CallToolResult {
         tokio::time::sleep(SETTLE).await;

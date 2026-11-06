@@ -176,6 +176,7 @@ fn browse_opens_the_page_in_the_folders_browser() {
     let cwd = dir.path().join("shop");
     let navigate = |url: &str| Command::Browser {
         op: BrowserOp::Navigate { url: url.into() },
+        tab: None,
     };
     let sent = |seen: &std::sync::Mutex<Vec<Request>>| -> Vec<(Option<PathBuf>, Command)> {
         let seen = seen.lock().unwrap();

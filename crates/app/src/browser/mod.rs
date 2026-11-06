@@ -18,6 +18,7 @@ mod device;
 pub(crate) mod engine;
 mod events;
 mod mesurer;
+mod modes;
 mod navigation;
 mod notes;
 mod ops;
@@ -27,6 +28,8 @@ mod presence;
 mod progress;
 mod servers;
 mod shots;
+mod suspend;
+pub mod tabs;
 mod toolbar;
 mod viewport;
 
@@ -54,8 +57,11 @@ pub use annotate::notes_lost;
 use annotate::{AnnotateEvent, AnnotatePanel};
 use design::{DesignEvent, DesignPanel};
 use engine::{Engine, EngineEvent};
+pub use modes::{Panel, PickMode};
 use navigation::ExternalGate;
+pub use navigation::address_url;
 use shots::ShotGate;
+pub use tabs::{BrowserTabs, TabsEvent};
 use viewport::{CAPTION_BAND, caption};
 
 use crate::rt;
@@ -100,40 +106,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-c", NoAction, Some("Browser")),
     ]);
     cx.bind_keys(BrowserView::mesurer_bindings());
-}
-
-/// The side panel's modes; one at a time.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Panel {
-    Annotate,
-    Design,
-}
-
-impl Panel {
-    fn as_str(self) -> &'static str {
-        match self {
-            Panel::Annotate => "annotate",
-            Panel::Design => "design",
-        }
-    }
-}
-
-/// What a click on the page does.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PickMode {
-    Off,
-    Annotate,
-    Inspect,
-}
-
-impl PickMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            PickMode::Off => "off",
-            PickMode::Annotate => "annotate",
-            PickMode::Inspect => "inspect",
-        }
-    }
+    tabs::init(cx);
 }
 
 const TOOLBAR_HEIGHT: f32 = 36.;
@@ -160,6 +133,8 @@ pub enum BrowserEvent {
     },
     /// Start this agent in a new terminal with the notes as its first message.
     OpenAgent { markdown: String, kind: AgentKind },
+    /// Open `url` in a new tab behind this one (a ⌘-click on a local server); the tabs hear it.
+    OpenTab { url: String },
 }
 
 impl EventEmitter<BrowserEvent> for BrowserView {}
@@ -215,6 +190,8 @@ pub struct BrowserView {
     to_view: UnboundedSender<FromPage>,
     /// The design scan (cached per page), inspect and export.
     design: design::flow::DesignFlow,
+    /// The page given up off screen, and what brings it back ([`suspend`]).
+    suspended: suspend::Suspended,
     /// Ops sent before the webview exists, in order.
     queued: Vec<(BrowserOp, oneshot::Sender<OpResult>)>,
     /// Links to other apps the page opened: asked about one at a time.
@@ -349,6 +326,7 @@ impl BrowserView {
             to_view,
             design: Default::default(),
             queued: Vec::new(),
+            suspended: Default::default(),
             external: ExternalGate::default(),
             agents: presence::Agents::new(crate::agents::shown(cx)),
             mesurer: Default::default(),

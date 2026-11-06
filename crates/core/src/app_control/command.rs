@@ -239,8 +239,26 @@ pub enum Command {
     /// Drives the project's browser tab; see `crate::browser`. Only the ops that show a page
     /// ([`BrowserOp::shows_tab`](crate::browser::BrowserOp::shows_tab): navigate, screenshot,
     /// resize) open it; the others answer that it isn't open ([`crate::browser::NOT_OPEN`]).
+    ///
+    /// With `tab` (an id, a title or an address, [`crate::browser::find_tab`]) the op goes to that
+    /// tab of the browser, woken off screen if need be: the user's tab on show and the keyboard
+    /// stay as they are.
     Browser {
         op: crate::browser::BrowserOp,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab: Option<String>,
+    },
+    /// The tabs of the project's browser: `list`, `open` (a new tab at `url`, behind the one on
+    /// show unless `show`), `close` or `activate` the tab named `tab` (`show` brings the browser
+    /// forward too).
+    BrowserTabs {
+        action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default)]
+        show: bool,
     },
     Reload {
         store: Store,

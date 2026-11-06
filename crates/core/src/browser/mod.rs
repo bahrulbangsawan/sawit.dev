@@ -19,6 +19,7 @@ mod page;
 mod project;
 mod redact;
 pub mod routes;
+mod tabs;
 mod viewport;
 
 #[cfg(test)]
@@ -39,4 +40,5 @@ pub use project::{
 };
 pub use redact::REDACTED;
 pub(crate) use redact::redact_url;
+pub use tabs::{SavedTab, SavedTabs, TABS_FILE, find_tab, load_tabs, save_tabs, tabs_file};
 pub use viewport::{DEVICES, Device, Fit, ViewportMode, device_by_name, fit, resize_mode};

@@ -65,7 +65,7 @@ pub fn browse(
         }
     };
     let op = BrowserOp::Navigate { url: url.clone() };
-    if let Err(e) = ask(Command::Browser { op }) {
+    if let Err(e) = ask(Command::Browser { op, tab: None }) {
         eprintln!("{} {url} tidak bisa diintip: {e}", ink.red("🔥"));
         return 1;
     }

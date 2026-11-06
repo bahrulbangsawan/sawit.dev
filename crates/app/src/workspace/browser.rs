@@ -1,4 +1,4 @@
-//! Browser tabs, one per project: opening one, sending its annotation notes to an agent, and keeping
+//! Browser tabs, one per project (with tabs of its own inside, [`BrowserTabs`]): opening one, sending its annotation notes to an agent, and keeping
 //! each native webview in step with what is on screen.
 
 use super::*;
@@ -33,40 +33,35 @@ impl Workspace {
         if !self.layout.center {
             self.layout.toggle(Area::Center);
         }
-        let browser = match self.browser_tab(root.as_deref()) {
-            Some((ix, browser)) => {
+        let browser = match self.browser_tabs_of(root.as_deref()) {
+            Some((ix, tabs)) => {
                 self.activate_tab(ix, cx);
+                let browser = tabs.read(cx).active_view();
                 browser.update(cx, |b, cx| b.show(url.as_deref(), cx));
                 browser
             }
             None => {
-                let view = cx.new(|cx| BrowserView::new(root.clone(), url, window, cx));
+                let tabs = cx.new(|cx| BrowserTabs::new(root.clone(), url, window, cx));
                 self.browsers.retain(|b| b.upgrade().is_some());
-                self.browsers.push(view.downgrade());
-                cx.subscribe_in(
-                    &view,
-                    window,
-                    |this, browser, event, window, cx| match event {
-                        crate::browser::BrowserEvent::SendToAgent { markdown, agent } => {
-                            this.send_to_agent(browser, markdown, agent, window, cx)
+                self.browsers.push(tabs.downgrade());
+                for view in tabs.read(cx).views() {
+                    self.wire_browser(&view, window, cx);
+                }
+                cx.subscribe_in(&tabs, window, |this, tabs, event, window, cx| match event {
+                    TabsEvent::Added(view) => this.wire_browser(view, window, cx),
+                    TabsEvent::Emptied => {
+                        if let Some(ix) = this.tabs.iter().position(|t| {
+                            matches!(&t.item, PaneItem::Other { view, .. }
+                                if view.clone().downcast::<BrowserTabs>().ok().as_ref() == Some(tabs))
+                        }) {
+                            this.remove_tabs(&[ix], cx);
                         }
-                        crate::browser::BrowserEvent::OpenAgent { markdown, kind } => {
-                            this.open_agent(browser, markdown, *kind, window, cx)
-                        }
-                    },
-                )
+                    }
+                })
                 .detach();
-                let terminal = self.terminal.downgrade();
-                let source: crate::browser::AgentSource = Rc::new(move |cx: &App| {
-                    terminal
-                        .upgrade()
-                        .map(|t| t.read(cx).local_agents(cx))
-                        .unwrap_or_default()
-                });
-                view.update(cx, |b, cx| b.set_agent_source(source, cx));
                 self.push_tab(
                     PaneItem::Other {
-                        view: view.clone().into(),
+                        view: tabs.clone().into(),
                         key: browser_key(root.as_deref()),
                         title: crate::browser::TITLE.into(),
                         icon: crate::browser::ICON,
@@ -75,31 +70,77 @@ impl Workspace {
                     root,
                     cx,
                 );
-                view
+                tabs.read(cx).active_view()
             }
         };
         cx.notify();
         browser
     }
 
-    /// The browser tab of the project at `root` (`None`: the one for no project), and its view.
-    pub(super) fn browser_tab(&self, root: Option<&Path>) -> Option<(usize, Entity<BrowserView>)> {
+    /// Hears a browser tab's notes being sent, and tells it which agents run.
+    fn wire_browser(
+        &mut self,
+        view: &Entity<BrowserView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.subscribe_in(
+            view,
+            window,
+            |this, browser, event, window, cx| match event {
+                crate::browser::BrowserEvent::SendToAgent { markdown, agent } => {
+                    this.send_to_agent(browser, markdown, agent, window, cx)
+                }
+                crate::browser::BrowserEvent::OpenAgent { markdown, kind } => {
+                    this.open_agent(browser, markdown, *kind, window, cx)
+                }
+                // The browser's tabs open it ([`BrowserTabs`]).
+                crate::browser::BrowserEvent::OpenTab { .. } => {}
+            },
+        )
+        .detach();
+        let terminal = self.terminal.downgrade();
+        let source: crate::browser::AgentSource = Rc::new(move |cx: &App| {
+            terminal
+                .upgrade()
+                .map(|t| t.read(cx).local_agents(cx))
+                .unwrap_or_default()
+        });
+        view.update(cx, |b, cx| b.set_agent_source(source, cx));
+    }
+
+    /// The browser tab of the project at `root` (`None`: the one for no project), and the tab on
+    /// show in it.
+    pub(super) fn browser_tab(
+        &self,
+        root: Option<&Path>,
+        cx: &App,
+    ) -> Option<(usize, Entity<BrowserView>)> {
+        self.browser_tabs_of(root)
+            .map(|(ix, tabs)| (ix, tabs.read(cx).active_view()))
+    }
+
+    /// The browser tab of the project at `root`, and its tabs.
+    pub(super) fn browser_tabs_of(
+        &self,
+        root: Option<&Path>,
+    ) -> Option<(usize, Entity<BrowserTabs>)> {
         let key = browser_key(root);
         self.tabs
             .iter()
             .enumerate()
             .find_map(|(ix, t)| match &t.item {
                 PaneItem::Other { key: k, view, .. } if *k == key => {
-                    view.clone().downcast::<BrowserView>().ok().map(|b| (ix, b))
+                    view.clone().downcast::<BrowserTabs>().ok().map(|b| (ix, b))
                 }
                 _ => None,
             })
     }
 
-    /// The browser whose tab is the active one.
-    pub(super) fn active_browser(&self) -> Option<Entity<BrowserView>> {
+    /// The browser whose tab is the active one, and its tabs.
+    pub(super) fn active_browser_tabs(&self) -> Option<Entity<BrowserTabs>> {
         match self.tabs.get(self.active).map(|t| &t.item) {
-            Some(PaneItem::Other { view, .. }) => view.clone().downcast::<BrowserView>().ok(),
+            Some(PaneItem::Other { view, .. }) => view.clone().downcast::<BrowserTabs>().ok(),
             _ => None,
         }
     }
@@ -175,21 +216,21 @@ impl Workspace {
         .detach();
     }
 
-    /// Keeps the browsers' native webviews in step with what is on screen:
-    /// they draw above GPUI, so each is hidden unless its tab is showing.
+    /// Keeps the browsers' native webviews in step with what is on screen: they draw above GPUI,
+    /// so each is hidden unless its browser's tab is showing and it is that browser's tab on show.
     pub(super) fn sync_browser(&mut self, cx: &mut Context<Self>) {
         self.browsers.retain(|b| b.upgrade().is_some());
         let shown = (self.welcome.is_none() && self.layout.center)
-            .then(|| self.active_browser())
+            .then(|| self.active_browser_tabs())
             .flatten();
-        let browsers: Vec<Entity<BrowserView>> =
+        let browsers: Vec<Entity<BrowserTabs>> =
             self.browsers.iter().filter_map(|b| b.upgrade()).collect();
         // Hidden first: a webview that hides hands the keyboard back.
         for browser in browsers.iter().filter(|b| shown.as_ref() != Some(*b)) {
-            browser.update(cx, |b, _| b.set_visible(false));
+            browser.update(cx, |b, cx| b.set_on_show(false, cx));
         }
         if let Some(browser) = shown {
-            browser.update(cx, |b, _| b.set_visible(true));
+            browser.update(cx, |b, cx| b.set_on_show(true, cx));
         }
     }
 }

@@ -15,9 +15,7 @@ impl Workspace {
                     // Annotation notes not yet copied or sent; a Dev Tools tab that
                     // installs something counts too: closing it stops that.
                     PaneItem::Other { view, .. } => {
-                        view.clone()
-                            .downcast::<BrowserView>()
-                            .is_ok_and(|b| b.read(cx).unsent_notes(cx) > 0)
+                        browser_notes(view, cx) > 0
                             || tools_work(&t.item, cx).is_some()
                             || skills_work(&t.item, cx).is_some()
                             || new_project::new_project_work(&t.item, cx).is_some()
@@ -50,8 +48,8 @@ impl Workspace {
         }
         if let [ix] = closing[..]
             && let Some(PaneItem::Other { view, .. }) = self.tabs.get(ix).map(|t| t.item.clone())
-            && let Ok(browser) = view.downcast::<BrowserView>()
-            && browser.read(cx).unsent_notes(cx) > 0
+            && let Ok(browser) = view.downcast::<BrowserTabs>()
+            && browser_notes(&browser.clone().into(), cx) > 0
         {
             self.confirm_close_browser(browser, window, cx);
             return Some("the browser has annotations not yet copied or sent");
@@ -155,11 +153,11 @@ impl Workspace {
     /// live only in the tab.
     fn confirm_close_browser(
         &mut self,
-        browser: Entity<BrowserView>,
+        browser: Entity<BrowserTabs>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let notes = browser.read(cx).unsent_notes(cx);
+        let notes = browser_notes(&browser.clone().into(), cx);
         let answer = window.prompt(
             PromptLevel::Warning,
             "Close the browser with its annotations?",
@@ -172,7 +170,7 @@ impl Workspace {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(ix) = this.tabs.iter().position(|t| {
                         matches!(&t.item, PaneItem::Other { view, .. }
-                            if view.clone().downcast::<BrowserView>().ok().as_ref() == Some(&browser))
+                            if view.clone().downcast::<BrowserTabs>().ok().as_ref() == Some(&browser))
                     }) {
                         this.remove_tabs(&[ix], cx);
                     }
@@ -181,4 +179,18 @@ impl Workspace {
         })
         .detach();
     }
+}
+
+/// The annotation notes not yet copied or sent in a browser's tabs, if `view` is a browser.
+pub(super) fn browser_notes(view: &AnyView, cx: &App) -> usize {
+    view.clone()
+        .downcast::<BrowserTabs>()
+        .map(|tabs| {
+            tabs.read(cx)
+                .views()
+                .iter()
+                .map(|b| b.read(cx).unsent_notes(cx))
+                .sum()
+        })
+        .unwrap_or(0)
 }

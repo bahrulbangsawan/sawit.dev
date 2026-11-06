@@ -12,6 +12,7 @@ mod ops;
 mod picking;
 mod progress;
 mod shots;
+mod tabs;
 mod viewport;
 
 use super::navigation::new_token;

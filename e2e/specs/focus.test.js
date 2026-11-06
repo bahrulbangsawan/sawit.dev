@@ -36,11 +36,13 @@ async function openSite(ctx) {
   );
 }
 
-/** Opens a terminal tab as the user does (⌘T) and waits for its prompt. */
+/**
+ * Opens a terminal tab as the user does, with the terminal dock's New Terminal (⌘T is the
+ * browser's New Tab while the browser has the keyboard), and waits for its prompt.
+ */
 async function userTerminal(ctx) {
   const before = (await windowState(ctx)).terminals.length;
-  // pressInPage: the page may have the keyboard, which agent-desktop cannot confirm as the window's.
-  await ctx.win.pressInPage("cmd+t");
+  await ctx.win.click({ role: "button", name: "New Terminal" });
   await until(async () => (await windowState(ctx)).terminals.length === before + 1, { what: "⌘T's terminal" });
   await until(async () => /e2e%\s*$/.test(await terminalText(ctx)), { timeoutMs: 20_000, what: "its prompt" });
   return (await windowState(ctx)).terminals.find((t) => t.active).index;

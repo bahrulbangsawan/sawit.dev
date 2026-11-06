@@ -2,6 +2,17 @@
 
 use rmcp::schemars;
 
+/// Which browser an op goes to: the project's (by its folder; default the one the agent works
+/// in), and one of its tabs.
+#[derive(Debug, Default, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct At {
+    pub project: Option<String>,
+    #[schemars(
+        description = "A browser tab, by id, title or address (browser_tabs lists them); default the tab on show. A tab not on show is woken off screen: the user's tab and keyboard stay as they are"
+    )]
+    pub tab: Option<String>,
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct NavigateArgs {
     #[schemars(
@@ -12,12 +23,14 @@ pub struct NavigateArgs {
     pub action: Option<String>,
     #[schemars(description = "How long to wait for the page to load, in ms (default 15000)")]
     pub timeout_ms: Option<u64>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PageArgs {
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -30,7 +43,8 @@ pub struct ElementArgs {
     pub reference: Option<String>,
     #[schemars(description = "Or a CSS selector")]
     pub selector: Option<String>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -48,7 +62,8 @@ pub struct ClickArgs {
     pub double: bool,
     #[schemars(description = "left (default) or right")]
     pub button: Option<String>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -68,7 +83,8 @@ pub struct TypeArgs {
     #[schemars(description = "Press Enter afterwards (submits a form)")]
     #[serde(default)]
     pub submit: bool,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -77,7 +93,8 @@ pub struct KeyArgs {
         description = "Enter, Tab, Shift+Tab, Escape, Backspace, Delete, Space, ArrowDown, PageDown, Home, End, Meta+a, or one character. Meta+Shift+. is Sawit's: it opens or closes the Annotate panel"
     )]
     pub key: String,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -92,7 +109,8 @@ pub struct SelectArgs {
     pub selector: Option<String>,
     #[schemars(description = "Option values or visible labels (several for a multiple select)")]
     pub values: Vec<String>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -108,7 +126,8 @@ pub struct ScrollArgs {
     pub dx: Option<f64>,
     #[schemars(description = "Pixels down (negative: up)")]
     pub dy: Option<f64>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -123,7 +142,8 @@ pub struct WaitArgs {
     pub time_ms: Option<u64>,
     #[schemars(description = "Give up after this many ms (default and most 30000)")]
     pub timeout_ms: Option<u64>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -143,7 +163,8 @@ pub struct ScreenshotArgs {
         description = "While Annotate's page tools (mesurer) are on the page: hide (default) leaves them out; drawings keeps their drawings, guides, layout guides and comment pins, without the toolbar and panels; show keeps everything"
     )]
     pub mesurer: Option<String>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, Default, serde::Deserialize, schemars::JsonSchema)]
@@ -177,7 +198,8 @@ pub struct MesurerArgs {
         description = "clear: drawings (arrows, pen strokes, text notes), measurements, guides, layout_guides, comments, or all; on the page on show"
     )]
     pub what: Option<String>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -235,7 +257,8 @@ pub struct ConsoleArgs {
     )]
     #[serde(default)]
     pub clear: bool,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -252,7 +275,8 @@ pub struct NetworkArgs {
     )]
     #[serde(default)]
     pub clear: bool,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -263,7 +287,8 @@ pub struct EvaluateArgs {
     pub script: String,
     #[schemars(description = "How long to await a promise, in ms (default 10000)")]
     pub timeout_ms: Option<u64>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -271,7 +296,8 @@ pub struct AnnotationsArgs {
     #[schemars(description = "Remove the annotations after reading them")]
     #[serde(default)]
     pub clear: bool,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -284,5 +310,6 @@ pub struct ResizeArgs {
     pub width: Option<u32>,
     #[schemars(description = "Viewport height in CSS px (with width)")]
     pub height: Option<u32>,
-    pub project: Option<String>,
+    #[serde(flatten)]
+    pub at: At,
 }

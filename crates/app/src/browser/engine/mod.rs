@@ -6,6 +6,7 @@
 
 mod capture;
 mod color;
+mod history;
 pub mod keyboard;
 pub(crate) mod web_frame;
 mod world;

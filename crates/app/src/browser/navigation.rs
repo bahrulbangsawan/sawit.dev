@@ -104,7 +104,7 @@ impl BrowserView {
 
 /// What the address field (and an agent's navigate) loads for `typed`: its address when
 /// WebKit can read it, else a search for the text (`file://my host/x` isn't a URL).
-pub(super) fn address_url(typed: &str) -> String {
+pub fn address_url(typed: &str) -> String {
     let url = normalize_address(typed);
     if engine::loadable(&url) {
         url
@@ -203,4 +203,15 @@ pub(super) fn new_token() -> String {
         .and_then(|mut f| f.read_exact(&mut bytes))
         .expect("read /dev/urandom");
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+impl BrowserView {
+    /// Puts the keyboard in the address field: the user's new tab.
+    pub fn focus_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(engine) = &self.engine {
+            engine.focus_parent();
+        }
+        let field = self.address.read(cx).focus_handle(cx);
+        field.focus(window, cx);
+    }
 }

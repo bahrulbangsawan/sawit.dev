@@ -11,7 +11,7 @@ fn resize_args_need_a_device_or_size() {
         device: None,
         width: None,
         height: None,
-        project: None,
+        at: Default::default(),
     };
     let e = resize_mode(a.device.as_deref(), a.width, a.height).unwrap_err();
     assert!(!e.is_empty());
@@ -89,7 +89,7 @@ async fn a_screenshot_path_is_read_as_every_tool_reads_one() {
             selector: None,
             output_path: Some(output),
             mesurer: None,
-            project: None,
+            at: Default::default(),
         })
     };
     let said = |result: &CallToolResult| {
@@ -206,7 +206,7 @@ async fn waiting_for_a_page_answers_what_waiting_wont_change_at_once() {
             selector: Some(selector.into()),
             time_ms: None,
             timeout_ms: Some(3_000),
-            project: None,
+            at: Default::default(),
         })
     };
     let said = |result: &CallToolResult| {
@@ -258,7 +258,7 @@ async fn waiting_for_a_page_waits_out_its_load() {
             selector: None,
             time_ms: None,
             timeout_ms: Some(5_000),
-            project: None,
+            at: Default::default(),
         }))
         .await;
     assert_ne!(done.is_error, Some(true));
@@ -282,7 +282,7 @@ async fn a_screenshot_never_replaces_a_canvas_file() {
             selector: None,
             output_path: Some(output.display().to_string()),
             mesurer: None,
-            project: None,
+            at: Default::default(),
         })
     };
     let said = |result: &CallToolResult| {
