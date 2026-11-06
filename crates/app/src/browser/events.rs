@@ -122,6 +122,9 @@ impl BrowserView {
             FromPage::Engine(EngineEvent::Load { started, url }) => {
                 self.loading = started;
                 if started {
+                    self.watch_progress(cx);
+                }
+                if started {
                     self.mesurer_load_started(cx);
                 } else {
                     self.agent_page_loaded();

@@ -71,6 +71,7 @@ impl BrowserView {
             }
             BrowserOp::Reload => {
                 self.loading = true;
+                self.watch_progress(cx);
                 engine.reload();
                 json!({ "reloading": self.current_url() })
             }

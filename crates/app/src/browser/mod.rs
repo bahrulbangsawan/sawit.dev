@@ -24,6 +24,7 @@ mod ops;
 mod panel;
 mod picking;
 mod presence;
+mod progress;
 mod shots;
 mod toolbar;
 mod viewport;
@@ -184,6 +185,8 @@ pub struct BrowserView {
     drawn_url: Option<String>,
     title: String,
     loading: bool,
+    /// How far the page in [`Self::loading`] has come, while it loads ([`progress`]).
+    progress: progress::LoadProgress,
     /// Something was opened (by the user or an agent); the dev server
     /// found at start no longer replaces the blank page.
     navigated: bool,
@@ -325,8 +328,9 @@ impl BrowserView {
             drawn_url: None,
             title: String::new(),
             loading: false,
+            progress: Default::default(),
             navigated,
-            token: new_token(),
+            token: navigation::new_token(),
             logs: Logs::default(),
             last_pick: None,
             viewport: ViewportMode::Responsive,
@@ -355,6 +359,7 @@ impl BrowserView {
             "url": self.current_url(),
             "title": self.title,
             "loading": self.loading,
+            "progress": self.loading.then_some(self.progress.value),
             "viewport": self.viewport_json(),
             "panel": self.panel.map(Panel::as_str),
             "pick_mode": self.pick.as_str(),
@@ -486,13 +491,4 @@ impl Render for BrowserView {
             )
             .into_any_element()
     }
-}
-
-fn new_token() -> String {
-    use std::io::Read as _;
-    let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .expect("read /dev/urandom");
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

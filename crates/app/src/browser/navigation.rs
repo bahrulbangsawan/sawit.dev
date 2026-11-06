@@ -35,6 +35,7 @@ impl BrowserView {
     pub(super) fn load(&mut self, url: String, cx: &mut Context<Self>) {
         self.navigated = true;
         self.loading = true;
+        self.watch_progress(cx);
         self.url = url.clone();
         if let Some(engine) = &self.engine
             && let Err(e) = engine.load_url(&url)
@@ -192,4 +193,14 @@ impl ExternalGate {
     pub(super) fn reset(&mut self) {
         self.refused = false;
     }
+}
+
+/// A random token that signs the page's messages (no page script can read it).
+pub(super) fn new_token() -> String {
+    use std::io::Read as _;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .expect("read /dev/urandom");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

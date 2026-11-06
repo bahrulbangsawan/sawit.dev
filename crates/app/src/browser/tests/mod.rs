@@ -10,10 +10,11 @@ mod navigation;
 mod notes;
 mod ops;
 mod picking;
+mod progress;
 mod shots;
 mod viewport;
 
-use super::new_token;
+use super::navigation::new_token;
 
 #[test]
 fn tokens_are_random_hex() {

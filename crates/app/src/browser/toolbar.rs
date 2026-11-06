@@ -1,5 +1,6 @@
-//! The browser's toolbar: back, forward, reload, the address, Local Explorer while the page's dev
-//! server serves one, the device menu ([`super::device`]), the Annotate and Design toggles, open externally and Web
+//! The browser's toolbar: back, forward, reload (Stop and a progress bar while the page loads,
+//! [`super::progress`]), the address, Local Explorer while the page's dev server serves one,
+//! the device menu ([`super::device`]), the Annotate and Design toggles, open externally and Web
 //! Inspector.
 
 use gpui_kit::assets::IconName as Lucide;
@@ -38,6 +39,7 @@ impl BrowserView {
         h_flex()
             .h(px(TOOLBAR_HEIGHT))
             .flex_none()
+            .relative()
             .px_2()
             .gap_1()
             .border_b_1()
@@ -158,6 +160,7 @@ impl BrowserView {
                         drop(this.apply(BrowserOp::Devtools, cx));
                     })),
             )
+            .children(self.progress_bar(cx))
     }
 }
 

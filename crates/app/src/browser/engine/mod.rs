@@ -230,6 +230,12 @@ impl Engine {
         let _ = self.webview.zoom(scale);
     }
 
+    /// How much of the page WebKit has loaded, 0 to 1 (`estimatedProgress`).
+    pub fn progress(&self) -> f64 {
+        use wry::WebViewExtMacOS as _;
+        unsafe { self.webview.webview().estimatedProgress() }
+    }
+
     pub fn open_devtools(&self) {
         self.webview.open_devtools();
     }
