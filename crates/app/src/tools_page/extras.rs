@@ -1,5 +1,6 @@
 //! What some rows add under their main line: the GitHub CLI's sign-in with Sign In with GitHub
-//! CLI, HyperFrames' Run Doctor and its Chrome, Studio's HeyGen sign-in, and the settings an uninstall kept, with Delete Settings. Also asking before an
+//! CLI, HyperFrames' Run Doctor and its Chrome, Studio's HeyGen sign-in, voxl's permissions and
+//! Start, and the settings an uninstall kept, with Delete Settings. Also asking before an
 //! install pulls in prerequisites the user didn't pick.
 
 use std::collections::HashMap;
@@ -9,11 +10,11 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::*;
-use sawit_core::dev_tools::extras::{self, GhAuth};
+use sawit_core::dev_tools::extras::{self, GhAuth, VOXL_PORT};
 use sawit_core::dev_tools::{TOOLS, Tool, find, kept};
 
 use super::{State, ToolsEvent, ToolsPage};
-use crate::catalog::tilde;
+use crate::catalog::{self, tilde};
 use crate::rt;
 
 impl ToolsPage {
@@ -145,6 +146,25 @@ impl ToolsPage {
         .detach();
     }
 
+    /// Starts voxl in a new terminal: on this Mac only, with a new random password that is in
+    /// the terminal's environment, never in its command line.
+    fn start_voxl(&mut self, cx: &mut Context<Self>) {
+        match extras::voxl_launch(VOXL_PORT) {
+            Ok(launch) => cx.emit(ToolsEvent::Launch {
+                title: "voxl".into(),
+                command: launch.command,
+                env: launch.env,
+            }),
+            Err(e) => {
+                self.states.insert(
+                    "voxl",
+                    State::Failed(format!("Couldn't make a password: {e}"), None),
+                );
+                cx.notify();
+            }
+        }
+    }
+
     /// The line under `tool`'s row, when it has one.
     pub(super) fn render_extras(
         &self,
@@ -224,6 +244,42 @@ impl ToolsPage {
                 "Sign in with your free HeyGen account in the app. Sawit never handles that sign-in."
                     .into(),
             )),
+            "voxl" if installed => {
+                parts.push(note(
+                    "Shares this Mac's screen and takes mouse and keyboard input. Sawit starts it on this Mac only (127.0.0.1), with a new password."
+                        .into(),
+                ));
+                for privacy in extras::privacy_needs("voxl") {
+                    let granted = privacy.granted();
+                    let url = privacy.settings_url();
+                    let state = if granted { "Allowed" } else { "Not Allowed" };
+                    parts.push(
+                        catalog::tag(None, format!("{}: {state}", privacy.name()), cx)
+                            .into_any_element(),
+                    );
+                    if !granted {
+                        parts.push(
+                            Button::new(SharedString::from(format!(
+                                "tool-privacy-{}-{ix}",
+                                privacy.name()
+                            )))
+                            .ghost()
+                            .xsmall()
+                            .icon(Lucide::Settings)
+                            .label("Open Settings")
+                            .tooltip(format!("Privacy & Security, {}", privacy.name()))
+                            .on_click(move |_, _, cx| cx.open_url(url))
+                            .into_any_element(),
+                        );
+                    }
+                }
+                parts.push(
+                    button("tool-voxl-start", Lucide::Play, "Start")
+                        .tooltip("Starts voxl on 127.0.0.1:6901 in a Terminal, with a New Password")
+                        .on_click(cx.listener(|this, _, _, cx| this.start_voxl(cx)))
+                        .into_any_element(),
+                );
+            }
             _ => {}
         }
         if let Some(places) = self.kept.get(tool.id).filter(|_| !self.installed(tool.id)) {

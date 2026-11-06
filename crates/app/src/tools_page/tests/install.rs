@@ -62,8 +62,9 @@ fn puremac_waits_for_homebrew_and_installs_with_brew(cx: &mut TestAppContext) {
     let seen = terminal.clone();
     cx.update(|cx| {
         cx.subscribe(&page, move |_, event: &ToolsEvent, _| {
-            let ToolsEvent::RunInTerminal(command) = event;
-            seen.borrow_mut().push(command.clone());
+            if let ToolsEvent::RunInTerminal(command) = event {
+                seen.borrow_mut().push(command.clone());
+            }
         })
         .detach()
     });

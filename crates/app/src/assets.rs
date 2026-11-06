@@ -253,10 +253,16 @@ tool_logos!(
 
 /// Tool logos that are an app's own icon, where it publishes no vector logo
 /// (see assets/tool_logos/SOURCES.md).
-const TOOL_ICONS: &[(&str, &[u8])] = &[(
-    "puremac",
-    include_bytes!("../../../assets/tool_logos/puremac.png"),
-)];
+const TOOL_ICONS: &[(&str, &[u8])] = &[
+    (
+        "puremac",
+        include_bytes!("../../../assets/tool_logos/puremac.png"),
+    ),
+    (
+        "voxl",
+        include_bytes!("../../../assets/tool_logos/voxl.png"),
+    ),
+];
 
 /// Database logos for the database sidebar, its add menu, the SQL editor and the welcome
 /// screen (see assets/db_logos/SOURCES.md and `crate::db::logos`).

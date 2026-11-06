@@ -63,6 +63,32 @@ impl TerminalPanel {
         Ok((ix, pane))
     }
 
+    /// Types `commands` into a new shell tab titled `title`, whose shell has `env` besides the
+    /// usual variables: what needs a secret in its environment rather than on its command
+    /// line (voxl's password), out of the shell's history. Shows as the user's run does.
+    pub fn run_in_new_tab(
+        &mut self,
+        title: &str,
+        commands: &str,
+        env: &[(String, String)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, PaneId), String> {
+        let cmd = Command {
+            env: env.iter().cloned().collect(),
+            ..Command::default()
+        };
+        let (ix, pane) = self.open_tab(cmd, title, None, cx)?;
+        if let Some(view) = self.tabs[ix].read(cx).view(pane).cloned() {
+            view.update(cx, |view, _| {
+                view.touched = true;
+                view.write(run_bytes(commands));
+            });
+        }
+        self.reveal(ix, pane, Origin::User, window, cx);
+        Ok((ix, pane))
+    }
+
     /// The pane the user is typing in: the one with the keyboard, while a
     /// terminal has it.
     fn typing_pane(&self, window: &Window, cx: &App) -> Option<(usize, PaneId)> {

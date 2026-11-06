@@ -21,7 +21,7 @@ pub(super) fn upgrade_line(tool: &Tool, found: &dev_tools::Found) -> String {
 }
 
 /// What `list_dev_tools` adds under a tool: what uninstalling it stops, the settings it
-/// leaves, the GitHub CLI's sign-in, HyperFrames' Chrome.
+/// leaves, the GitHub CLI's sign-in, HyperFrames' Chrome, voxl's permissions.
 pub(super) async fn notes(tool: &Tool, found: Option<&dev_tools::Found>) -> String {
     let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
     let mut out = String::new();
@@ -54,6 +54,26 @@ pub(super) async fn notes(tool: &Tool, found: Option<&dev_tools::Found>) -> Stri
                 Some(chrome) => format!("\n    chrome: {}", tilde(&chrome)),
                 None => "\n    chrome: none found. `hyperframes browser ensure` downloads one, or set HYPERFRAMES_BROWSER_PATH; `hyperframes doctor` checks the rest".into(),
             });
+        }
+        ("voxl", Some(_)) => {
+            let states: Vec<String> = extras::privacy_needs("voxl")
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{} {}",
+                        p.name(),
+                        if p.granted() {
+                            "granted"
+                        } else {
+                            "not granted"
+                        }
+                    )
+                })
+                .collect();
+            out.push_str(&format!(
+                "\n    macOS permissions (for the app that starts it): {}\n    start: Sawit starts it on 127.0.0.1 only, with a random VOXL_PASSWORD (the Dev Tools page's Start)",
+                states.join(", ")
+            ));
         }
         _ => {}
     }

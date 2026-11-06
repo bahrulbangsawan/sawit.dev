@@ -119,6 +119,13 @@ fn category_name(category: Category) -> &'static str {
 
 pub enum ToolsEvent {
     RunInTerminal(String),
+    /// Runs `command` in a new terminal titled `title` whose shell has `env`: how voxl starts,
+    /// its password in the environment rather than in the command line or the shell's history.
+    Launch {
+        title: String,
+        command: String,
+        env: Vec<(String, String)>,
+    },
 }
 
 impl EventEmitter<ToolsEvent> for ToolsPage {}
@@ -217,6 +224,8 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
         "ffmpeg" => ("tool_logos/ffmpeg-color.svg", true),
         "herdr-app" | "herdr" => ("tool_logos/herdr-color.svg", true),
         "hyperframes" | "hyperframes-studio" => ("tool_logos/hyperframes-color.svg", true),
+        // The project's own icon: it publishes no vector logo.
+        "voxl" => ("tool_logos/voxl.png", true),
         "bun" | "deno" | "rust" | "flyio" => {
             return svg()
                 .path(SharedString::from(format!("tool_logos/{id}.svg")))

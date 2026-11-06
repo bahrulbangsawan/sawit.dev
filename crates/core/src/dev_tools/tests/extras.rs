@@ -1,8 +1,11 @@
-//! The extras some rows show: the GitHub CLI's sign-in, HyperFrames' Chrome, Herdr's release manifest.
+//! The extras some rows show: the GitHub CLI's sign-in, HyperFrames' Chrome, how Sawit starts
+//! voxl, Herdr's release manifest.
 
 use std::collections::HashMap;
 
-use crate::dev_tools::extras::{GhAuth, hyperframes_browser, parse_gh_auth};
+use crate::dev_tools::extras::{
+    GhAuth, Privacy, VOXL_PORT, hyperframes_browser, parse_gh_auth, privacy_needs, voxl_launch,
+};
 use crate::dev_tools::versions::manifest_version;
 
 /// `gh auth status` exits 0 when signed in, with the login in its new and old wording, and 1
@@ -68,6 +71,39 @@ fn hyperframes_finds_a_chrome_where_its_cli_looks() {
     let missing =
         |name: &str| (name == "HYPERFRAMES_BROWSER_PATH").then(|| "/no/such/chrome".to_string());
     assert_eq!(hyperframes_browser(home, &missing), None);
+}
+
+/// Sawit starts voxl on this Mac only (127.0.0.1, never 0.0.0.0 or a network address), with a
+/// new random password each time, in the environment and never in the command.
+#[test]
+fn sawit_starts_voxl_on_this_mac_only_with_a_random_password() {
+    let first = voxl_launch(VOXL_PORT).unwrap();
+    assert_eq!(first.command, "voxl --addr=127.0.0.1 --port=6901");
+    assert!(!first.command.contains("0.0.0.0"));
+    assert_eq!(first.command.matches("--addr=").count(), 1);
+    let [(name, password)] = first.env.as_slice() else {
+        panic!("{:?}", first.env)
+    };
+    assert_eq!(name, "VOXL_PASSWORD");
+    assert_eq!(password.len(), 32);
+    assert!(password.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(!first.command.contains(password.as_str()));
+    let second = voxl_launch(7000).unwrap();
+    assert_eq!(second.command, "voxl --addr=127.0.0.1 --port=7000");
+    assert_ne!(second.env, first.env, "a new password each time");
+    // What it needs from macOS, each with its System Settings pane.
+    assert_eq!(privacy_needs("voxl"), Privacy::ALL);
+    assert!(privacy_needs("gh").is_empty());
+    assert!(
+        Privacy::ScreenRecording
+            .settings_url()
+            .ends_with("Privacy_ScreenCapture")
+    );
+    assert!(
+        Privacy::Accessibility
+            .settings_url()
+            .ends_with("Privacy_Accessibility")
+    );
 }
 
 /// Herdr's release manifest gives the app's latest at its top level.

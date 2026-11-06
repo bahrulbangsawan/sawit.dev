@@ -205,6 +205,11 @@ impl Workspace {
                     ToolsEvent::RunInTerminal(command) => {
                         let _ = this.run_in_terminal(command, Origin::User, window, cx);
                     }
+                    ToolsEvent::Launch {
+                        title,
+                        command,
+                        env,
+                    } => this.run_in_new_terminal(title, command, env, window, cx),
                 },
             )
             .detach();

@@ -1,5 +1,6 @@
 //! What some tools' rows say and do besides install, upgrade and uninstall: whether the GitHub
-//! CLI is signed in, and whether HyperFrames has a Chrome to render with.
+//! CLI is signed in, whether HyperFrames has a Chrome to render with, starting voxl safely,
+//! and the macOS permissions voxl needs.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -81,4 +82,99 @@ pub fn hyperframes_browser(home: &Path, env: &dyn Fn(&str) -> Option<String>) ->
         .into_iter()
         .find(|app| app.exists())
     })
+}
+
+/// The port voxl listens on unless told otherwise.
+pub const VOXL_PORT: u16 = 6901;
+
+/// How Sawit starts voxl: the command typed into a new terminal, and the environment that
+/// terminal's shell gets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoxlLaunch {
+    /// `voxl --addr=127.0.0.1 --port=6901`: on this Mac only. Never `0.0.0.0` or a network
+    /// address, which would show the whole screen, and take input, from other machines.
+    pub command: String,
+    /// `VOXL_PASSWORD`, a new random one each time: in the shell's environment, so it is never
+    /// in the command line, the shell's history or Sawit's logs. voxl prints a sign-in link
+    /// with it, for the user, in that terminal only.
+    pub env: Vec<(String, String)>,
+}
+
+/// How Sawit starts voxl on `port`, signed in with a new 32-character random password.
+pub fn voxl_launch(port: u16) -> std::io::Result<VoxlLaunch> {
+    Ok(VoxlLaunch {
+        command: format!("voxl --addr=127.0.0.1 --port={port}"),
+        env: vec![("VOXL_PASSWORD".into(), random_password()?)],
+    })
+}
+
+/// 32 hex characters (128 bits) from the system's random source.
+fn random_password() -> std::io::Result<String> {
+    use std::io::Read as _;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// A macOS privacy permission a tool needs, as Sawit (the app whose terminal starts it, which
+/// macOS asks about) has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Privacy {
+    ScreenRecording,
+    Accessibility,
+}
+
+impl Privacy {
+    pub const ALL: [Privacy; 2] = [Privacy::ScreenRecording, Privacy::Accessibility];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Privacy::ScreenRecording => "Screen Recording",
+            Privacy::Accessibility => "Accessibility",
+        }
+    }
+
+    /// Its pane in System Settings, Privacy & Security.
+    pub fn settings_url(self) -> &'static str {
+        match self {
+            Privacy::ScreenRecording => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            }
+            Privacy::Accessibility => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+        }
+    }
+
+    /// Whether this process has it. Only asks; it never brings up macOS's prompt.
+    pub fn granted(self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            #[link(name = "CoreGraphics", kind = "framework")]
+            unsafe extern "C" {
+                fn CGPreflightScreenCaptureAccess() -> bool;
+            }
+            #[link(name = "ApplicationServices", kind = "framework")]
+            unsafe extern "C" {
+                fn AXIsProcessTrusted() -> bool;
+            }
+            // SAFETY: both only read this process's permission, with no arguments.
+            unsafe {
+                match self {
+                    Privacy::ScreenRecording => CGPreflightScreenCaptureAccess(),
+                    Privacy::Accessibility => AXIsProcessTrusted(),
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+}
+
+/// The permissions `tool` needs on macOS: Screen Recording and Accessibility for voxl.
+pub fn privacy_needs(tool: &str) -> &'static [Privacy] {
+    match tool {
+        "voxl" => &Privacy::ALL,
+        _ => &[],
+    }
 }

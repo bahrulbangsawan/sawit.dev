@@ -56,7 +56,7 @@ fn puremac_is_the_app_from_its_homebrew_cask() {
     assert_eq!(ids(plan(&["puremac"], &|id| id == "homebrew")), ["puremac"]);
     assert_eq!(
         ids(dependents("homebrew")),
-        ["puremac", "gh", "minio", "mc", "ffmpeg"]
+        ["puremac", "gh", "minio", "mc", "ffmpeg", "voxl"]
     );
     // No `command -v` for it: that would find the PureMac CLI.
     let script = detect_script();

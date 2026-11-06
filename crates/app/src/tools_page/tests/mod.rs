@@ -4,6 +4,7 @@
 mod install;
 mod keyboard;
 mod lifecycle;
+mod new_tools;
 mod uninstall;
 
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};

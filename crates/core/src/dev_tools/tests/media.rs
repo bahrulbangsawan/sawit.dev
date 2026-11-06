@@ -1,6 +1,10 @@
-//! HyperFrames: the CLI from npm, Studio from HeyGen's disk image.
+//! HyperFrames (the CLI from npm, Studio from HeyGen's disk image) and voxl (built from
+//! crates.io in a terminal, never shipped).
+
+use std::path::Path;
 
 use crate::dev_tools::removal::{installed_outside_at, uninstall_command_in};
+use crate::dev_tools::versions::crate_version;
 use crate::package_manager::PackageManager;
 
 use super::*;
@@ -100,4 +104,41 @@ fn hyperframes_studio_installs_from_heygens_disk_image() {
     let other = home.join("Downloads/HyperFrames.app");
     std::fs::create_dir_all(&other).unwrap();
     assert_eq!(uninstall_command_in(studio, &other, &other, home), None);
+}
+
+/// voxl builds from crates.io after Homebrew's libraries, in a terminal as it takes long;
+/// it's updated and removed with cargo, and only the copy in ~/.cargo/bin is Sawit's. Its
+/// latest is crates.io's newest stable version.
+#[test]
+fn voxl_builds_from_crates_io() {
+    let voxl = find("voxl").unwrap();
+    assert_eq!((voxl.bin, voxl.category), ("voxl", Category::Other));
+    assert_eq!(
+        voxl.install,
+        "brew install x264 opus pkgconf esbuild && cargo install voxl-server"
+    );
+    assert_eq!(voxl.upgrade, Some("cargo install voxl-server --force"));
+    assert_eq!(voxl.uninstall, Some("cargo uninstall voxl-server"));
+    assert_eq!(voxl.needs, ["homebrew", "rust"]);
+    assert!(voxl.long && !voxl.interactive);
+    assert_eq!(voxl.latest, Latest::Crate("voxl-server"));
+    // The Homebrew libraries stay: other tools may use them.
+    assert!(!voxl.uninstall.unwrap().contains("brew"));
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let cargo = home.join(".cargo/bin/voxl");
+    assert_eq!(
+        uninstall_command_in(voxl, &cargo, &cargo, home).as_deref(),
+        Some("cargo uninstall voxl-server")
+    );
+    let built = Path::new("/Users/me/src/voxl/target/release/voxl");
+    assert_eq!(uninstall_command_in(voxl, built, built, home), None);
+    assert_eq!(
+        crate_version(r#"{"crate":{"name":"voxl-server","max_stable_version":"0.3.3","newest_version":"0.4.0-rc.1"}}"#).as_deref(),
+        Some("0.3.3")
+    );
+    assert_eq!(
+        crate_version(r#"{"errors":[{"detail":"Not Found"}]}"#),
+        None
+    );
 }

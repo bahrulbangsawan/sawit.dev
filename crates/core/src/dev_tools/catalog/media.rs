@@ -1,4 +1,5 @@
-//! Video tools: HyperFrames, its CLI and its desktop app, HyperFrames Studio. Read from their docs, repositories and release files on 2026-11-06.
+//! Video and screen tools: HyperFrames (its CLI and its desktop app, HyperFrames Studio) and
+//! voxl. Read from their docs, repositories and release files on 2026-11-06.
 
 use super::super::{Category, Latest, Tool};
 use super::tool;
@@ -68,5 +69,39 @@ rm -rf "/Applications/HyperFrames.app" "$HOME/Applications/HyperFrames.app""#,
         Category::Other,
         "",
         STUDIO_INSTALL,
+    )
+};
+
+/// voxl (github.com/tembo/voxl): streams this Mac's screen to a browser as H.264 over a
+/// WebSocket, with input, clipboard, audio and files, for agents and remote control.
+///
+/// Its code is MIT, but a voxl binary links x264 and so falls under the GPL: Sawit never ships
+/// one, it builds on the user's Mac. There is no Homebrew formula, curl installer, npm package
+/// or Mac binary in its releases (v0.3.3); the crate `voxl-server` builds the `voxl` binary. On
+/// macOS the build needs x264, Opus, pkg-config and esbuild (its README's `brew install x264
+/// opus pkgconf esbuild`); libyuv and PulseAudio are for Linux only (its build.rs: a Mac
+/// captures NV12 and takes audio from ScreenCaptureKit). The build takes minutes, so the page
+/// runs it in a terminal. `voxl --version` prints its version. On a Mac it listens on
+/// 127.0.0.1 unless `--addr` says otherwise, signs viewers in with `VOXL_PASSWORD` (made up and
+/// printed in a link when unset), and macOS asks it, or the terminal that starts it, for
+/// Screen Recording and Accessibility. A microphone needs a loopback device (`brew install
+/// blackhole-2ch`). `cargo uninstall voxl-server` removes it; the Homebrew libraries stay, as
+/// other tools may use them.
+pub(super) const VOXL: Tool = Tool {
+    owns: &["~/.cargo/bin/voxl"],
+    also: &["~/.cargo/bin/voxl"],
+    latest: Latest::Crate("voxl-server"),
+    upgrade: Some("cargo install voxl-server --force"),
+    uninstall: Some("cargo uninstall voxl-server"),
+    needs: &["homebrew", "rust"],
+    long: true,
+    warning: Some("A voxl stream that is running keeps running until you stop it."),
+    ..tool(
+        "voxl",
+        "voxl",
+        "Streams this Mac's screen to a browser, with mouse and keyboard, for agents and remote control. Builds from source.",
+        Category::Other,
+        "voxl",
+        "brew install x264 opus pkgconf esbuild && cargo install voxl-server",
     )
 };

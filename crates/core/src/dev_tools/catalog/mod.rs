@@ -428,4 +428,5 @@ rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
     herdr::TUI,
     media::HYPERFRAMES,
     media::HYPERFRAMES_STUDIO,
+    media::VOXL,
 ];

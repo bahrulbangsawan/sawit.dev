@@ -11,6 +11,8 @@ trademarks belong to their owners).
   https://github.com/herdrdev/herdr-app/blob/main/assets/icons/herdr-ui-icon-clean.svg
 - hyperframes-color.svg (HyperFrames CLI and Studio): the docs' favicon, Apache-2.0 —
   https://github.com/heygen-com/hyperframes/blob/main/docs/favicon.svg
+- voxl.png: the 32 × 32 image of voxl's favicon (it publishes no vector logo), MIT —
+  https://github.com/tembo/voxl/blob/main/web/favicon.ico
 - puremac.png: the app's icon (PureMac publishes no vector logo), 64 × 64, MIT —
   https://github.com/momenbasel/PureMac/blob/main/PureMac/Assets.xcassets/AppIcon.appiconset/icon_32@2x.png
 

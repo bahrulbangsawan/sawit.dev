@@ -82,6 +82,26 @@ impl Workspace {
         ran
     }
 
+    /// Types `commands` into a new terminal titled `title` whose shell has `env` (voxl's
+    /// password), showing the dock if hidden.
+    pub(super) fn run_in_new_terminal(
+        &mut self,
+        title: &str,
+        commands: &str,
+        env: &[(String, String)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.leave_welcome(TERMINAL_ONLY, cx);
+        if !self.layout.terminal {
+            self.layout.toggle(Area::Terminal);
+        }
+        let _ = self.terminal.update(cx, |t, cx| {
+            t.run_in_new_tab(title, commands, env, window, cx)
+        });
+        cx.notify();
+    }
+
     /// A new shell in the active project's folder (else the home folder).
     pub(super) fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.root(cx) {
