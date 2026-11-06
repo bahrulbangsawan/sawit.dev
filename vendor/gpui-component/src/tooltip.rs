@@ -128,10 +128,13 @@ impl Render for Tooltip {
                 .px_2()
                 .text_sm()
                 .gap_3()
+                // Sawit patch: a long text (a whole session title, a path, an error) wraps at
+                // 360 px instead of running off the window on one line.
+                .max_w(px(360.))
                 .refine_style(&self.style)
                 .map(|this| {
-                    this.child(div().map(|this| match self.content {
-                        TooltipContext::Text(ref text) => this.child(text.clone()),
+                    this.child(div().min_w_0().map(|this| match self.content {
+                        TooltipContext::Text(ref text) => this.whitespace_normal().child(text.clone()),
                         TooltipContext::Element(ref builder) => this.child(builder(window, cx)),
                     }))
                 })

@@ -1,0 +1,16 @@
+# gpui-component 0.8.1 — Sawit patch
+
+Copy of `gpui-component` 0.8.1 from crates.io (Apache-2.0), used via `[patch.crates-io]` in the
+workspace `Cargo.toml`. Changes (search for "Sawit patch"):
+
+- `src/menu/popup_menu.rs`: a menu item's label stays on one line and is cut with an ellipsis
+  when the menu is too narrow for it, keeping the item's right padding and its trailing shortcut;
+  a cut label shows the whole of it in a tooltip (`render_label`, `label_room`). A custom item
+  (`PopupMenuItem::element`) may shrink, so its own `truncate()` works. The menu fits its content
+  up to its `max_w` (500 px by default) and never runs past the window less 8 px each side
+  (`max_width`). Before, a long label ran out of the menu's right edge, cut mid-letter.
+- `src/tooltip.rs`: a text tooltip is at most 360 px wide and wraps, so a long one (a whole
+  session title, a path, an error) never runs off the window on one line.
+
+Upstream has no option for these. To drop the patch, delete this folder and the
+`[patch.crates-io]` entry. Sawit's tests of it: `crates/app/src/menu_tests.rs`.

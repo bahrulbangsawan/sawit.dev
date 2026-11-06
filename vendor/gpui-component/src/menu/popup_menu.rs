@@ -1192,15 +1192,19 @@ impl PopupMenu {
         Some(icon.xsmall())
     }
 
+    /// Sawit patch: the widest the menu may be. Its content sets its width up to its `max_w`
+    /// (500 px by default), and never past the window less a margin each side, so a long item is
+    /// cut with an ellipsis ([`render_label`]) instead of running out of the menu or the window.
     #[inline]
-    fn max_width(&self) -> Pixels {
-        self.max_width.unwrap_or(px(500.))
+    fn max_width(&self, window: &Window) -> Pixels {
+        let room = window.bounds().size.width - WINDOW_MARGIN * 2.;
+        self.max_width.unwrap_or(px(500.)).min(room).max(px(128.))
     }
 
     /// Calculate the anchor corner and left offset for child submenu
     fn update_submenu_menu_anchor(&mut self, window: &Window) {
         let bounds = self.bounds;
-        let max_width = self.max_width();
+        let max_width = self.max_width(window);
         let (anchor, left) = if max_width + bounds.origin.x > window.bounds().size.width {
             (Anchor::TopRight, -px(16.))
         } else {
@@ -1291,7 +1295,7 @@ impl PopupMenu {
                     .items_center()
                     .gap_x_1()
                     .children(Self::render_icon(has_left_icon, false, None, window, cx))
-                    .child(div().flex_1().child(label.clone())),
+                    .child(render_label(ix, label, options.label_room, window)),
             ),
             PopupMenuItem::ElementItem {
                 render,
@@ -1308,6 +1312,9 @@ impl PopupMenu {
                 .child(
                     h_flex()
                         .flex_1()
+                        // Sawit patch: the item's own content can cut itself short (`truncate`)
+                        // instead of widening the menu past its edge.
+                        .min_w_0()
                         .min_h(item_height)
                         .items_center()
                         .gap_x_1()
@@ -1318,7 +1325,7 @@ impl PopupMenu {
                             window,
                             cx,
                         ))
-                        .child((render)(window, cx))
+                        .child(div().flex_1().min_w_0().child((render)(window, cx)))
                         .children(right_check_icon.map(|icon| icon.ml_3())),
                 ),
             PopupMenuItem::Item {
@@ -1351,18 +1358,22 @@ impl PopupMenu {
                 .child(
                     h_flex()
                         .w_full()
+                        .min_w_0()
                         .gap_3()
                         .items_center()
                         .justify_between()
-                        .when(!show_link_icon, |this| this.child(label.clone()))
+                        .when(!show_link_icon, |this| {
+                            this.child(render_label(ix, label, options.label_room, window))
+                        })
                         .children(right_check_icon)
                         .when(show_link_icon, |this| {
                             this.child(
                                 h_flex()
                                     .w_full()
+                                    .min_w_0()
                                     .justify_between()
                                     .gap_1p5()
-                                    .child(label.clone())
+                                    .child(render_label(ix, label, options.label_room, window))
                                     .child(
                                         Icon::new(IconName::ExternalLink)
                                             .xsmall()
@@ -1370,7 +1381,7 @@ impl PopupMenu {
                                     ),
                             )
                         })
-                        .children(key),
+                        .children(key.map(|key| key.flex_none())),
                 )
             }
             PopupMenuItem::Submenu {
@@ -1398,10 +1409,11 @@ impl PopupMenu {
                         .child(
                             h_flex()
                                 .flex_1()
+                                .min_w_0()
                                 .gap_2()
                                 .items_center()
                                 .justify_between()
-                                .child(label.clone())
+                                .child(render_label(ix, label, options.label_room, window))
                                 .child(
                                     Icon::new(IconName::ChevronRight)
                                         .xsmall()
@@ -1436,6 +1448,57 @@ impl PopupMenu {
     }
 }
 
+/// Sawit patch: the space a menu keeps between its edges and the window's.
+const WINDOW_MARGIN: Pixels = px(8.);
+
+/// Sawit patch: how wide an item's label can be in a menu `max_width` wide before it is cut: the
+/// menu's padding, the item's, the left icon's slot and room for a trailing shortcut taken off.
+fn label_room(max_width: Pixels, has_left_icon: bool) -> Pixels {
+    let icon = if has_left_icon { px(20.) } else { px(0.) };
+    (max_width - px(8.) - px(16.) - icon - px(56.)).max(px(0.))
+}
+
+/// Sawit patch: an item's label on one line, cut with an ellipsis when the menu is too narrow for
+/// it (the item keeps its right padding and its shortcut), with the whole label in a tooltip
+/// when it is wider than `room`.
+fn render_label(
+    ix: usize,
+    label: &SharedString,
+    room: Pixels,
+    window: &mut Window,
+) -> impl IntoElement + use<> {
+    let cut = label_width(label, window) > room;
+    let full = label.clone();
+    div()
+        .id(("popup-menu-label", ix))
+        .debug_selector(move || format!("popup-menu-label-{ix}"))
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .child(label.clone())
+        .when(cut, |this| {
+            this.tooltip(move |window, cx| crate::tooltip::Tooltip::new(full.clone()).build(window, cx))
+        })
+}
+
+/// Sawit patch: how wide `label` is in the menu's text (`text_sm`).
+fn label_width(label: &SharedString, window: &mut Window) -> Pixels {
+    let style = window.text_style();
+    let size = rems(0.875).to_pixels(window.rem_size());
+    let run = gpui::TextRun {
+        len: label.len(),
+        font: style.font(),
+        color: style.color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(label.clone(), size, &[run], None)
+        .width
+}
+
 impl FluentBuilder for PopupMenu {}
 impl EventEmitter<DismissEvent> for PopupMenu {}
 impl Focusable for PopupMenu {
@@ -1446,6 +1509,8 @@ impl Focusable for PopupMenu {
 
 #[derive(Clone, Copy)]
 struct RenderOptions {
+    /// Sawit patch: how wide a label can be before it is cut, for its tooltip.
+    label_room: Pixels,
     has_left_icon: bool,
     check_side: Side,
     radius: Pixels,
@@ -1486,8 +1551,9 @@ impl Render for PopupMenu {
             .iter()
             .any(|item| item.has_left_icon(self.check_side));
 
-        let max_width = self.max_width();
+        let max_width = self.max_width(window);
         let options = RenderOptions {
+            label_room: label_room(max_width, has_left_icon),
             has_left_icon,
             check_side: self.check_side,
             radius: cx.theme().radius.min(px(8.)),

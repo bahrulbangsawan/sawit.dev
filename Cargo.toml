@@ -214,6 +214,8 @@ opt-level = "s"
 [profile.release.package.objc2-av-foundation]
 opt-level = "s"
 
-# Left-aligned, compact editor line numbers; see vendor/gpui-base/SAWIT_PATCH.md.
+# Left-aligned, compact editor line numbers; see vendor/gpui-base/SAWIT_PATCH.md. Menu items that
+# fit their menu; see vendor/gpui-component/SAWIT_PATCH.md.
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }
+gpui-component = { path = "vendor/gpui-component" }

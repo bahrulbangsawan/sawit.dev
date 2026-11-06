@@ -17,6 +17,8 @@ mod keymap;
 mod layout;
 mod local_explorer;
 mod mcp_page;
+#[cfg(test)]
+mod menu_tests;
 mod native_cover;
 mod network;
 mod new_project_page;
