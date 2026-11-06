@@ -26,6 +26,7 @@ A screen, page or app view is a screen on the canvas: `canvas_begin {kind: "scre
 - `canvas_get` lists the layers of the page on show (ids, positions, text). Read it before you change anything.
 - `canvas_add_elements` adds rectangles, ellipses, diamonds, stickies, text, arrows bound to shapes by id, lines and frames.
 - To build a component or vector frame, `canvas_begin` it first (`name`, `frame`, `steps`): pass the `work` it answers to the tools you build it with, say each `step` with `canvas_progress`, and end with `status` done or failed, so the user watches it being built.
+- Orchestrating several agents (subagents, a workflow)? Give each its own stable `agent` id (`{id: "header", name: "Header agent"}`) and have it pass that on every canvas call: each then has its own cursor, colour and name on the canvas.
 - `canvas_update` changes layers by id; `canvas_delete` removes them (the board is kept as a `.del.bak` first).
 - `canvas_command` runs any engine command by id (board.sticky, align.left, node.set, page.list); `canvas_commands` with a `filter` lists the ids and what each takes. Commands that would move the user's view or page (view.*, page.select) are refused: address pages and layers by id. With the app closed each call starts from the saved file: pass ids, or put the steps in one command.batch.
 - `canvas_export` writes the page on show as SVG or PNG.

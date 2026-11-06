@@ -139,6 +139,9 @@ impl Presence {
         // The most recent agent last, on top.
         let mut agents: Vec<_> = self.agents.iter().collect();
         agents.sort_by_key(|a| a.seen);
+        // Lanes at the same corner (a session's agents on one frame) fan out, so none covers
+        // another.
+        let mut tips: Vec<(f64, f64)> = Vec::new();
         for agent in agents {
             let idle = now.saturating_duration_since(agent.seen);
             let (Some(alpha), Some(point)) = (model::opacity(idle), agent.point(now, reduce))
@@ -149,7 +152,8 @@ impl Presence {
                 continue;
             }
             let (x, y) = view.page_to_screen(point.0, point.1);
-            let tip = (x + TIP_FROM_CORNER.0, y + TIP_FROM_CORNER.1);
+            let tip = fanned((x + TIP_FROM_CORNER.0, y + TIP_FROM_CORNER.1), &tips);
+            tips.push(tip);
             let color = agent.look.color;
             marks.push(Mark::Cursor { tip, color, alpha });
             let on_row = (agent.work.as_deref())
@@ -192,6 +196,22 @@ impl Presence {
                 .then(|| agent.look.id.clone())
         })
     }
+}
+
+/// How far apart pointers at one spot fan out (px), and how near counts as one spot.
+const FAN: (f64, f64) = (18.0, 14.0);
+const SAME_SPOT: f64 = 10.0;
+
+/// `tip`, moved down and right past the pointers already painted at its spot (`placed`).
+pub(super) fn fanned(tip: (f64, f64), placed: &[(f64, f64)]) -> (f64, f64) {
+    let mut tip = tip;
+    while placed
+        .iter()
+        .any(|p| (p.0 - tip.0).abs() < SAME_SPOT && (p.1 - tip.1).abs() < SAME_SPOT)
+    {
+        tip = (tip.0 + FAN.0, tip.1 + FAN.1);
+    }
+    tip
 }
 
 /// Whether the row of `work` names its agent at `now`: while it runs or failed, and for a moment

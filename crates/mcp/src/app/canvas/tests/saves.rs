@@ -32,6 +32,7 @@ async fn a_canvas_that_can_not_be_saved_is_an_error() {
     let result = server
         .canvas_command_tool(CanvasCommandArgs {
             tab: None,
+            agent: None,
             command: "board.sticky".into(),
             params: Some(json!({"x": 0, "y": 0})),
             file: None,

@@ -69,6 +69,7 @@ impl Session {
             name,
             label: self.project.clone(),
             version,
+            lane: None,
         }
     }
 }
@@ -92,6 +93,7 @@ mod tests {
                 name: "Claude Code".into(),
                 label: Some("shop".into()),
                 version: Some("2.1.0".into()),
+                lane: None,
             }
         );
     }

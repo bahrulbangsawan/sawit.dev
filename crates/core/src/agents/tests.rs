@@ -12,6 +12,7 @@ fn agent(id: &str, name: &str, project: Option<&str>) -> AgentIdentity {
         name: name.into(),
         label: project.map(Into::into),
         version: None,
+        lane: None,
     }
 }
 

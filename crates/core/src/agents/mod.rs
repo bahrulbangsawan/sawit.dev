@@ -31,6 +31,11 @@ pub use roster::{INK, Known, LIGHT_PAGE, PALETTE, Roster};
 /// made readable ([`client_name`]), `label` the project or folder its session works in, when it
 /// works in one, and `version` the client's version. The app adds the colour and the label it
 /// shows ([`Roster`]).
+///
+/// One session can be several agents at once: Claude Code's subagents, a workflow's agents and
+/// parallel tool calls all go through their parent's `sawit-mcp`. `lane` tells them apart: the
+/// `agent` an op names (`{id, name?}`), or a work of a session that has several open at once. A
+/// lane is an agent of its own on screen ([`AgentIdentity::key`]), grouped under its session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentIdentity {
     pub id: String,
@@ -39,6 +44,43 @@ pub struct AgentIdentity {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<Lane>,
+}
+
+/// One of a session's agents ([`AgentIdentity::lane`]): its id, stable across its calls, its
+/// name when it gives one ("Header agent"), and the lane that started it, if any.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lane {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+}
+
+impl Lane {
+    /// The lane an op's `agent` argument names: `"header"`, or `{id, name?, parent?}`. `None`
+    /// for anything else, or an empty id.
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        let lane = match value {
+            serde_json::Value::String(id) => Lane {
+                id: id.clone(),
+                name: None,
+                parent: None,
+            },
+            other => serde_json::from_value(other.clone()).ok()?,
+        };
+        let id = lane.id.trim();
+        (!id.is_empty()).then(|| Lane {
+            id: id.chars().take(64).collect(),
+            name: lane
+                .name
+                .map(|n| n.trim().chars().take(MAX_NAME).collect())
+                .filter(|n: &String| !n.is_empty()),
+            parent: lane.parent,
+        })
+    }
 }
 
 /// The id of the agent an op without an identity counts as.
@@ -53,6 +95,23 @@ impl AgentIdentity {
             name: "Agent".into(),
             label: None,
             version: None,
+            lane: None,
+        }
+    }
+
+    /// The agent on screen: the session, or `session/lane` for one of its lanes.
+    pub fn key(&self) -> String {
+        match &self.lane {
+            Some(lane) => format!("{}/{}", self.id, lane.id),
+            None => self.id.clone(),
+        }
+    }
+
+    /// This session's lane `lane`.
+    pub fn in_lane(&self, lane: Lane) -> Self {
+        Self {
+            lane: Some(lane),
+            ..self.clone()
         }
     }
 

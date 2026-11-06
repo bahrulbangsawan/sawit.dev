@@ -44,6 +44,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
     let added = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
             tab: None,
+            agent: None,
             elements: vec![
                 json!({"type": "frame", "x": 0, "y": 0, "width": 400, "height": 300}),
                 json!({"type": "text", "id": "hero", "x": 20, "y": 20, "text": "Hero"}),
@@ -94,6 +95,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
     let deleted = server
         .canvas_delete(Parameters(CanvasDeleteArgs {
             tab: None,
+            agent: None,
             ids: vec!["hero".into()],
             file: file(),
             project: project_arg(&project),
@@ -137,6 +139,7 @@ async fn an_excalidraw_file_named_by_file_is_imported_once_into_the_sawit_file_b
     let added = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
             tab: None,
+            agent: None,
             elements: vec![json!({"type": "sticky", "x": 900, "y": 0, "text": "added"})],
             file: Some(scene.display().to_string()),
             project: project_arg(&project),

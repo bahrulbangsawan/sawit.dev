@@ -167,8 +167,17 @@ fn edge_chip(edge: Edge, view: WeakEntity<BoardView>, cx: &Context<BoardView>) -
         Toward::Up => (Lucide::ArrowUp, "above", "board-agents-up"),
         Toward::Down => (Lucide::ArrowDown, "below", "board-agents-down"),
     };
+    let one_session = (edge.agents.iter()).all(|(l, ..)| {
+        edge.agents
+            .first()
+            .is_some_and(|(f, ..)| f.session == l.session)
+    });
     let who: SharedString = match edge.agents.as_slice() {
         [(look, ..)] => look.label.clone(),
+        // One session's agents (its lanes): "Claude Code · 4 agents".
+        [(look, ..), ..] if one_session => {
+            format!("{} · {} agents", look.client, edge.agents.len()).into()
+        }
         agents => format!("{} agents", agents.len()).into(),
     };
     let name: SharedString = format!("{who} at work off screen {way}: list them").into();

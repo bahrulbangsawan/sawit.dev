@@ -146,6 +146,7 @@ impl Sawit {
     /// which every version of the app runs.
     pub async fn canvas_add_diagram_tool(&self, a: CanvasMermaidArgs) -> CallToolResult {
         let op = json!({ "op": "mermaid", "source": a.source, "x": a.x, "y": a.y });
+        let op = super::with_lane(op, a.agent.as_ref());
         let op = in_work(op, a.work);
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
@@ -173,6 +174,7 @@ impl Sawit {
             .params
             .map(|params| with_files_resolved(&a.command, params));
         let op = json!({ "op": "command", "command": a.command, "params": params });
+        let op = super::with_lane(op, a.agent.as_ref());
         // The view and the page on show are the user's, with the app closed too: an agent that
         // moved them there would move them once the app runs.
         if let Some(refused) = sawit_board::ops::agent_refusal(&op) {

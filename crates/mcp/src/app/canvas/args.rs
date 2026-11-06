@@ -15,6 +15,9 @@ const CANVAS_PROJECT: &str = "Project folder whose canvas (.nyawit/canvas.sawit)
 /// What a canvas tool's `work` names: the work item its op belongs to ([`CanvasBeginArgs`]).
 const CANVAS_WORK: &str = "The work this belongs to, as canvas_begin answered it (\"w_7f3a91c2\"): the op goes inside that work's frame, and its row on the canvas shows the agent at work. With a work, x and y are from the frame's top-left corner, and what is drawn goes into the frame";
 
+/// What a canvas tool's `agent` names: one of several agents working through one session.
+pub(super) const CANVAS_AGENT: &str = "Which agent this is, when you are one of several agents working through one session (subagents, a workflow's agents, parallel calls): a stable id, \"header\", or {\"id\": \"header\", \"name\": \"Header agent\"}. Each id gets its own cursor, colour and name on the canvas; pass the same one on every call. Leave it out when you work alone";
+
 /// What `canvas_delete`'s and `canvas_command`'s `work` names.
 const CANVAS_WORK_TAG: &str = "The work this belongs to, as canvas_begin answered it: its row on the canvas shows the agent at work, and the undo step joins the work's";
 
@@ -37,6 +40,8 @@ pub struct CanvasElementsArgs {
     pub elements: Vec<Value>,
     #[schemars(description = CANVAS_WORK)]
     pub work: Option<String>,
+    #[schemars(description = CANVAS_AGENT)]
+    pub agent: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]
@@ -57,6 +62,8 @@ pub struct CanvasMermaidArgs {
     pub y: Option<f64>,
     #[schemars(description = CANVAS_WORK)]
     pub work: Option<String>,
+    #[schemars(description = CANVAS_AGENT)]
+    pub agent: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]
@@ -73,6 +80,8 @@ pub struct CanvasUpdateArgs {
     pub elements: Vec<Value>,
     #[schemars(description = CANVAS_WORK)]
     pub work: Option<String>,
+    #[schemars(description = CANVAS_AGENT)]
+    pub agent: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]
@@ -87,6 +96,8 @@ pub struct CanvasDeleteArgs {
     pub ids: Vec<String>,
     #[schemars(description = CANVAS_WORK_TAG)]
     pub work: Option<String>,
+    #[schemars(description = CANVAS_AGENT)]
+    pub agent: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]
@@ -123,6 +134,8 @@ pub struct CanvasCommandArgs {
     pub params: Option<Value>,
     #[schemars(description = CANVAS_WORK_TAG)]
     pub work: Option<String>,
+    #[schemars(description = CANVAS_AGENT)]
+    pub agent: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]
@@ -189,6 +202,8 @@ pub struct CanvasBeginArgs {
         description = "\"screen\" for UI (a screen, a page, an app view): an HTML page in .nyawit/screens/<screen>/ shown in the frame (1440 × 900 when `frame` names no size, its CSS viewport); write it with canvas_screen_write and the answer's `screen`. \"component\" (the default when left out): a frame you draw into with the canvas tools, for components, diagrams, sketches the user asked for and illustrations"
     )]
     pub kind: Option<String>,
+    #[schemars(description = CANVAS_AGENT)]
+    pub agent: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]
@@ -212,6 +227,8 @@ pub struct CanvasProgressArgs {
         description = "Why it failed, in a few plain words: \"Couldn't load the logo image\""
     )]
     pub message: Option<String>,
+    #[schemars(description = CANVAS_AGENT)]
+    pub agent: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]
@@ -243,6 +260,8 @@ pub struct CanvasScreenWriteArgs {
         description = "Other files of the screen, whole: [{\"path\": \"css/site.css\", \"content\": \"...\"}], or an image as {\"path\": \"img/logo.png\", \"base64\": \"...\"}. Paths are from the screen's folder"
     )]
     pub files: Option<Vec<Value>>,
+    #[schemars(description = CANVAS_AGENT)]
+    pub agent: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]

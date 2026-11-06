@@ -106,6 +106,7 @@ impl Sawit {
             "op": "screen_write", "work": a.work, "screen": a.screen, "html": a.html,
             "edits": a.edits, "files": a.files,
         });
+        let op = super::with_lane(op, a.agent.as_ref());
         if let Err(e) = names_one(&op).and_then(|()| files::Write::from_op(&op).map(drop)) {
             return fail(format!("canvas_screen_write: {e}"));
         }

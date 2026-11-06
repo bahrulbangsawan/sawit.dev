@@ -7,7 +7,7 @@ use std::time::Instant;
 use futures::channel::oneshot;
 use gpui_kit::*;
 use sawit_board::ops::{agent_refusal, work_of};
-use sawit_core::agents::{self as model, AgentIdentity, GONE_AFTER};
+use sawit_core::agents::{self as model, AgentIdentity, GONE_AFTER, Lane};
 use serde_json::{Value, json};
 
 use super::target::{ghost_rect, target};
@@ -31,7 +31,7 @@ impl BoardView {
         identity: Option<&AgentIdentity>,
         cx: &mut Context<Self>,
     ) -> Answer {
-        let look = crate::agents::meet(identity, cx);
+        let look = self.look_for(identity, &op, cx);
         if let Some(refused) = agent_refusal(&op) {
             return Answer::Now(json!({"ok": false, "error": refused}));
         }
@@ -72,7 +72,7 @@ impl BoardView {
         prepare: impl std::future::Future<Output = sawit_board::ops::PreparedDiagram> + Send + 'static,
         cx: &mut Context<Self>,
     ) -> Answer {
-        let look = crate::agents::meet(identity, cx);
+        let look = self.look_for(identity, &op, cx);
         let now = cx.background_executor().now();
         let ghost = (self.shown && crate::agents::shown(cx))
             .then(|| self.place_ghost(&op, &look, now))
@@ -95,6 +95,57 @@ impl BoardView {
         .detach();
         self.after_agents_changed(cx);
         Answer::Later(answer)
+    }
+
+    /// Who `identity`'s op `op` is on screen ([`crate::agents::meet`]): the lane its `lane` (the
+    /// `agent` argument of a canvas tool) names; else, for an op of a work that has a lane of its
+    /// own (a session building several works at once), that lane; else the session.
+    fn look_for(
+        &mut self,
+        identity: Option<&AgentIdentity>,
+        op: &Value,
+        cx: &mut Context<Self>,
+    ) -> Look {
+        let session = identity.cloned().unwrap_or_else(AgentIdentity::anonymous);
+        let lanes = crate::agents::lanes_shown(cx);
+        if let Some(lane) = op.get("lane").and_then(Lane::from_value).filter(|_| lanes) {
+            return crate::agents::meet(Some(&session.in_lane(lane)), cx);
+        }
+        let work = work_of(op)
+            .ok()
+            .flatten()
+            .and_then(|id| self.agents.work(id));
+        if let Some(work) = work.filter(|w| *w.look.session == session.id && lanes) {
+            let laned = work.look.identity.clone();
+            return crate::agents::meet(Some(&laned), cx);
+        }
+        crate::agents::meet(Some(&session), cx)
+    }
+
+    /// The look work `reply` (just begun by `look`) is built with: its own lane when `look`'s
+    /// session already builds another work, so that each of a session's open works has its own
+    /// cursor; else `look`.
+    fn lane_for_new_work(
+        &mut self,
+        reply: &Value,
+        look: &Look,
+        now: Instant,
+        cx: &mut Context<Self>,
+    ) -> Look {
+        let Some(id) = reply.get("work").and_then(Value::as_str) else {
+            return look.clone();
+        };
+        let open = (self.agents.works.iter())
+            .any(|w| w.look.session == look.session && w.id != id && w.building(now));
+        if look.identity.lane.is_some() || !open || !crate::agents::lanes_shown(cx) {
+            return look.clone();
+        }
+        let lane = Lane {
+            id: id.to_string(),
+            name: None,
+            parent: None,
+        };
+        crate::agents::meet(Some(&look.identity.in_lane(lane)), cx)
     }
 
     /// A placeholder for `look`'s slow op `op` on the page on show ([`ghost_rect`]).
@@ -160,7 +211,8 @@ impl BoardView {
             self.agents.keep_works_in(after);
         }
         if name == Some("begin") && ok {
-            self.work_begun(op, &reply, look, now);
+            let look = self.lane_for_new_work(&reply, look, now, cx);
+            self.work_begun(op, &reply, &look, now);
         } else if let Some(work) = work.filter(|_| ok) {
             self.work_op_ran(&work, look, undo, now);
         } else if let (Some((before, after)), Some(page)) = (&changed, page) {

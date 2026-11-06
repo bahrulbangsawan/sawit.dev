@@ -71,6 +71,7 @@ async fn starting_over_twice_with_sawit_closed_keeps_the_users_board() {
     let drawn = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
             tab: None,
+            agent: None,
             elements: vec![json!({"type": "rectangle", "x": 0, "y": 0})],
             file: None,
             project: project_arg(&project),
@@ -132,6 +133,7 @@ async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
     let command = |command: &str, params: Value| {
         let run = server.canvas_command_tool(CanvasCommandArgs {
             tab: None,
+            agent: None,
             command: command.into(),
             params: Some(params),
             file: None,
@@ -152,6 +154,7 @@ async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
     let deleted = server
         .canvas_delete(Parameters(CanvasDeleteArgs {
             tab: None,
+            agent: None,
             ids: vec![id_of("note 0")],
             file: None,
             project: project_arg(&project),
@@ -233,6 +236,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
     let drawn = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
             tab: None,
+            agent: None,
             elements: stickies,
             file: None,
             project: project_arg(&project),
@@ -248,6 +252,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
         let deleted = server
             .canvas_delete(Parameters(CanvasDeleteArgs {
                 tab: None,
+                agent: None,
                 ids: vec![id],
                 file: None,
                 project: project_arg(&project),

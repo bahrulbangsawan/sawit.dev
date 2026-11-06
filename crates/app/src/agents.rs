@@ -27,7 +27,14 @@ actions!(
 /// One agent, as a surface draws it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Look {
+    /// The agent on screen: its session's id, or `session/lane` for one of its lanes.
     pub id: SharedString,
+    /// Its session's id: the lanes of one session share it.
+    pub session: SharedString,
+    /// Its session's client ("Claude Code"), for the roster's group of a session's lanes.
+    pub client: SharedString,
+    /// Who it is, as its ops said: a lane of it is met from this ([`AgentIdentity::in_lane`]).
+    pub identity: AgentIdentity,
     /// Its label on screen: "Claude Code", "Codex · shop", "Claude Code 2".
     pub label: SharedString,
     /// Its colour, as `#rrggbb` (for the page) and as GPUI paints it.
@@ -40,7 +47,10 @@ pub struct Look {
 impl Look {
     fn of(known: &Known) -> Self {
         Self {
-            id: known.identity.id.clone().into(),
+            id: known.identity.key().into(),
+            session: known.identity.id.clone().into(),
+            client: known.identity.name.clone().into(),
+            identity: known.identity.clone(),
             label: known.label.clone().into(),
             hex: known.color_hex(),
             color: hex_color(known.color_hex()),
@@ -64,6 +74,15 @@ impl Look {
         let label: SharedString = format!("Agent {id}").into();
         Self {
             id: id.to_string().into(),
+            session: id.to_string().into(),
+            client: "Agent".into(),
+            identity: AgentIdentity {
+                id: id.to_string(),
+                name: label.to_string(),
+                label: None,
+                version: None,
+                lane: None,
+            },
             label: label.clone(),
             hex: sawit_core::agents::PALETTE[0],
             color: hex_color(sawit_core::agents::PALETTE[0]),
@@ -77,6 +96,8 @@ impl Look {
 pub(crate) struct Agents {
     roster: Roster,
     shown: bool,
+    /// A session's lanes show as cursors of their own ([`lanes_shown`]).
+    lanes: bool,
     /// Agents' cursors stay in the screenshots agents take of the page.
     in_screenshots: bool,
     /// Where [`shown`] is kept between launches; `None` in tests, where it lasts the run.
@@ -90,6 +111,7 @@ impl Default for Agents {
         Self {
             roster: Roster::default(),
             shown: true,
+            lanes: true,
             in_screenshots: false,
             file: None,
             epoch: Instant::now(),
@@ -182,6 +204,12 @@ pub fn menu_label(cx: &App) -> &'static str {
     }
 }
 
+/// Whether a session's subagents (its lanes) show as cursors of their own: on unless the user
+/// turned "Show subagents as separate cursors" off.
+pub fn lanes_shown(cx: &App) -> bool {
+    cx.try_global::<Agents>().is_none_or(|agents| agents.lanes)
+}
+
 /// The agent `identity` names, met now: the colour and label it has had since the app first met
 /// it. An op without an identity (from a `sawit-mcp` that predates them) is the anonymous
 /// agent's.
@@ -264,6 +292,7 @@ mod tests {
             name: name.into(),
             label: Some("shop".into()),
             version: None,
+            lane: None,
         }
     }
 

@@ -35,6 +35,7 @@ fn the_agent_round_trips_and_an_op_without_one_still_works() {
             name: "Claude Code".into(),
             label: Some("shop".into()),
             version: None,
+            lane: None,
         }),
         command: Command::Canvas {
             op: serde_json::json!({"op": "get"}),

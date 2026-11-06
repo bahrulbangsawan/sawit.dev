@@ -1,6 +1,7 @@
 //! The agents' presence on the canvas: their ops, pointers, outlines, placeholders and chips
 //! ([`model`]), and the components they build ([`work`]).
 
+mod lanes;
 mod model;
 mod work;
 
@@ -26,6 +27,7 @@ pub(super) fn codex() -> AgentIdentity {
         name: "Codex".into(),
         label: Some("shop".into()),
         version: None,
+        lane: None,
     }
 }
 

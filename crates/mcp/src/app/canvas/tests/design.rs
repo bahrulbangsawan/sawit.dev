@@ -108,6 +108,7 @@ body { margin: 0; padding: 16px; color: #111827; background: #fff; }
 </style></head><body><h1>Account</h1><p class="note">Saved here.</p><p class="legal">Terms.</p>
 <button class="save">Save changes</button></body></html>"#;
     let write = CanvasScreenWriteArgs {
+        agent: None,
         work: begun["work"].as_str().map(Into::into),
         screen: None,
         html: Some(page.into()),
@@ -136,6 +137,7 @@ body { margin: 0; padding: 16px; color: #111827; background: #fff; }
     );
     let begun = answer(&server.canvas_begin(Parameters(button)).await);
     let done = CanvasProgressArgs {
+        agent: None,
         work: begun["work"].as_str().unwrap().into(),
         step: None,
         status: Some("done".into()),
@@ -185,4 +187,20 @@ fn the_guide_is_resources_and_a_prompt() {
         "{text}"
     );
     assert!(design::prompt("other", None).is_err());
+}
+
+/// A canvas tool's `agent` goes with its op as its lane, and only when it is given.
+#[test]
+fn the_agent_argument_is_the_ops_lane() {
+    let op = json!({"op": "add"});
+    assert_eq!(crate::app::canvas::with_lane(op.clone(), None), op);
+    assert_eq!(
+        crate::app::canvas::with_lane(op.clone(), Some(&Value::Null)),
+        op
+    );
+    let lane = json!({"id": "header", "name": "Header agent"});
+    assert_eq!(
+        crate::app::canvas::with_lane(op, Some(&lane)),
+        json!({"op": "add", "lane": lane})
+    );
 }

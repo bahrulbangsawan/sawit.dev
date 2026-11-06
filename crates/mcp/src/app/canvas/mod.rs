@@ -37,6 +37,15 @@ use tab::CanvasTab as _;
 use super::{base64_decode, pretty};
 use crate::{Sawit, blocking, fail, ok, tri};
 
+/// `op` with the lane its tool's `agent` argument names, when it names one: the app shows each
+/// lane as an agent of its own (`sawit_core::agents::Lane`).
+pub(super) fn with_lane(mut op: Value, agent: Option<&Value>) -> Value {
+    if let Some(agent) = agent.filter(|a| !a.is_null()) {
+        op["lane"] = agent.clone();
+    }
+    op
+}
+
 /// The sentence that ends the description of each canvas tool that makes UI: Sawit's design
 /// standard comes first.
 macro_rules! design_guide_first {
@@ -106,6 +115,7 @@ impl Sawit {
     ) -> CallToolResult {
         tri!(a.tab_into_file());
         let op = in_work(json!({ "op": "add", "elements": a.elements }), a.work);
+        let op = with_lane(op, a.agent.as_ref());
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
@@ -146,6 +156,7 @@ impl Sawit {
     ) -> CallToolResult {
         tri!(a.tab_into_file());
         let op = in_work(json!({ "op": "update", "elements": a.elements }), a.work);
+        let op = with_lane(op, a.agent.as_ref());
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
@@ -161,6 +172,7 @@ impl Sawit {
     ) -> CallToolResult {
         tri!(a.tab_into_file());
         let op = in_work(json!({ "op": "delete", "ids": a.ids }), a.work);
+        let op = with_lane(op, a.agent.as_ref());
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
             Err(e) => fail(e),
@@ -328,6 +340,7 @@ impl Sawit {
         let op = json!({
             "op": "begin", "name": a.name, "frame": a.frame, "steps": a.steps, "kind": a.kind,
         });
+        let op = with_lane(op, a.agent.as_ref());
         let begun = match screen {
             true => self.begin_screen(a.project, a.file, op).await,
             false => self.canvas(a.project, a.file, op).await,
@@ -427,6 +440,7 @@ impl Sawit {
             "op": "progress", "work": a.work, "step": a.step, "status": a.status,
             "message": a.message,
         });
+        let op = with_lane(op, a.agent.as_ref());
         let mut v = match self.canvas(a.project, a.file, op).await {
             Ok(v) => v,
             Err(e) => return fail(e),

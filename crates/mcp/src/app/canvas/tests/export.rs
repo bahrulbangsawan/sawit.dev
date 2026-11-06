@@ -19,6 +19,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
     let refused = server
         .canvas_command_tool(CanvasCommandArgs {
             tab: None,
+            agent: None,
             command: "file.exportSvg".into(),
             params: Some(json!({"path": file})),
             file: None,

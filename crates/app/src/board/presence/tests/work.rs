@@ -22,6 +22,7 @@ fn gemini() -> AgentIdentity {
         name: "Gemini CLI".into(),
         label: None,
         version: None,
+        lane: None,
     }
 }
 

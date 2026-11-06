@@ -90,6 +90,7 @@ async fn a_running_app_answers_every_canvas_tool() {
     let failed = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
             tab: None,
+            agent: None,
             elements: vec![json!({"type": "rectangle"})],
             file: None,
             project: project_arg(&project),
@@ -103,6 +104,7 @@ async fn a_running_app_answers_every_canvas_tool() {
     let ran = server
         .canvas_command_tool(CanvasCommandArgs {
             tab: None,
+            agent: None,
             command: "board.sticky".into(),
             params: Some(json!({"x": 0, "y": 0})),
             file: None,
@@ -144,6 +146,7 @@ async fn canvas_command_sends_the_files_it_names_as_the_agent_means_them() {
     let sent = |command: &str, params: Value| {
         let run = server.canvas_command_tool(CanvasCommandArgs {
             tab: None,
+            agent: None,
             command: command.into(),
             params: Some(params),
             file: None,
@@ -263,6 +266,7 @@ async fn a_canvas_tool_takes_one_connection_to_the_app() {
     let added = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
             tab: None,
+            agent: None,
             elements: vec![json!({"type": "sticky", "x": 0, "y": 0, "text": "a"})],
             file: None,
             project: project_arg(&project),

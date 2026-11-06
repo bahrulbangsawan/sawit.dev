@@ -15,6 +15,7 @@ use crate::app::tests::{answer, native, said};
 fn write(project: &Path, screen: &str) -> CanvasScreenWriteArgs {
     CanvasScreenWriteArgs {
         tab: None,
+        agent: None,
         work: None,
         screen: Some(screen.into()),
         html: None,
@@ -112,6 +113,7 @@ async fn with_sawit_closed_screens_are_files_and_frames() {
 
     let unknown = server.canvas_screen_write(Parameters(CanvasScreenWriteArgs {
         tab: None,
+        agent: None,
         html: Some("<p>x</p>".into()),
         ..write(&project, "login")
     }));

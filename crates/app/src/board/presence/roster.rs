@@ -96,10 +96,27 @@ fn list(mut menu: PopupMenu, view: &WeakEntity<BoardView>, cx: &App) -> PopupMen
     let now = cx.background_executor().now();
     let mut agents: Vec<_> = board.agents.agents.iter().collect();
     agents.sort_by_key(|a| std::cmp::Reverse(a.seen));
-    for (ix, agent) in agents.into_iter().enumerate() {
+    // A session's agents (its lanes) together, under "Claude Code · 4 agents".
+    let mut sessions: Vec<&SharedString> = Vec::new();
+    for agent in &agents {
+        if !sessions.contains(&&agent.look.session) {
+            sessions.push(&agent.look.session);
+        }
+    }
+    let grouped: Vec<_> = (sessions.iter())
+        .flat_map(|s| agents.iter().filter(move |a| &&a.look.session == s))
+        .copied()
+        .collect();
+    let mut last_session: Option<SharedString> = None;
+    for (ix, agent) in grouped.into_iter().enumerate() {
         if ix > 0 {
             menu = menu.separator();
         }
+        let lanes = board.agents.lanes_of(&agent.look.session);
+        if lanes > 1 && last_session.as_ref() != Some(&agent.look.session) {
+            menu = menu.label(format!("{} · {lanes} agents", agent.look.client));
+        }
+        last_session = Some(agent.look.session.clone());
         menu = menu.label(agent.look.label.clone());
         let works: Vec<_> = (board.agents.works.iter())
             .filter(|w| w.look.id == agent.look.id)

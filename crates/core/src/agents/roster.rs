@@ -76,7 +76,8 @@ impl Roster {
     /// its label is its name, "name · project" when an agent of that name in another project
     /// is known, and "name 2", "name 3" for another of the same name.
     pub fn meet(&mut self, identity: &AgentIdentity, now: Duration) -> &Known {
-        if let Some(ix) = self.known.iter().position(|k| k.identity.id == identity.id) {
+        let key = identity.key();
+        if let Some(ix) = self.known.iter().position(|k| k.identity.key() == key) {
             let known = &mut self.known[ix];
             known.seen = now;
             // A later op may know its project where the first didn't.
@@ -106,9 +107,9 @@ impl Roster {
         self.known.last().expect("just pushed")
     }
 
-    /// The agent with id `id`, if the roster knows it.
-    pub fn get(&self, id: &str) -> Option<&Known> {
-        self.known.iter().find(|k| k.identity.id == id)
+    /// The agent whose key ([`AgentIdentity::key`]) is `key`, if the roster knows it.
+    pub fn get(&self, key: &str) -> Option<&Known> {
+        self.known.iter().find(|k| k.identity.key() == key)
     }
 
     pub fn all(&self) -> &[Known] {
@@ -116,6 +117,11 @@ impl Roster {
     }
 
     fn label_for(&self, identity: &AgentIdentity) -> String {
+        // A lane that names itself is called so; one that doesn't is its session's client,
+        // numbered ("Claude Code 2") as another session of it would be.
+        if let Some(name) = identity.lane.as_ref().and_then(|l| l.name.as_deref()) {
+            return name.to_string();
+        }
         let name = identity.name.trim();
         let same: Vec<&Known> = (self.known.iter())
             .filter(|k| k.identity.name.trim() == name)

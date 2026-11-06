@@ -376,6 +376,14 @@ impl Presence {
             .map(|a| &a.look)
     }
 
+    /// How many agents of session `session` (its lanes, or itself) show here.
+    pub fn lanes_of(&self, session: &SharedString) -> usize {
+        self.agents
+            .iter()
+            .filter(|a| &a.look.session == session)
+            .count()
+    }
+
     /// Where `look`'s agent's pointer is going, on which page.
     #[cfg(test)]
     pub fn spot(&self, id: &str) -> Option<Spot> {

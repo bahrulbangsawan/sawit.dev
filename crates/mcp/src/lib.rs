@@ -111,6 +111,7 @@ const MAX_OUTPUT: usize = 100_000;
 pub const INSTRUCTIONS: &str = "\
 Sawit is a macOS developer workbench. Before you design, build or review UI on the Sawit canvas, read canvas_design_guide and follow it.
 Build UI as screens (canvas_begin {kind: \"screen\"}, canvas_screen_write): their answers bring the rules and checks.
+Several agents in one session: pass each its own stable `agent` id on canvas tools.
 These tools work without the Sawit app running:
 - Instances: local PostgreSQL servers (create, start, stop, logs, …).
 - Databases: detect; PostgreSQL: list, describe, create, drop, truncate, refresh, export, back up, import CSV; D1 and SQLite: list, describe, export; `query` (always read-only), `execute_sql` (read-write); saved connections, DATABASE_URL in .env. `target`: an instance or connection name (list_connections), or an id from detect_databases.
@@ -124,10 +125,10 @@ These tools work without the Sawit app running:
 - Prompts: the prompt library (with {{variables}}).
 - Files: text search in a folder.
 - Config files: list_config_files lists shell and agent config files (paths only).
-- Dev tools: the Tools page catalog (Homebrew, Bun, uv, …): install, upgrade, uninstall.
-- MCP servers: the MCP page catalog; add or remove one in an AI client's config.
-- New project: stack_options, stack_check, stack_create (Better-T-Stack).
-- Skills: the Skills page's packs per agent: install, update, remove; install_sawit_skills (Sawit's own).
+- Dev tools: the Tools page catalog: install, upgrade, uninstall.
+- MCP servers: add or remove one in an AI client's config.
+- New project: stack_options, stack_check, stack_create.
+- Skills: the Skills page's packs: install, update, remove; install_sawit_skills.
 These need the running app (launch_app starts it; app_state shows windows, tabs and terminals):
 - app_*: open files and folders, panels, layout, tabs, pages (canvas, MCP, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
 - GitHub: only the user signs in to GitHub in Sawit; app_state's `github` says if they have.
