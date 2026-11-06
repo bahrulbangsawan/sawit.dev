@@ -40,3 +40,12 @@ sawitTest("accounts: the Settings tab offers the shell block, the shortcuts and 
   await win.waitFor({ role: "button", name: "Install Shortcuts" });
   await win.waitFor({ name: "Share Between Accounts" });
 });
+
+sawitTest("accounts: the Status Line tab previews the layout and offers presets", async (ctx) => {
+  const { win } = ctx;
+  await ctx.call({ cmd: "open_page", page: "accounts" });
+  await win.click({ role: "button", name: "Status Line" });
+  await win.waitFor({ role: "button", name: "Apply" });
+  await win.waitFor({ role: "button", name: "Start From…" });
+  await win.waitFor({ role: "button", name: "Undo Last Apply" });
+});

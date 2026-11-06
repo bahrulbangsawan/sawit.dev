@@ -31,15 +31,17 @@ impl EventEmitter<AccountsEvent> for AccountsPage {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Accounts,
+    StatusLine,
     Settings,
 }
 
 impl Tab {
-    pub const ALL: &[Tab] = &[Tab::Accounts, Tab::Settings];
+    pub const ALL: &[Tab] = &[Tab::Accounts, Tab::StatusLine, Tab::Settings];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Accounts => "Accounts",
+            Tab::StatusLine => "Status Line",
             Tab::Settings => "Settings",
         }
     }
@@ -53,6 +55,8 @@ pub struct AccountsPage {
     pub(super) renaming: bool,
     pub(super) code: Entity<InputState>,
     tab: Tab,
+    /// The status line layout being edited (the one in use until changed).
+    pub(super) layout: Option<sawit_core::agent_accounts::statusline::Config>,
     focus: FocusHandle,
     _observe: Subscription,
 }
@@ -93,6 +97,7 @@ impl AccountsPage {
             rename: input("Name", window, cx),
             renaming: false,
             tab: Tab::Accounts,
+            layout: None,
             code: input("Paste the code from the sign-in page", window, cx),
             focus: cx.focus_handle(),
         }
@@ -425,6 +430,7 @@ impl Render for AccountsPage {
                     .child(detail)
                     .into_any_element()
             }
+            Tab::StatusLine => self.render_statusline(cx),
             Tab::Settings => self.render_settings(cx),
         };
         let current = self.tab;

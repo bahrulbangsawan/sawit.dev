@@ -13,6 +13,7 @@ const FORBIDDEN: &str = include_str!("../fixtures/auth-status-forbidden-fields.j
 
 mod shared;
 mod shell;
+mod statusline;
 mod usage;
 
 pub(super) fn account(name: &str, dir: &Path, is_default: bool) -> Account {

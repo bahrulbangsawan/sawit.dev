@@ -9,6 +9,7 @@ mod login;
 mod page;
 mod rows;
 mod settings_tab;
+mod statusline_tab;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -243,6 +244,15 @@ impl AccountsModel {
                             s.email.as_deref(),
                         ) {
                             m.plan.insert(id.clone(), p);
+                        }
+                        // The status line shows who the account is: kept current.
+                        let sl = sawit_core::agent_accounts::statusline::load_account(&m.root, &id);
+                        if let Some(mut line) = sl.filter(|l| l.managed) {
+                            line.account = s.email.clone();
+                            line.plan = m.plan.get(&id).cloned();
+                            let _ = sawit_core::agent_accounts::statusline::save_account(
+                                &m.root, &id, &line,
+                            );
                         }
                         m.sign_in.insert(id, SignIn::Known(s));
                     }
