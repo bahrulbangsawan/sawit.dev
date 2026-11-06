@@ -12,8 +12,16 @@ import { activate } from "../lib/host.js";
 import { until } from "../lib/wait.js";
 import { terminalText, waitForTerminalLine, windowState } from "../lib/sawit.js";
 
+/** The browser's state; an empty reply (now and then while six pages load at once) is asked again. */
 async function browser(ctx) {
-  return (await windowState(ctx)).browser;
+  for (let i = 0; ; i++) {
+    try {
+      return (await windowState(ctx)).browser;
+    } catch (e) {
+      if (i >= 3 || !/unexpected reply/.test(e.message)) throw e;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
 }
 
 async function tabs(ctx) {
