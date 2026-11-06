@@ -20,6 +20,7 @@
     const chip = make("div");
     attr(chip, "class", "label");
     const name = make("span");
+    attr(name, "class", "name");
     write(name, short(el));
     const size = make("span");
     attr(size, "class", "size");
@@ -27,9 +28,13 @@
     put(chip, name);
     put(chip, size);
     const k = uiK;
-    css(chip, "left:" + px(Math.max(Math.min(r.left, innerWidth - 120 * k), 4)) + ";top:" +
-      px(r.top < 28 * k ? Math.min(r.bottom + 6, innerHeight - 26 * k) : r.top - 26 * k));
+    const top = px(r.top < 28 * k ? Math.min(r.bottom + 6, innerHeight - 26 * k) : r.top - 26 * k);
+    css(chip, "left:" + px(Math.max(Math.min(r.left, innerWidth - 120 * k), 4)) + ";top:" + top);
     put(layer, chip);
+    // Kept inside the viewport by its own width, once it is laid out: a long selector is cut with
+    // an ellipsis at the viewport's width (the chip's max-width), and its size stays shown.
+    const w = chip.getBoundingClientRect().width;
+    if (w > 0) css(chip, "left:" + px(Math.max(Math.min(r.left, innerWidth - w - 4), 4)) + ";top:" + top);
     drawn[drawn.length] = chip;
   };
   // Each marker sits on its element's top-left corner, kept inside the viewport.

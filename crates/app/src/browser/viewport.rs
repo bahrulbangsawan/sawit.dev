@@ -151,6 +151,7 @@ impl BrowserView {
             engine.set_device_scale(ratio.map(|r| device_scale(r, scale)));
             // The overlay keeps its size on screen: it counter-scales by the page's scale.
             drop(self.page_op(ui_scale_op(scale)));
+            self.mesurer_ui_scale(scale);
         }
     }
 

@@ -85,6 +85,8 @@ pub mod calls {
     pub const HIDE: &str = "return JSON.stringify(SawitMesurer.hide(JSON.parse(json)));";
     /// `json`: `{snapshot, source}`.
     pub const APPLY: &str = "const a = JSON.parse(json); return JSON.stringify(SawitMesurer.apply(a.snapshot, a.source));";
+    /// `json`: the page's scale on screen (a number).
+    pub const UI_SCALE: &str = "return JSON.stringify(SawitMesurer.uiScale(JSON.parse(json)));";
     /// `json`: the props.
     pub const UPDATE: &str = "return JSON.stringify(SawitMesurer.update(JSON.parse(json)));";
     /// `json`: `{name, args}`.

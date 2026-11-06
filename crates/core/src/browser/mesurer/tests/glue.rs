@@ -129,7 +129,7 @@ fn a_mount_builds_the_host_and_renders_mesurer_with_sawits_props() {
         json!({
             "attrs": {"data-sawit-overlay": "", "data-sawit-mesurer": ""},
             "z": "2147483646", "display": "block", "pointer": "none", "parent": true,
-            "mode": "open", "box": "mesurer-extension-root", "sheets": 1
+            "mode": "open", "box": "mesurer-extension-root", "sheets": 2
         })
     );
     assert_eq!(
@@ -263,6 +263,31 @@ fn hide_unmount_and_mount_again() {
     assert_eq!(got["unmountsAfter"], 1);
     assert_eq!(got["updateWhenUnmounted"], json!({"mounted": false}));
     assert_eq!(got["remount"], json!([true, 2, true]));
+}
+
+/// At a device preview's scale the chrome (toolbar, panels, menus, cards) is zoomed by the
+/// scale's inverse, so it keeps its size on screen; at 1 the sheet is empty; a nonsense scale reads
+/// as 1.
+#[test]
+fn the_chrome_keeps_its_size_at_a_preview_scale() {
+    let got = on_stand_in(
+        r#"
+        SawitMesurer.mount({ snapshot: {} }).then(function () {
+            var host = document.getElementById("mesurer-extension-host");
+            out.half = SawitMesurer.uiScale(0.5);
+            var sheet = host.shadow.adoptedStyleSheets[host.shadow.adoptedStyleSheets.length - 1];
+            out.halfCss = [sheet.text.indexOf(".mesurer-toolbar-container") >= 0, sheet.text.indexOf("zoom: 2 !important") >= 0];
+            out.one = SawitMesurer.uiScale(1);
+            out.oneCss = sheet.text;
+            out.bogus = SawitMesurer.uiScale("x");
+        });
+        "#,
+    );
+    assert_eq!(got["half"], json!({"k": 2, "mounted": true}));
+    assert_eq!(got["halfCss"], json!([true, true]));
+    assert_eq!(got["one"], json!({"k": 1, "mounted": true}));
+    assert_eq!(got["oneCss"], "");
+    assert_eq!(got["bogus"], json!({"k": 1, "mounted": true}));
 }
 
 /// mesurer's `writeText` goes to the app, in this world only; `SawitMesurer` is frozen, can't be

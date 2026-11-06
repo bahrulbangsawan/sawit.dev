@@ -33,15 +33,36 @@
   ];
   // What `hide("chrome")` hides: the toolbar, panels, menus and cards; drawings, guides,
   // measurements and comment pins stay.
-  const CHROME_CSS = `
+  const CHROME_SELECTORS = `
     .mesurer-toolbar-container, [data-mesurer-settings-panel], [data-mesurer-layout-guides-panel],
     [data-mesurer-inspect-info-card], [data-mesurer-text-card], [data-mesurer-pen-card],
     [data-mesurer-recording-card], [data-mesurer-comment-hover-card], [data-mesurer-comment-popover],
     [data-mesurer-comment-overflow-menu], [data-mesurer-comment-delete-confirmation],
     [data-mesurer-guide-menu], [data-mesurer-group-controls], [data-mesurer-motion-player],
-    [data-mesurer-format-select], [role="menu"], [role="listbox"], [role="dialog"], [role="tooltip"] {
-      visibility: hidden !important;
-    }`;
+    [data-mesurer-format-select], [role="menu"], [role="listbox"], [role="dialog"], [role="tooltip"]`;
+  const CHROME_CSS = `${CHROME_SELECTORS} { visibility: hidden !important; }`;
+  // The chrome is zoomed by the inverse of the page's scale on screen (a device preview), so it
+  // keeps its size; drawings stay in page pixels.
+  let uiK = 1;
+  let scaleSheet = null;
+  const applyScale = () => {
+    if (!shadow) return;
+    try {
+      if (!scaleSheet) {
+        scaleSheet = new CSSStyleSheet();
+        shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, scaleSheet];
+      }
+      scaleSheet.replaceSync(uiK === 1 ? "" : `${CHROME_SELECTORS} { zoom: ${uiK} !important; }`);
+    } catch (e) {
+      log("warn", "mesurer's scale sheet:", e);
+    }
+  };
+  const uiScale = (scale) => {
+    const s = Number(scale);
+    uiK = Number.isFinite(s) && s >= 0.1 && s <= 4 ? Math.round((1 / s) * 1000) / 1000 : 1;
+    applyScale();
+    return { k: uiK, mounted: Boolean(host) };
+  };
 
   let host = null;
   let shadow = null;
@@ -113,6 +134,7 @@
     }
     lockHost();
     attachHost();
+    applyScale();
     observer = new MutationObserver(relock);
     observeRoots();
     if (document.getElementById(HOST_ID) !== host) log("warn", `another #${HOST_ID} is on the page`);
@@ -126,6 +148,7 @@
     shadow = null;
     container = null;
     chromeSheet = null;
+    scaleSheet = null;
     hiddenMode = "none";
   };
 

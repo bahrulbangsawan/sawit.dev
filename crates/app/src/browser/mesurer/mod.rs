@@ -235,6 +235,7 @@ impl BrowserView {
                             if let Some(engine) = &this.engine {
                                 engine.eval(core::MESURER_GATE_JS);
                             }
+                            this.mesurer_ui_scale(this.scale());
                         } else if this.mesurer.load_gen == generation {
                             // Annotate closed meanwhile.
                             drop(this.world_json(calls::UNMOUNT, "null".into()));
@@ -303,6 +304,14 @@ impl BrowserView {
     }
 
     /// Hides mesurer (`all`, `chrome`) or shows it (`none`); `None` while it isn't mounted.
+    /// Tells mesurer the scale the page is drawn at, so its toolbar and panels keep their size on
+    /// screen at a device preview's scale, as Sawit's overlay does (`ui_scale`).
+    pub(super) fn mesurer_ui_scale(&self, scale: f64) {
+        if self.mesurer.mounted {
+            drop(self.world_json(calls::UI_SCALE, scale.to_string()));
+        }
+    }
+
     pub(super) fn mesurer_hide(
         &self,
         mode: &str,

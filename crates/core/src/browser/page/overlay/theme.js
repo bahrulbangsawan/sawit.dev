@@ -26,7 +26,8 @@
   border-radius: 6px; background: var(--bg); border: 1px solid var(--border); color: var(--fg); white-space: nowrap;
   font: 500 11px/16px var(--mono); box-shadow: 0 2px 8px rgba(0,0,0,.24); max-width: calc((100vw - 16px) / var(--k, 1));
   overflow: hidden; scale: var(--k, 1); transform-origin: 0 0; }
-.label .size { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.label .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.label .size { flex: none; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 .mark { position: absolute; pointer-events: auto; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px;
   border: 2px solid var(--bg); background: var(--primary); color: var(--primary-fg); font: 600 11px/20px var(--font);
   font-variant-numeric: tabular-nums; text-align: center; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); margin: 0;
@@ -90,7 +91,8 @@ button:focus-visible, .kind:focus-visible { outline: 2px solid var(--ring); outl
   transform-origin: 0 0; display: flex; gap: 6px; align-items: baseline; max-width: 280px;
   padding: 2px 8px; border-radius: 10px; background: var(--c); color: #fff; font: 600 11px/16px var(--font); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; box-shadow: 0 0 0 1.5px #fff, 0 2px 6px rgba(0,0,0,.25); }
-.agent .doing { font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.agent .name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.agent .doing { flex: 1 1 0; min-width: 0; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
 .agent .typing { font-weight: 400; }
 .agent.west .pill { left: auto; right: 2px; transform-origin: 100% 0; }
 .agent.north .pill { top: auto; bottom: 4px; transform-origin: 0 100%; }

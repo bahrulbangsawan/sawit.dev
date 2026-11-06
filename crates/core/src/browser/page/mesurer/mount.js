@@ -10,6 +10,7 @@
   //   update(props)              renders again with these props over the ones it has
   //   apply(snapshot, source)    Sawit's files changed: mesurer reloads settings and workspace
   //   hide(mode)                 "all", "chrome" or "none" (see host.js)
+  //   uiScale(scale)             the page's scale on screen: the chrome keeps its size (host.js)
   //   isMounted()
   //   call(name, args)           runs `HANDLERS[name](args)`, which the lanes fill
   //
@@ -91,6 +92,7 @@
         },
         apply: (snapshot, source) => applySnapshot(snapshot, source),
         hide: (mode) => hide(mode),
+        uiScale: (scale) => uiScale(scale),
         isMounted: () => mountedNow,
         call,
       }),
