@@ -1,0 +1,367 @@
+//! The device size control in the browser's toolbar: the menu's button, which names the device
+//! the page imitates, and beside it, while the page is not responsive, the × that goes back to
+//! Responsive in one click.
+
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+use sawit_core::browser::{DEVICES, ViewportMode};
+
+use super::BrowserView;
+use super::viewport::{caption, device_of, rotated};
+
+/// The × beside the device button while the page imitates a device or a size: a click goes back
+/// to Responsive. Nothing in responsive mode.
+pub(super) fn responsive_button(
+    mode: &ViewportMode,
+    view: WeakEntity<BrowserView>,
+) -> Option<impl IntoElement + use<>> {
+    (*mode != ViewportMode::Responsive).then(|| {
+        Button::new("browser-device-responsive")
+            .debug_selector(|| "browser-device-responsive".into())
+            .ghost()
+            .xsmall()
+            .icon(Lucide::X)
+            .accessibility_label("Back to Responsive")
+            .tooltip("Back to Responsive")
+            .on_click(move |_, _, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.set_viewport(ViewportMode::Responsive, cx)
+                });
+            })
+    })
+}
+
+/// The device menu's button: the device the page imitates, by its icon and name (a size of no
+/// device's by its width and height), or Responsive's icon alone. The menu opens under it,
+/// leftwards, as the button sits near the window's right edge. While it is open the page is
+/// hidden ([`BrowserView::set_menu_open`]), or the menu would open unseen behind it.
+pub(super) fn device_button(
+    mode: &ViewportMode,
+    view: WeakEntity<BrowserView>,
+) -> impl IntoElement + use<> {
+    let opened = view.clone();
+    let current = mode.clone();
+    Button::new("browser-device")
+        .debug_selector(|| "browser-device".into())
+        .ghost()
+        .xsmall()
+        .icon(device_icon(mode))
+        .when_some(device_label(mode), |button, label| button.label(label))
+        // Its icon alone says nothing to a screen reader in responsive mode: its name is the
+        // tooltip's, which names the mode or the device and its size.
+        .accessibility_label(device_tooltip(mode))
+        .tooltip(device_tooltip(mode))
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+            device_menu(menu, view.clone(), &current)
+        })
+        .on_open_change(move |open, _, cx| {
+            let _ = opened.update(cx, |this, cx| this.set_menu_open(*open, cx));
+        })
+}
+
+/// What the device button says beside its icon: the device's name, or the size when no device
+/// has it; nothing in responsive mode.
+fn device_label(mode: &ViewportMode) -> Option<String> {
+    match mode {
+        ViewportMode::Responsive => None,
+        ViewportMode::Fixed {
+            name: Some(name), ..
+        } => Some(name.clone()),
+        ViewportMode::Fixed {
+            name: None,
+            width,
+            height,
+        } => Some(format!("{width} × {height}")),
+    }
+}
+
+/// "Device Size: iPhone 15 · 393 × 852", or "Device Size: Responsive".
+fn device_tooltip(mode: &ViewportMode) -> String {
+    match mode {
+        ViewportMode::Responsive => "Device Size: Responsive".into(),
+        ViewportMode::Fixed {
+            name,
+            width,
+            height,
+        } => format!(
+            "Device Size: {}",
+            caption(name.as_deref(), *width, *height, 1.)
+        ),
+    }
+}
+
+/// A phone, a tablet, a laptop or a desktop screen for a device; phone and screen together for
+/// responsive mode.
+fn device_icon(mode: &ViewportMode) -> Lucide {
+    let Some((device, _)) = device_of(mode) else {
+        return match mode {
+            ViewportMode::Responsive => Lucide::MonitorSmartphone,
+            ViewportMode::Fixed { .. } => Lucide::Proportions,
+        };
+    };
+    match device.name {
+        name if name.starts_with("iPad") => Lucide::Tablet,
+        "Laptop" => Lucide::Laptop,
+        "Desktop" => Lucide::Monitor,
+        _ => Lucide::Smartphone,
+    }
+}
+
+/// Which of the menu's items have a check for `mode`: Responsive, the device it imitates in
+/// either orientation (by its place in [`DEVICES`]), and Rotate when that device is on its side.
+fn device_checks(mode: &ViewportMode) -> (bool, Option<usize>, bool) {
+    let device = device_of(mode);
+    (
+        *mode == ViewportMode::Responsive,
+        device.and_then(|(d, _)| DEVICES.iter().position(|each| each.name == d.name)),
+        device.is_some_and(|(_, sideways)| sideways),
+    )
+}
+
+/// Responsive, the devices, and Rotate.
+fn device_menu(
+    menu: PopupMenu,
+    view: WeakEntity<BrowserView>,
+    current: &ViewportMode,
+) -> PopupMenu {
+    let (responsive, device_ix, sideways) = device_checks(current);
+    let set = |mode: ViewportMode| {
+        let view = view.clone();
+        move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            let mode = mode.clone();
+            let _ = view.update(cx, |this, cx| this.set_viewport(mode, cx));
+        }
+    };
+    let mut menu = menu.item(
+        PopupMenuItem::new("Responsive")
+            .checked(responsive)
+            .on_click(set(ViewportMode::Responsive)),
+    );
+    for (ix, device) in DEVICES.iter().enumerate() {
+        let mode = ViewportMode::Fixed {
+            name: Some(device.name.to_string()),
+            width: device.width,
+            height: device.height,
+        };
+        menu = menu.item(
+            PopupMenuItem::new(format!(
+                "{} · {} × {}",
+                device.name, device.width, device.height
+            ))
+            .checked(device_ix == Some(ix))
+            .on_click(set(mode)),
+        );
+    }
+    let rotate = rotated(current);
+    let mut item = PopupMenuItem::new("Rotate")
+        .checked(sideways)
+        .disabled(rotate.is_none());
+    if let Some(mode) = rotate {
+        item = item.on_click(set(mode));
+    }
+    menu.separator().item(item)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, WeakEntity, Window, div, px, size,
+    };
+    use sawit_core::browser::ViewportMode;
+
+    use super::super::BrowserView;
+    use super::{device_button, device_checks, device_label, device_tooltip, responsive_button};
+
+    fn fixed(name: Option<&str>, width: u32, height: u32) -> ViewportMode {
+        ViewportMode::Fixed {
+            name: name.map(str::to_string),
+            width,
+            height,
+        }
+    }
+
+    /// The menu checks the device the page imitates whichever way up it is, with Rotate checked
+    /// while it is on its side; Responsive alone in responsive mode, and nothing for a size no
+    /// device has.
+    #[test]
+    fn the_menu_checks_the_device_either_way_up() {
+        assert_eq!(
+            device_checks(&ViewportMode::Responsive),
+            (true, None, false)
+        );
+        assert_eq!(
+            device_checks(&fixed(Some("iPhone 15"), 393, 852)),
+            (false, Some(0), false)
+        );
+        assert_eq!(
+            device_checks(&fixed(Some("iPhone 15"), 852, 393)),
+            (false, Some(0), true)
+        );
+        // Laptop is wider than tall: turned, it stands up.
+        assert_eq!(
+            device_checks(&fixed(Some("Laptop"), 800, 1280)),
+            (false, Some(4), true)
+        );
+        assert_eq!(
+            device_checks(&fixed(Some("iPad Pro 11″"), 834, 1194)),
+            (false, Some(3), false)
+        );
+        assert_eq!(device_checks(&fixed(None, 500, 700)), (false, None, false));
+    }
+
+    /// The button says which device the page imitates, or its size; its tooltip says the mode in
+    /// words, responsive included.
+    #[test]
+    fn the_button_says_the_device_in_use() {
+        assert_eq!(device_label(&ViewportMode::Responsive), None);
+        assert_eq!(
+            device_tooltip(&ViewportMode::Responsive),
+            "Device Size: Responsive"
+        );
+        let phone = fixed(Some("iPhone 15"), 393, 852);
+        assert_eq!(device_label(&phone).as_deref(), Some("iPhone 15"));
+        assert_eq!(device_tooltip(&phone), "Device Size: iPhone 15 · 393 × 852");
+        let sideways = fixed(Some("iPhone 15"), 852, 393);
+        assert_eq!(
+            device_tooltip(&sideways),
+            "Device Size: iPhone 15 · 852 × 393"
+        );
+        let custom = fixed(None, 500, 700);
+        assert_eq!(device_label(&custom).as_deref(), Some("500 × 700"));
+        assert_eq!(device_tooltip(&custom), "Device Size: 500 × 700");
+    }
+
+    /// The device button at the right end of a toolbar, as the browser draws it.
+    struct Toolbar {
+        browser: WeakEntity<BrowserView>,
+    }
+
+    impl Render for Toolbar {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                gpui_kit::component::h_flex()
+                    .w_full()
+                    .h(px(40.))
+                    .justify_end()
+                    .child(device_button(
+                        &ViewportMode::Responsive,
+                        self.browser.clone(),
+                    )),
+            )
+        }
+    }
+
+    fn page_shown(browser: &Entity<BrowserView>, cx: &mut VisualTestContext) -> bool {
+        cx.update(|_, cx| browser.read(cx).page_shown())
+    }
+
+    /// The webview draws above GPUI, the device menu too, and the menu opens over the page: the
+    /// page is hidden while the menu is open, and shown again once it closes. A menu left open
+    /// when the tab goes off screen leaves the page hidden no longer.
+    #[gpui_kit::test]
+    fn the_page_makes_way_for_the_device_menu(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::super::init(cx);
+        });
+        let made = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let window = cx.open_window(size(px(480.), px(400.)), {
+            let made = made.clone();
+            move |window, cx| {
+                let browser = cx.new(|cx| BrowserView::new(None, None, window, cx));
+                browser.update(cx, |b, _| b.set_visible(true));
+                let toolbar = Toolbar {
+                    browser: browser.downgrade(),
+                };
+                *made.borrow_mut() = Some(browser);
+                toolbar
+            }
+        });
+        let browser: Entity<BrowserView> = made.borrow_mut().take().unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        assert!(page_shown(&browser, &mut cx));
+
+        let button = cx.debug_bounds("browser-device").expect("no device button");
+        cx.simulate_click(button.center(), Default::default());
+        cx.run_until_parked();
+        assert!(
+            !page_shown(&browser, &mut cx),
+            "the menu opened behind the page"
+        );
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(
+            page_shown(&browser, &mut cx),
+            "the menu closed, the page stayed hidden"
+        );
+
+        cx.simulate_click(button.center(), Default::default());
+        cx.run_until_parked();
+        assert!(!page_shown(&browser, &mut cx));
+        cx.update(|_, cx| browser.update(cx, |b, _| b.set_visible(false)));
+        cx.update(|_, cx| browser.update(cx, |b, _| b.set_visible(true)));
+        assert!(
+            page_shown(&browser, &mut cx),
+            "the tab came back to a hidden page"
+        );
+    }
+
+    /// The × beside the device button, as the browser draws it, in `mode`.
+    struct Reset {
+        browser: WeakEntity<BrowserView>,
+        mode: ViewportMode,
+    }
+
+    impl Render for Reset {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .children(responsive_button(&self.mode, self.browser.clone()))
+        }
+    }
+
+    /// Away from Responsive, the × beside the device button goes back to it in one click; in
+    /// responsive mode there is no ×.
+    #[gpui_kit::test]
+    fn the_cross_goes_back_to_responsive(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::super::init(cx);
+        });
+        assert!(responsive_button(&ViewportMode::Responsive, WeakEntity::new_invalid()).is_none());
+        let made = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let window = cx.open_window(size(px(480.), px(400.)), {
+            let made = made.clone();
+            move |window, cx| {
+                let browser = cx.new(|cx| BrowserView::new(None, None, window, cx));
+                let mode = fixed(Some("iPhone 15"), 393, 852);
+                browser.update(cx, |b, cx| b.set_viewport(mode.clone(), cx));
+                let view = Reset {
+                    browser: browser.downgrade(),
+                    mode,
+                };
+                *made.borrow_mut() = Some(browser);
+                view
+            }
+        });
+        let browser: Entity<BrowserView> = made.borrow_mut().take().unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let cross = cx
+            .debug_bounds("browser-device-responsive")
+            .expect("no × in device mode");
+        cx.simulate_click(cross.center(), Default::default());
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| browser.read(cx).viewport.clone()),
+            ViewportMode::Responsive
+        );
+    }
+}

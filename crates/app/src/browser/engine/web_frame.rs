@@ -210,6 +210,43 @@ impl Engine {
         has
     }
 
+    /// Undoes [`Self::set_view_scale`]: the page lays out at the view's own size again
+    /// (`_WKLayoutModeViewSize`, 0), at a view scale of 1.
+    pub fn clear_view_scale(&self) {
+        let wk = self.webview.webview();
+        if wk.respondsToSelector(sel!(_setLayoutMode:))
+            && wk.respondsToSelector(sel!(_setViewScale:))
+        {
+            unsafe {
+                let _: () = msg_send![&*wk, _setViewScale: 1f64];
+                let _: () = msg_send![&*wk, _setLayoutMode: 0isize];
+            }
+        }
+    }
+
+    /// Sets the device scale factor WebKit draws the page at (`_overrideDeviceScaleFactor`,
+    /// private), in place of the screen's: `None` gives the screen's back. The page reads it times
+    /// the view scale as `devicePixelRatio`, and draws that many pixels per CSS px. Whether WebKit
+    /// has it.
+    pub fn set_device_scale(&self, factor: Option<f64>) -> bool {
+        let wk = self.webview.webview();
+        let has = wk.respondsToSelector(sel!(_setOverrideDeviceScaleFactor:));
+        if has {
+            let factor: f64 = factor.unwrap_or(0.);
+            unsafe {
+                let _: () = msg_send![&*wk, _setOverrideDeviceScaleFactor: factor];
+            }
+        }
+        has
+    }
+
+    /// The backing scale of the screen the view is on (2 on a Retina screen), 2 while it is in no
+    /// window.
+    pub fn screen_scale(&self) -> f64 {
+        let wk = self.webview.webview();
+        wk.window().map_or(2., |w| w.backingScaleFactor())
+    }
+
     /// Scales the view as a pinch does (`magnification`): text unclamped, but the page lays out at
     /// the view's own width in points ([`Self::set_view_scale`]).
     pub fn set_magnification(&self, scale: f64) {

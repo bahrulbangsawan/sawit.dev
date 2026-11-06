@@ -14,6 +14,7 @@ mod agents;
 mod annotate;
 mod cover;
 mod design;
+mod device;
 pub(crate) mod engine;
 mod events;
 mod mesurer;

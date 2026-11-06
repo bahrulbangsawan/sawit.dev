@@ -8,6 +8,10 @@ pub struct Device {
     pub name: &'static str,
     pub width: u32,
     pub height: u32,
+    /// The device's pixel ratio, which the page sees as `devicePixelRatio` while the tab
+    /// imitates it. `None` for computers: their pages draw at the Mac's own ratio, as forcing 1×
+    /// would blur them on a Retina screen.
+    pub dpr: Option<f64>,
 }
 
 pub const DEVICES: &[Device] = &[
@@ -15,31 +19,37 @@ pub const DEVICES: &[Device] = &[
         name: "iPhone 15",
         width: 393,
         height: 852,
+        dpr: Some(3.),
     },
     Device {
         name: "Pixel 8",
         width: 412,
         height: 915,
+        dpr: Some(2.625),
     },
     Device {
         name: "iPad mini",
         width: 744,
         height: 1133,
+        dpr: Some(2.),
     },
     Device {
         name: "iPad Pro 11″",
         width: 834,
         height: 1194,
+        dpr: Some(2.),
     },
     Device {
         name: "Laptop",
         width: 1280,
         height: 800,
+        dpr: None,
     },
     Device {
         name: "Desktop",
         width: 1440,
         height: 900,
+        dpr: None,
     },
 ];
 
@@ -81,8 +91,8 @@ pub struct Fit {
 /// `size` (CSS px) at the largest scale up to 1 that fits `area`.
 ///
 /// Scaled down, the view gets a whole number of points (WebKit rounds the
-/// view's size, then `innerWidth` is that size over the zoom, whole), and
-/// the zoom is set so the width comes out a quarter pixel over the device's:
+/// view's size, then `innerWidth` is that size over the scale, whole), and
+/// the scale is set so the width comes out a quarter pixel over the device's:
 /// `innerWidth` is exactly the device width. The height lands within a pixel
 /// or so of the device's.
 pub fn fit(size: (u32, u32), area: (f32, f32)) -> Fit {

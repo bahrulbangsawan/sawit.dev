@@ -59,6 +59,14 @@ fn devices_by_name() {
     }
     assert!(device_by_name("watch").is_none());
     assert_eq!(DEVICES.len(), 6);
+    // Phones and tablets have their pixel ratio; computers keep the screen's.
+    let ratio = |name: &str| device_by_name(name).and_then(|d| d.dpr);
+    assert_eq!(ratio("iPhone 15"), Some(3.));
+    assert_eq!(ratio("Pixel 8"), Some(2.625));
+    assert_eq!(ratio("iPad mini"), Some(2.));
+    assert_eq!(ratio("iPad Pro 11″"), Some(2.));
+    assert_eq!(ratio("Laptop"), None);
+    assert_eq!(ratio("Desktop"), None);
 }
 
 #[test]

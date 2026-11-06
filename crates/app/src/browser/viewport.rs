@@ -86,7 +86,7 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// The CSS viewport the page sees, and the zoom that makes it fit.
+    /// The CSS viewport the page sees, and the scale that makes it fit.
     pub(super) fn viewport_json(&self) -> Value {
         let (width, height, device, scale) = match (&self.viewport, self.bounds) {
             (
@@ -121,17 +121,39 @@ impl BrowserView {
         json!({ "width": width, "height": height, "device": device, "scale": scale })
     }
 
-    /// Puts the web view where the viewport mode wants it, with the zoom
-    /// that keeps the CSS viewport at the device size.
+    /// Puts the web view where the viewport mode wants it, at the scale that keeps the CSS
+    /// viewport at the device size, and with the device's pixel ratio (a computer's size drawn
+    /// smaller, the screen's: never under 1, which would blur it).
+    ///
+    /// The scale is the view's (`Engine::set_view_scale`, as the canvas's web frames do): the
+    /// page lays out at the view's size over the scale and only its drawing shrinks. A page zoom
+    /// would lay it out the same, but WebKit then holds text to its minimum font size in device
+    /// pixels, 9 px over the zoom: 20 CSS px at 0.44, so a 12 px paragraph overlapped its own
+    /// lines. The page zoom stays at 1, and is the fallback only where WebKit lacks a view scale.
     fn apply_layout(&self) {
         if let (Some(engine), Some(bounds)) = (&self.engine, self.bounds) {
             let (frame, scale) = page_frame(frame(bounds), &self.viewport);
             engine.set_frame(frame);
-            engine.set_zoom(scale);
+            if scale < 1. {
+                if engine.set_view_scale(scale) {
+                    engine.set_zoom(1.);
+                } else {
+                    engine.set_zoom(scale);
+                }
+            } else {
+                engine.clear_view_scale();
+                engine.set_zoom(1.);
+            }
+            let ratio = device_ratio(&self.viewport).or_else(|| {
+                // A computer's size drawn smaller keeps the screen's density.
+                (scale < 1.).then(|| engine.screen_scale())
+            });
+            engine.set_device_scale(ratio.map(|r| device_scale(r, scale)));
         }
     }
 
-    /// The page zoom in force (1 unless a device is scaled down).
+    /// The scale the page is drawn at (1 unless a device is scaled down): CSS px to the view's
+    /// points.
     pub(super) fn scale(&self) -> f64 {
         self.bounds
             .map_or(1., |b| page_frame(frame(b), &self.viewport).1)
@@ -192,7 +214,7 @@ impl BrowserView {
     }
 }
 
-/// Where the web view goes in `bounds`, and the page zoom: the page itself
+/// Where the web view goes in `bounds`, and the scale the page is drawn at: the page itself
 /// in responsive mode, else the device size scaled to fit and centered
 /// below the caption band.
 pub(super) fn page_frame(bounds: Frame, mode: &ViewportMode) -> (Frame, f64) {
@@ -262,6 +284,19 @@ pub(super) fn device_of(mode: &ViewportMode) -> Option<(&'static Device, bool)> 
         size if size == (device.height, device.width) => Some((device, true)),
         _ => None,
     }
+}
+
+/// The pixel ratio the page gets in `mode`: its device's (a phone's or a tablet's, either way
+/// up), else the screen's own (`None`), for computers, sizes of no device's and responsive mode.
+pub(super) fn device_ratio(mode: &ViewportMode) -> Option<f64> {
+    device_of(mode).and_then(|(device, _)| device.dpr)
+}
+
+/// The device scale factor WebKit draws at so a page drawn at `scale` reads `ratio` as its
+/// `devicePixelRatio` (WebKit gives the page the factor times the view scale), and draws `ratio`
+/// pixels per CSS px, as the device does.
+pub(super) fn device_scale(ratio: f64, scale: f64) -> f64 {
+    ratio / scale.max(0.01)
 }
 
 /// The same size with width and height swapped; nothing in responsive mode.

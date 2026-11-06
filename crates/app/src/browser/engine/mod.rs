@@ -223,7 +223,9 @@ impl Engine {
         let _ = self.webview.set_visible(visible);
     }
 
-    /// Page zoom: 1.0 is the page's own size.
+    /// Page zoom (`pageZoom`): 1.0 is the page's own size. Below about 0.65 WebKit holds text to
+    /// its minimum font size, so a device preview scales the view instead
+    /// ([`Self::set_view_scale`]).
     pub fn set_zoom(&self, scale: f64) {
         let _ = self.webview.zoom(scale);
     }
@@ -234,7 +236,7 @@ impl Engine {
 
     /// Captures the view (or `css_rect` of it, in CSS px) as a PNG, `css_width` px wide at the
     /// display's scale; [`Capture::at_1x`] brings it to that size. The rect is scaled by `scale`
-    /// (the page zoom) into the view's points.
+    /// (the scale the page is drawn at, a device's view scale) into the view's points.
     pub fn snapshot(
         &self,
         css_rect: Option<(f64, f64, f64, f64)>,

@@ -65,6 +65,19 @@ export const PROJECT_FILES = {
     // Every key the page receives, for the focus spec: keys meant for a terminal must never land here.
     "window.__keys = []; addEventListener('keydown', (e) => window.__keys.push(e.key), true);</script>\n" +
     "</body></html>\n",
+  // Small text in tight lines, for the device preview: WebKit's minimum font size must not
+  // inflate it there (lines would overlap).
+  "site/text.html":
+    '<!doctype html>\n<html><head><meta charset="utf-8"><title>Small Text</title>\n' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+    "<style>body{margin:16px;font-family:-apple-system,sans-serif}" +
+    ".s12{font-size:12px;line-height:16px}.s14{font-size:14px;line-height:20px}" +
+    "h1{font-size:28px;line-height:32px}</style></head>\n" +
+    '<body><h1 id="title">Small text</h1>\n' +
+    '<p class="s12">' + "Twelve pixel text on sixteen pixel lines. ".repeat(8) + "</p>\n" +
+    '<p class="s14">' + "Fourteen pixel text on twenty pixel lines. ".repeat(8) + "</p>\n" +
+    '<p><a id="link" href="index.html">A link to the fixture site</a></p>\n' +
+    "</body></html>\n",
   ".nyawit/.keep": "",
 };
 
@@ -103,7 +116,18 @@ export async function serveSite(world) {
   const dir = path.join(world.project, "site");
   const sockets = new Set();
   const server = http.createServer(async (req, res) => {
-    const rel = decodeURIComponent(new URL(req.url, "http://x").pathname);
+    const at = new URL(req.url, "http://x");
+    const rel = decodeURIComponent(at.pathname);
+    // A page that takes its time: its head at once, its body after `ms` (default 4 s), so the
+    // browser shows it loading meanwhile.
+    if (rel === "/slow") {
+      const ms = Number(at.searchParams.get("ms") ?? 4000);
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.write('<!doctype html>\n<html><head><meta charset="utf-8"><title>Slow Page</title></head>\n<body>');
+      const timer = setTimeout(() => res.end('<h1 id="done">Loaded at last</h1></body></html>\n'), ms);
+      res.on("close", () => clearTimeout(timer));
+      return;
+    }
     const file = path.join(dir, rel.endsWith("/") ? `${rel}index.html` : rel);
     if (!file.startsWith(dir)) {
       res.writeHead(403).end();

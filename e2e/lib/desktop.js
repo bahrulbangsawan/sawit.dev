@@ -234,6 +234,27 @@ export class Window {
     );
   }
 
+  /** Resizes the window to `width` × `height` points and waits for it to settle. */
+  async resize(width, height) {
+    await this.desktop
+      .call(["resize-window", "--window-id", this.id, "--width", String(width), "--height", String(height)])
+      .catch((e) => {
+        if (e.envelope?.error?.disposition?.delivery === "not_delivered") throw e;
+      });
+    let last = null;
+    await until(
+      async () => {
+        const data = await this.desktop.call(["list-windows"]);
+        const windows = Array.isArray(data) ? data : (data.windows ?? []);
+        const now = JSON.stringify(windows.find((w) => w.id === this.id)?.bounds ?? null);
+        const settled = now === last && now !== "null";
+        last = now;
+        return settled;
+      },
+      { timeoutMs: 10_000, intervalMs: 300, what: "the window to settle at its new size" },
+    );
+  }
+
   /** The whole tree, every node with its role and name (text the app exposes as labels too). */
   async snapshot({ bounds = false, surface } = {}) {
     const args = ["snapshot", "--window-id", this.id, "--compact", "--max-depth", "50"];
