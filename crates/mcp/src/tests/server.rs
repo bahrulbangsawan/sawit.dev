@@ -141,6 +141,8 @@ fn every_tool_is_routed() {
         "terminal_read",
         "terminal_input",
         "terminal_rename",
+        "terminal_lock",
+        "terminal_pin",
         "terminal_close",
         "canvas_design_guide",
         "canvas_get",

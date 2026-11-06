@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod lock_and_pin;
 mod naming_and_creating;
 
 #[test]

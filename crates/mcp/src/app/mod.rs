@@ -30,8 +30,8 @@ pub use panels::{
     ScriptArgs, SshConnectArgs,
 };
 pub use terminal::{
-    TerminalCloseArgs, TerminalInputArgs, TerminalReadArgs, TerminalRenameArgs, TerminalRunArgs,
-    TerminalSplitArgs,
+    TerminalCloseArgs, TerminalInputArgs, TerminalLockArgs, TerminalPinArgs, TerminalReadArgs,
+    TerminalRenameArgs, TerminalRunArgs, TerminalSplitArgs,
 };
 pub use window::{LayoutArgs, OpenArgs, PageArgs, PanelArgs, TabArgs, WindowArgs};
 

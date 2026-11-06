@@ -34,6 +34,14 @@ pub struct TabState {
     pub zoomed: Option<PaneId>,
     /// Settings per pane.
     pub panes: BTreeMap<PaneId, PaneMeta>,
+    /// Locked: the tab can't be closed (by a click, a key, a Close Others or an agent) until
+    /// it is unlocked. Typing in it stays allowed.
+    #[serde(default)]
+    pub locked: bool,
+    /// Pinned: the tab sits at the start of the strip, drawn compact, and comes back when its
+    /// project opens again ([`super::pins`]).
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 impl TabState {
@@ -45,6 +53,8 @@ impl TabState {
             focused: first,
             zoomed: None,
             panes: BTreeMap::from([(first, PaneMeta::default())]),
+            locked: false,
+            pinned: false,
         }
     }
 

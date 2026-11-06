@@ -18,7 +18,8 @@ impl TerminalPanel {
     /// project opens, shells idle at their prompt follow it: untouched ones
     /// are reopened there (their prompt may not be drawn yet), used ones
     /// `cd`. Busy ones are left alone, and so are all shells on later
-    /// switches. Tabs of a closed project stay open, out of any group.
+    /// switches. Tabs of a closed project stay open, out of any group. A project that opens gets
+    /// its pinned tabs back ([`Self::restore_pins`]).
     pub fn set_projects(
         &mut self,
         projects: Vec<PathBuf>,
@@ -26,6 +27,12 @@ impl TerminalPanel {
         cx: &mut Context<Self>,
     ) {
         let first = self.cwd.is_none() && active.is_some();
+        // Projects that just opened get their pinned tabs back.
+        let opened: Vec<PathBuf> = projects
+            .iter()
+            .filter(|p| !self.projects.contains(p))
+            .cloned()
+            .collect();
         self.projects = projects.into();
         self.cwd = active;
         self.collapsed.retain(|r| self.projects.contains(r));
@@ -68,22 +75,28 @@ impl TerminalPanel {
                 }
             }
         }
+        for project in &opened {
+            self.restore_pins(project, cx);
+        }
         self.regroup(cx);
         cx.notify();
     }
 
-    /// Where a tab of `group` goes: at the end of that group's tabs.
-    fn insert_at(&self, group: Option<&Path>, cx: &App) -> usize {
-        insert_index(&self.slots(cx), false, group)
+    /// Where a tab of `group` goes: at the end of that group's tabs, or of the pinned ones.
+    fn insert_at(&self, pinned: bool, group: Option<&Path>, cx: &App) -> usize {
+        insert_index(&self.slots(cx), pinned, group)
     }
 
-    /// Every tab as grouping sees it, in strip order: terminal tabs are never pinned.
+    /// Every tab as grouping sees it, in strip order: pinned tabs first, in no group's run.
     pub(super) fn slots<'a>(&self, cx: &'a App) -> Vec<Slot<'a>> {
         self.tabs
             .iter()
-            .map(|t| Slot {
-                pinned: false,
-                group: t.read(cx).group.as_deref(),
+            .map(|t| {
+                let t = t.read(cx);
+                Slot {
+                    pinned: t.state.pinned,
+                    group: t.group.as_deref(),
+                }
             })
             .collect()
     }
@@ -96,8 +109,11 @@ impl TerminalPanel {
 
     /// Adds a tab at its group's end; returns its index.
     fn insert(&mut self, tab: Entity<TerminalTab>, cx: &App) -> usize {
-        let group = tab.read(cx).group.clone();
-        let at = self.insert_at(group.as_deref(), cx);
+        let (pinned, group) = {
+            let t = tab.read(cx);
+            (t.state.pinned, t.group.clone())
+        };
+        let at = self.insert_at(pinned, group.as_deref(), cx);
         self.tabs.insert(at, tab);
         at
     }
@@ -113,7 +129,7 @@ impl TerminalPanel {
     }
 
     /// Puts every tab back in group order, keeping the active one.
-    fn regroup(&mut self, cx: &App) {
+    pub(super) fn regroup(&mut self, cx: &App) {
         let active = self.tabs.get(self.active).cloned();
         for tab in std::mem::take(&mut self.tabs) {
             self.insert(tab, cx);

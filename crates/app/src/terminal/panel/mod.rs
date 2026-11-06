@@ -6,9 +6,11 @@ mod control;
 pub(super) mod ending;
 mod groups;
 mod jobs;
+mod lock_pin;
 mod open;
 mod render;
 pub(super) mod running;
+mod tab_menu;
 #[cfg(test)]
 mod tests;
 
@@ -26,6 +28,7 @@ use sawit_core::terminal::{AgentKind, Command, PaneId};
 use super::tab::{TabEvent, TerminalTab};
 use super::view::TerminalView;
 pub use ending::stop_all_now;
+pub use lock_pin::CloseScope;
 use open::shell_name;
 
 pub struct TerminalPanel {
@@ -44,6 +47,10 @@ pub struct TerminalPanel {
     /// is scrolled to; a fold or a scroll by hand leaves the strip alone.
     scrolled_to: Option<(EntityId, usize)>,
     error: Option<String>,
+    /// A short note over the tabs: what a close kept, or why a locked tab didn't close.
+    notice: Option<String>,
+    /// Where each project's pinned tabs are kept ([`lock_pin`]); unset in tests.
+    pins_file: Option<PathBuf>,
     /// Whether the panel fills the window; kept in sync by the workspace.
     pub maximized: bool,
     /// The window the panel last drew in, for acting on a tab's requests.
@@ -130,6 +137,8 @@ impl TerminalPanel {
             tab_scroll: ScrollHandle::new(),
             scrolled_to: None,
             error: None,
+            notice: None,
+            pins_file: None,
             maximized: false,
             window: None,
             remotes: None,
@@ -237,6 +246,20 @@ impl TerminalPanel {
         }
     }
 
+    /// Closes the tab at `ix` because the user closed it: a pinned one is forgotten with it.
+    fn close_by_user(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let pinned_in = self
+            .tabs
+            .get(ix)
+            .map(|t| t.read(cx))
+            .filter(|t| t.state.pinned)
+            .and_then(|t| t.group.clone());
+        self.close(ix, cx);
+        if let Some(project) = pinned_in {
+            self.save_pins(&project, cx);
+        }
+    }
+
     /// Closes `tab` for the user (the strip's ×, the tab's menu). When the keyboard was in it
     /// (`had_keyboard`), the tab shown next takes it; otherwise it stays where it is.
     fn close_for_user(
@@ -249,9 +272,15 @@ impl TerminalPanel {
         let Some(ix) = self.index_of(tab) else {
             return;
         };
+        if self.is_locked(ix, cx) {
+            let label = self.tabs[ix].read(cx).label(cx);
+            self.notice = Some(format!("{label} is locked. Unlock it to close it."));
+            cx.notify();
+            return;
+        }
         let running = self.running_in_tab(ix, cx);
         if running.is_empty() {
-            self.close(ix, cx);
+            self.close_by_user(ix, cx);
             if had_keyboard {
                 self.focus_active(window, cx);
             }
@@ -272,7 +301,7 @@ impl TerminalPanel {
             }
             let _ = this.update_in(cx, |this, window, cx| {
                 if let Some(ix) = this.index_of(&tab) {
-                    this.close(ix, cx);
+                    this.close_by_user(ix, cx);
                     if had_keyboard {
                         this.focus_active(window, cx);
                     }
@@ -296,6 +325,10 @@ impl TerminalPanel {
                 }
             }
             TabEvent::Changed => cx.notify(),
+            TabEvent::Refused(why) => {
+                self.notice = Some(why.clone());
+                cx.notify();
+            }
             TabEvent::Reconnect(pane) => {
                 let pane = *pane;
                 self.in_window(cx, move |this, window, cx| {
@@ -328,8 +361,7 @@ impl TerminalPanel {
         });
     }
 
-    /// How many tabs are open (for tests).
-    #[cfg(test)]
+    /// How many tabs are open.
     pub fn tab_count(&self) -> usize {
         self.tabs.len()
     }

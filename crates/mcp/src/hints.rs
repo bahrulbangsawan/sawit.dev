@@ -158,6 +158,8 @@ const DESTRUCTIVE: &[&str] = &[
 /// (the app, an instance, a session). Not read-only, and not destructive ([`hints`]). Every tool
 /// is in one of [`READ_ONLY`], [`DESTRUCTIVE`] and this list, so a new one has to be placed.
 const ADDS: &[&str] = &[
+    "terminal_lock",
+    "terminal_pin",
     "create_instance",
     "start_instance",
     "create_database",

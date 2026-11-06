@@ -5,6 +5,7 @@ mod agents;
 mod input;
 mod layout;
 mod palette;
+pub mod pins;
 pub mod reap;
 mod session;
 mod tab;

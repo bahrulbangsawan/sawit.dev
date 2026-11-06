@@ -195,6 +195,24 @@ impl Workspace {
                     .update(cx, |t, cx| t.close_tab(tab, pane, window, cx))?;
                 done(json!({ "closed": tab }))
             }
+            Command::TerminalLock { tab, locked } => {
+                if tab >= self.terminal.read(cx).tab_count() {
+                    return Err(format!("There is no terminal {tab}."));
+                }
+                let locked = self
+                    .terminal
+                    .update(cx, |t, cx| t.set_locked(tab, locked, cx));
+                done(json!({ "terminal": tab, "locked": locked }))
+            }
+            Command::TerminalPin { tab, pinned } => {
+                if tab >= self.terminal.read(cx).tab_count() {
+                    return Err(format!("There is no terminal {tab}."));
+                }
+                let (pinned, at) = self
+                    .terminal
+                    .update(cx, |t, cx| t.set_pinned(tab, pinned, cx));
+                done(json!({ "terminal": at, "pinned": pinned }))
+            }
             Command::TerminalRename { tab, pane, name } => done(
                 self.terminal
                     .update(cx, |t, cx| t.rename(tab, pane, &name, cx))?,

@@ -85,6 +85,11 @@ impl AppPaths {
         self.root.join("recent.toml")
     }
 
+    /// Each project's pinned terminal tabs ([`crate::terminal::pins`]).
+    pub fn terminal_pins_file(&self) -> PathBuf {
+        self.root.join("terminal-pins.json")
+    }
+
     /// Disposable files (e.g. PNG copies of HEIC images).
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")

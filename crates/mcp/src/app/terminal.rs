@@ -107,6 +107,30 @@ pub struct TerminalCloseArgs {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TerminalLockArgs {
+    #[schemars(
+        description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state)"
+    )]
+    pub tab: usize,
+    #[schemars(
+        description = "true locks it, false unlocks it; left out, it flips. Unlock only a tab the user asked you to: the lock is theirs"
+    )]
+    pub locked: Option<bool>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TerminalPinArgs {
+    #[schemars(
+        description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state)"
+    )]
+    pub tab: usize,
+    #[schemars(description = "true pins it, false unpins it; left out, it flips")]
+    pub pinned: Option<bool>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TerminalRenameArgs {
     #[schemars(
         description = "Terminal tab index, as terminal_run, app_run_script and app_ssh_connect return it (or from app_state)"
@@ -294,7 +318,35 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Close a terminal tab, or just one pane of it, ending whatever runs there: a dev server, an SSH session, the user's own agent. DESTRUCTIVE: while a program runs there or the user is typing in it, the close is refused unless confirm is true, and the refusal names what runs; shells waiting at their prompt close without it. Name the tab, and a pane to close only that one, as terminal_run or app_state give them"
+        description = "Lock a terminal tab so that nothing closes it (the user's close button or keys, Close Others and Close All, terminal_close) until it is unlocked, or unlock it; typing in it stays allowed, and its tab shows a lock. Use it on the tab running your long-lived dev server or watcher. Returns the tab and whether it is locked. Needs the app running"
+    )]
+    pub(super) async fn terminal_lock(
+        &self,
+        Parameters(a): Parameters<TerminalLockArgs>,
+    ) -> CallToolResult {
+        let command = Command::TerminalLock {
+            tab: a.tab,
+            locked: a.locked,
+        };
+        self.app_tool(a.project, command).await
+    }
+
+    #[tool(
+        description = "Pin a terminal tab to the start of the tab strip, drawn compact, or unpin it. A pinned tab comes back (a fresh shell in its folder, with its name and lock) when its project opens again. Pinning moves the tab: returns its new index and whether it is pinned. Needs the app running"
+    )]
+    pub(super) async fn terminal_pin(
+        &self,
+        Parameters(a): Parameters<TerminalPinArgs>,
+    ) -> CallToolResult {
+        let command = Command::TerminalPin {
+            tab: a.tab,
+            pinned: a.pinned,
+        };
+        self.app_tool(a.project, command).await
+    }
+
+    #[tool(
+        description = "Close a terminal tab, or just one pane of it, ending whatever runs there: a dev server, an SSH session, the user's own agent. DESTRUCTIVE: while a program runs there or the user is typing in it, the close is refused unless confirm is true, and the refusal names what runs; shells waiting at their prompt close without it. A locked tab is always refused, confirm or not, until it is unlocked. Name the tab, and a pane to close only that one, as terminal_run or app_state give them"
     )]
     pub(super) async fn terminal_close(
         &self,

@@ -6,20 +6,24 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_kit::component::menu::ContextMenuExt;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::terminal::{AgentKind, SplitDir};
 
-use super::{TerminalPanel, ToggleMaximize};
+use super::{TerminalPanel, ToggleMaximize, tab_menu};
 use crate::states::{Banner, Placeholder};
 use crate::tab_groups::{group_header, group_stripe, project_name};
 use crate::tabs::{Drawn, strip};
 use crate::terminal::agents;
 use crate::terminal::tab::TerminalTab;
 use crate::terminal::view::TerminalView;
-use crate::terminal::{RenameTab, SplitDown, SplitRight};
+use crate::terminal::{SplitDown, SplitRight};
+
+/// The widest a pinned tab's name gets.
+const PINNED_W: f32 = 80.;
 
 impl TerminalPanel {
     /// The header in front of the run of `root`'s tabs that starts at tab `first`, `count` long:
@@ -103,11 +107,15 @@ impl Render for TerminalPanel {
             if active {
                 active_child = Some(tabs.len());
             }
-            let projects = self.projects.clone();
-            let weak = weak.clone();
-            let keys_in = keys_in.clone();
+            let menu_for = tab_menu::MenuFor {
+                panel: weak.clone(),
+                tab: tab.downgrade(),
+                projects: self.projects.clone(),
+                group: group.clone(),
+                keys_in: keys_in.clone(),
+            };
+            let menu_state = self.menu_state(ix, cx);
             let this_tab = tab.downgrade();
-            let grouped = group.is_some();
             // The tab is renamed in its label; so is a one-pane tab's pane
             // that was being renamed when the tab's other panes closed.
             let rename = t.tab_rename_field(tab.downgrade()).or_else(|| {
@@ -231,27 +239,64 @@ impl Render for TerminalPanel {
                     .child(icon)
                     .map(|el| match rename {
                         Some(field) => el.child(field),
-                        None => el.child(label),
+                        // A pinned tab is compact: its name cut short, whole in the tooltip.
+                        None if menu_state.pinned => el.child(
+                            div()
+                                .max_w(px(PINNED_W))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .child(label.clone()),
+                        ),
+                        None => el.child(label.clone()),
                     })
-                    .child(
-                        Button::new(("close-term", ix))
-                            .ghost()
-                            .xsmall()
-                            .icon(Lucide::X)
-                            .accessibility_label("Close Terminal")
-                            .debug_selector(move || format!("close-term-{ix}"))
-                            .on_click(cx.listener({
-                                let tab = this_tab.clone();
-                                move |this, _, window, cx| {
-                                    // The tab under the × would activate itself next.
-                                    cx.stop_propagation();
-                                    let had_keyboard = tab
-                                        .upgrade()
-                                        .is_some_and(|t| t.read(cx).has_focus(window, cx));
-                                    this.close_for_user(&tab, had_keyboard, window, cx)
-                                }
-                            })),
-                    )
+                    .when(menu_state.pinned, |el| {
+                        el.child(
+                            Icon::new(Lucide::Pin)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                    })
+                    .when(menu_state.locked, |el| {
+                        // Locked: a lock where the × was; its menu unlocks it.
+                        el.child(
+                            div()
+                                .id(("term-locked", ix))
+                                .role(Role::Image)
+                                .aria_label("Locked")
+                                .debug_selector(move || format!("term-locked-{ix}"))
+                                .child(
+                                    Icon::new(Lucide::Lock)
+                                        .xsmall()
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                                .tooltip(|window, cx| {
+                                    Tooltip::new("Locked: Unlock It in Its Menu to Close It")
+                                        .build(window, cx)
+                                }),
+                        )
+                    })
+                    .when(!menu_state.locked, |el| {
+                        el.child(
+                            Button::new(("close-term", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(Lucide::X)
+                                .accessibility_label("Close Terminal")
+                                .debug_selector(move || format!("close-term-{ix}"))
+                                .on_click(cx.listener({
+                                    let tab = this_tab.clone();
+                                    move |this, _, window, cx| {
+                                        // The tab under the × would activate itself next.
+                                        cx.stop_propagation();
+                                        let had_keyboard = tab
+                                            .upgrade()
+                                            .is_some_and(|t| t.read(cx).has_focus(window, cx));
+                                        this.close_for_user(&tab, had_keyboard, window, cx)
+                                    }
+                                })),
+                        )
+                    })
                     .when_some(color, |el, color| el.child(group_stripe(color, active)))
                     .on_click(cx.listener({
                         let tab = this_tab.clone();
@@ -268,72 +313,11 @@ impl Render for TerminalPanel {
                     .context_menu(move |menu, window, cx| {
                         // The menu has the keyboard from here on: whether the tab had it
                         // before decides where it goes when the tab closes.
-                        let had_keyboard = this_tab
+                        let had_keyboard = menu_for
+                            .tab
                             .upgrade()
                             .is_some_and(|t| t.read(cx).has_focus(window, cx));
-                        let rename_weak = weak.clone();
-                        let rename_tab = this_tab.clone();
-                        let move_weak = weak.clone();
-                        let move_tab = this_tab.clone();
-                        // The projects the tab can move to: every one but its own.
-                        let others: Vec<PathBuf> = projects
-                            .iter()
-                            .filter(|p| Some(*p) != group.as_ref())
-                            .cloned()
-                            .collect();
-                        // Its keys are the terminal's: they show as a pane on screen has them.
-                        let menu = match &*keys_in {
-                            Some(pane) => menu.action_context(pane.clone()),
-                            None => menu,
-                        }
-                        .item(
-                            PopupMenuItem::new("Rename Tab")
-                                .action(Box::new(RenameTab))
-                                .on_click(move |_, window, cx| {
-                                    let _ = rename_weak.update(cx, |p, cx| {
-                                        if let Some(ix) = p.index_of(&rename_tab) {
-                                            p.rename_tab(ix, window, cx)
-                                        }
-                                    });
-                                }),
-                        );
-                        let menu = menu.when(!others.is_empty(), |menu| {
-                            menu.submenu("Move to Project", window, cx, move |mut menu, _, _| {
-                                for root in &others {
-                                    let weak = move_weak.clone();
-                                    let tab = move_tab.clone();
-                                    let to = root.clone();
-                                    menu =
-                                        menu.item(PopupMenuItem::new(project_name(root)).on_click(
-                                            move |_, _, cx| {
-                                                let _ = weak.update(cx, |t, cx| {
-                                                    t.move_to_group(&tab, Some(to.clone()), cx)
-                                                });
-                                            },
-                                        ));
-                                }
-                                menu
-                            })
-                        });
-                        let ungroup = weak.clone();
-                        let ungroup_tab = this_tab.clone();
-                        let close = weak.clone();
-                        let close_tab = this_tab.clone();
-                        menu.when(grouped, |menu| {
-                            menu.item(PopupMenuItem::new("Remove from Group").on_click(
-                                move |_, _, cx| {
-                                    let _ = ungroup.update(cx, |t, cx| {
-                                        t.move_to_group(&ungroup_tab, None, cx)
-                                    });
-                                },
-                            ))
-                        })
-                        .separator()
-                        .item(PopupMenuItem::new("Close").on_click(move |_, window, cx| {
-                            let _ = close.update(cx, |t, cx| {
-                                t.close_for_user(&close_tab, had_keyboard, window, cx)
-                            });
-                        }))
+                        tab_menu::build(&menu_for, menu_state, had_keyboard, menu, window, cx)
                     })
                     .into_any_element()
             });
@@ -415,6 +399,14 @@ impl Render for TerminalPanel {
                             ),
                     ),
             )
+            .when_some(self.notice.clone(), |el, note| {
+                el.child(Banner::info("term-notice", note).on_dismiss(cx.listener(
+                    |this, _, _, cx| {
+                        this.notice = None;
+                        cx.notify();
+                    },
+                )))
+            })
             .when(!self.tabs.is_empty(), |el| {
                 el.when_some(self.error.clone(), |el, e| {
                     el.child(Banner::error("term-error", e).on_dismiss(cx.listener(

@@ -21,6 +21,8 @@ impl Workspace {
         // SSH sessions reconnect with their server's settings as they are now.
         let saved_servers = ssh_store.downgrade();
         terminal.update(cx, |t, _| {
+            // Each project's pinned terminal tabs come back when it opens again.
+            t.set_pins_file(sawit_core::instances::AppPaths::default_macos().terminal_pins_file());
             t.set_remote_source(move |key, cx| {
                 let store = saved_servers.upgrade().ok_or("Sawit is closing.")?;
                 store.update(cx, |s, cx| s.remote(key, cx))

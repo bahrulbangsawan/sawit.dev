@@ -144,6 +144,8 @@ impl TerminalPanel {
                     "script": v.job.as_ref().map(|j| j.name.clone()),
                     "ssh": v.remote.as_ref().map(|r| r.name.clone()),
                     "project": t.group,
+                    "locked": t.state.locked,
+                    "pinned": t.state.pinned,
                     "panes": panes,
                 })
             })
@@ -286,6 +288,14 @@ impl TerminalPanel {
         cx: &App,
     ) -> Result<Option<String>, String> {
         let ix = self.tab_ix(Some(ix))?;
+        // A lock is the user's: no confirm overrides it.
+        if self.tabs[ix].read(cx).state.locked {
+            return Err(format!(
+                "Terminal {ix} is locked: the user locked it so that nothing closes it. It \
+                 stays open until it is unlocked (its tab's menu, or terminal_lock with \
+                 locked: false when the user asks for that)."
+            ));
+        }
         let panes: Vec<PaneId> = match pane {
             None => self.tabs[ix].read(cx).views().map(|(id, _)| id).collect(),
             Some(_) => vec![self.pane_of(ix, pane, cx)?.0],

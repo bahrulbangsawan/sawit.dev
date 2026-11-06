@@ -305,6 +305,21 @@ pub enum Command {
         pane: Option<usize>,
         name: String,
     },
+    /// Locks a terminal tab so nothing closes it (the user's ×, a key, Close Others, an agent's
+    /// TerminalClose) until it is unlocked, or unlocks it: `locked`, or the other way round
+    /// when it is left out.
+    TerminalLock {
+        tab: usize,
+        #[serde(default)]
+        locked: Option<bool>,
+    },
+    /// Pins a terminal tab to the start of the strip (it comes back when its project opens
+    /// again), or unpins it: `pinned`, or the other way round when left out.
+    TerminalPin {
+        tab: usize,
+        #[serde(default)]
+        pinned: Option<bool>,
+    },
     /// Creates a project with the New Project page, as Create Project does: the page shows
     /// `stack` (resolved, named by its `project_name`), runs its create in a terminal tab of its
     /// own in `location`, and opens the project once it is made, or, with `open` false (Create

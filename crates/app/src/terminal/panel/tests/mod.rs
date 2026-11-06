@@ -3,6 +3,7 @@
 mod control;
 mod ending;
 mod jobs;
+mod lock_pin;
 mod run;
 mod running;
 mod split;

@@ -168,7 +168,7 @@ impl TerminalPanel {
 
     /// Starts `cmd` in the panel's directory (else `$HOME`) in a new tab,
     /// without adding it to the strip.
-    fn spawn(
+    pub(super) fn spawn(
         &mut self,
         mut cmd: Command,
         title: &str,

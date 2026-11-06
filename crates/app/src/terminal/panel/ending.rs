@@ -56,6 +56,8 @@ impl TerminalPanel {
         if closing.is_empty() {
             return;
         }
+        // Its pinned tabs, as they are now (names, folders, locks), come back next time.
+        self.save_pins(root, cx);
         let had_keyboard = closing
             .iter()
             .any(|&ix| self.tabs[ix].read(cx).has_focus(window, cx));
@@ -81,6 +83,13 @@ impl TerminalPanel {
 /// Stops everything the terminals of `windows` started, before the app quits: it won't be there
 /// for the grace periods, so they are short and waited for here.
 pub fn stop_all_now(windows: &[(AnyWindowHandle, Entity<TerminalPanel>)], cx: &App) {
+    for (_, panel) in windows {
+        let panel = panel.read(cx);
+        // Pinned tabs come back as they are now: their names and folders.
+        for project in panel.projects.iter() {
+            panel.save_pins(project, cx);
+        }
+    }
     let pids: Vec<u32> = windows
         .iter()
         .flat_map(|(_, panel)| panel.read(cx).all_trees(cx))

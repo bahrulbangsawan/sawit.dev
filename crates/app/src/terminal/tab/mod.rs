@@ -54,6 +54,8 @@ pub enum TabEvent {
     Reconnect(PaneId),
     /// The user asked for a new shell tab.
     NewTerminal,
+    /// Something the user asked for was refused (a pane of a locked tab doesn't close): why.
+    Refused(String),
 }
 
 /// A divider being dragged.

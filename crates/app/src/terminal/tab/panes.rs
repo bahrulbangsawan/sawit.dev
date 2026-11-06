@@ -155,6 +155,11 @@ impl TerminalTab {
     /// there, after asking (the shared confirm), naming it. The last pane closes the tab: its
     /// terminal goes with the tab, which the panel drops on `Closed`.
     pub fn close_pane(&mut self, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.locked {
+            let why = format!("{} is locked. Unlock it to close it.", self.label(cx));
+            cx.emit(TabEvent::Refused(why));
+            return;
+        }
         let running = self.views.get(&pane).and_then(|view| {
             crate::terminal::panel::running::running_in(self, pane, view.read(cx))
         });
