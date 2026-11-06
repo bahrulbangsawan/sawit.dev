@@ -297,6 +297,10 @@ explained. A conflict on the same address can't be forced.
   shell. The new half never takes the keyboard, and the split stops at 20 columns by 4 rows, as <kbd>⌘D</kbd>'s does.
   Its `terminal_close` ends what runs there, so it needs `confirm: true` while a program runs in that terminal or
   you're typing in it.
+- **Copy Last Output** (<kbd>⇧⌘C</kbd>) and **Copy Error** (<kbd>⌥⇧⌘C</kbd>), in a terminal's menus, copy the
+  output of the last command typed at its prompt as plain text (no escape codes, wrapped lines joined), or only its
+  error lines with two lines around each; a note says how many lines went. An instance's log has **Copy Logs** (its
+  last 200 lines) and **Copy Errors** (its `ERROR`, `FATAL` and `PANIC` lines, with context).
 - **Lock** a terminal tab (its right-click menu) and nothing closes it, not its ×, a key, Close Others or an
   agent's `terminal_close`, until you unlock it; a lock shows on the tab. **Pin** a tab and it moves to the strip's
   start, drawn compact, and comes back (a fresh shell in its folder, with its name and lock) when its project opens

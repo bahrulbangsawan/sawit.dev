@@ -45,7 +45,7 @@ impl Render for TerminalView {
                 .text_xs()
                 .shadow_md()
                 .child(Icon::new(Lucide::Check).xsmall())
-                .child("Copied to clipboard")
+                .child(self.toast_text.clone())
         });
 
         div()

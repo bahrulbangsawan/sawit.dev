@@ -56,6 +56,10 @@ actions!(
         /// Closes the focused pane, ending what runs there; the last pane
         /// closes the tab.
         ClosePane,
+        /// Copies the output of the last command in the focused pane as plain text.
+        CopyLastOutput,
+        /// Copies the error lines (with a few around each) of the last command's output.
+        CopyError,
     ]
 );
 

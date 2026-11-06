@@ -21,6 +21,8 @@ fn pane_menu_lists_the_planned_items() {
     assert_eq!(
         labels,
         [
+            "Copy Last Output",
+            "Copy Error",
             "Rename pane",
             "Split right",
             "Split down",
@@ -29,8 +31,8 @@ fn pane_menu_lists_the_planned_items() {
             "Close pane"
         ]
     );
-    assert_eq!(pane_menu_items(true, false)[3].0, "Unzoom");
-    assert_eq!(pane_menu_items(false, true)[4].1, Some(true));
+    assert_eq!(pane_menu_items(true, false)[5].0, "Unzoom");
+    assert_eq!(pane_menu_items(false, true)[6].1, Some(true));
 }
 
 /// The keys of the terminal's menus as a terminal sees them: each item of the pane menu
@@ -87,6 +89,8 @@ fn every_menu_item_has_its_own_key(cx: &mut TestAppContext) {
     assert_eq!(
         keys,
         [
+            ("terminal::CopyLastOutput", Some("cmd-shift-c")),
+            ("terminal::CopyError", Some("alt-cmd-shift-c")),
             ("terminal::RenamePane", Some("cmd-i")),
             ("terminal::SplitRight", Some("cmd-d")),
             ("terminal::SplitDown", Some("cmd-shift-d")),

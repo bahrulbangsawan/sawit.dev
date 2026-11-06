@@ -12,6 +12,7 @@ pub mod cli;
 pub mod cloudflare;
 mod cmd;
 pub mod control;
+pub mod copy_logs;
 pub mod date;
 pub mod db;
 pub mod dev_tools;

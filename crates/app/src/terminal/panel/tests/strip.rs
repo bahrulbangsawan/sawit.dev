@@ -119,8 +119,9 @@ fn a_tabs_menu_closes_the_tab_it_was_opened_for(cx: &mut TestAppContext) {
     .expect("the test window is open")
     .expect("tab 0 closes");
     cx.run_until_parked();
-    // Close is the fifth item from the bottom (Close Others, Close All, Lock Tab, Pin Tab follow).
-    cx.simulate_keystrokes(w, "up up up up up enter");
+    // Close is the seventh item from the bottom (Close Others, Close All, Lock Tab, Pin Tab, Copy
+    // Last Output, Copy Error follow).
+    cx.simulate_keystrokes(w, "up up up up up up up enter");
     cx.run_until_parked();
     let left: Vec<Entity<TerminalTab>> = cx.update(|cx| {
         let p = panel.read(cx);
@@ -141,7 +142,7 @@ fn a_tabs_menu_closes_the_tab_it_was_opened_for(cx: &mut TestAppContext) {
     vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
     vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
     vcx.run_until_parked();
-    cx.simulate_keystrokes(w, "up up up up up enter");
+    cx.simulate_keystrokes(w, "up up up up up up up enter");
     cx.run_until_parked();
     assert!(active(cx, &panel) == c);
     assert!(has_keyboard(cx, w, &c), "the keyboard went nowhere");

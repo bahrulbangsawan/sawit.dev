@@ -4,6 +4,7 @@
 //! program (vim, Claude Code) has the mouse. Dropped files are typed as paths.
 
 mod agent;
+mod copy_out;
 mod find;
 mod keys;
 mod mouse;
@@ -81,6 +82,11 @@ pub struct TerminalView {
     scroll: ScrollAccumulator,
     /// Shows the copy toast while set; finishing hides it.
     toast: Option<Task<()>>,
+    /// What the toast says ("Copied 42 lines").
+    toast_text: SharedString,
+    /// Where the last command typed at the prompt began ([`Session::cursor_mark`]): Copy Last
+    /// Output copies from the row after it.
+    command_mark: Cell<Option<usize>>,
     /// The last `cwd()` answer for the pane header, and when it was asked.
     folder: Option<(Instant, Option<PathBuf>)>,
     /// Asks for the folder again a moment after the header last read it,
@@ -180,6 +186,8 @@ impl TerminalView {
             selecting: false,
             scroll: ScrollAccumulator::default(),
             toast: None,
+            toast_text: SharedString::default(),
+            command_mark: Cell::new(None),
             folder: None,
             folder_refresh: None,
             agent: None,
@@ -200,6 +208,10 @@ impl TerminalView {
 
     /// Sends raw input to the program, jumping back to the live screen.
     pub fn write(&self, bytes: Vec<u8>) {
+        // Return at the shell's prompt starts a command: its output begins on the next row.
+        if bytes.contains(&b'\r') && self.at_prompt() {
+            self.command_mark.set(Some(self.session.cursor_mark()));
+        }
         self.session.clear_selection();
         self.session.write(bytes);
         self.session.scroll_to_bottom();
@@ -320,7 +332,15 @@ impl TerminalView {
 
     /// Puts `text` on the clipboard and briefly says so.
     fn copy(&mut self, text: String, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.copy_saying(text, "Copied to clipboard".into(), cx);
+    }
+
+    /// Puts `text` on the clipboard (none when it is empty) and says `note` for a moment.
+    fn copy_saying(&mut self, text: String, note: SharedString, cx: &mut Context<Self>) {
+        self.toast_text = note;
+        if !text.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
         self.toast = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(TOAST).await;
             let _ = this.update(cx, |this, cx| {

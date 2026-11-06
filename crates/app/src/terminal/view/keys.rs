@@ -5,9 +5,9 @@ use sawit_core::terminal::{KeyInput, key_to_bytes, paste_bytes};
 
 use super::TerminalView;
 use crate::terminal::{
-    ClosePane, FocusDown, FocusLeft, FocusNextPane, FocusNextPaneAtPrompt, FocusPreviousPane,
-    FocusRight, FocusUp, RenamePane, RenameTab, SplitDown, SplitRight, ToggleSendRightClicks,
-    ZoomPane,
+    ClosePane, CopyError, CopyLastOutput, FocusDown, FocusLeft, FocusNextPane,
+    FocusNextPaneAtPrompt, FocusPreviousPane, FocusRight, FocusUp, RenamePane, RenameTab,
+    SplitDown, SplitRight, ToggleSendRightClicks, ZoomPane,
 };
 
 /// Key bindings run before `on_key_down`, so an outer binding for a key the
@@ -45,6 +45,8 @@ pub(in crate::terminal) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-i", RenameTab, ctx),
         KeyBinding::new("cmd-alt-r", ToggleSendRightClicks, ctx),
         KeyBinding::new("cmd-alt-w", ClosePane, ctx),
+        KeyBinding::new("cmd-shift-c", CopyLastOutput, ctx),
+        KeyBinding::new("cmd-alt-shift-c", CopyError, ctx),
     ]
 }
 

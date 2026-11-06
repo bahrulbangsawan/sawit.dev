@@ -103,6 +103,8 @@ sawitTest(
 
 /** The pane menu's items, the actions they run, and the keys the menu shows beside them. */
 const PANE_MENU = [
+  ["Copy Last Output", "terminal::CopyLastOutput", "cmd-shift-c"],
+  ["Copy Error", "terminal::CopyError", "cmd-alt-shift-c"],
   ["Rename pane", "terminal::RenamePane", "cmd-i"],
   ["Split right", "terminal::SplitRight", "cmd-d"],
   ["Split down", "terminal::SplitDown", "cmd-shift-d"],

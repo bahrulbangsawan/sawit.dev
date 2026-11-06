@@ -12,8 +12,9 @@ use super::panes::min_size;
 use super::{Drag, PANE_BORDER, TerminalTab};
 use crate::terminal::view::{TerminalView, cell_size};
 use crate::terminal::{
-    ClosePane, FocusDown, FocusLeft, FocusNextPane, FocusNextPaneAtPrompt, FocusPreviousPane,
-    FocusRight, FocusUp, RenamePane, RenameTab, ToggleSendRightClicks, ZoomPane, agents,
+    ClosePane, CopyError, CopyLastOutput, FocusDown, FocusLeft, FocusNextPane,
+    FocusNextPaneAtPrompt, FocusPreviousPane, FocusRight, FocusUp, RenamePane, RenameTab,
+    ToggleSendRightClicks, ZoomPane, agents,
 };
 
 /// Width of the grab strip centred on each divider.
@@ -154,6 +155,14 @@ impl Render for TerminalTab {
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 let pane = this.state.focused;
                 this.close_pane(pane, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CopyLastOutput, _, cx| {
+                let pane = this.state.focused;
+                this.copy_output(pane, false, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CopyError, _, cx| {
+                let pane = this.state.focused;
+                this.copy_output(pane, true, cx)
             }))
             .child(
                 canvas(

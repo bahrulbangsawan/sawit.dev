@@ -10,8 +10,8 @@ use gpui_kit::*;
 
 use super::{CloseScope, TerminalPanel};
 use crate::tab_groups::project_name;
-use crate::terminal::RenameTab;
 use crate::terminal::tab::TerminalTab;
+use crate::terminal::{CopyError, CopyLastOutput, RenameTab};
 
 /// What the menu is opened for.
 #[derive(Clone)]
@@ -47,6 +47,16 @@ impl MenuState {
 }
 
 impl TerminalPanel {
+    /// Copies the last output (or its errors) of the tab at `ix`'s focused pane (item 1).
+    fn copy_output(&mut self, ix: usize, errors: bool, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get(ix) {
+            tab.update(cx, |t, cx| {
+                let pane = t.state.focused;
+                t.copy_output(pane, errors, cx)
+            });
+        }
+    }
+
     /// The menu's state for the tab at `ix`.
     pub fn menu_state(&self, ix: usize, cx: &App) -> MenuState {
         let state = &self.tabs[ix].read(cx).state;
@@ -161,5 +171,16 @@ pub(super) fn build(
                     p.set_pinned(ix, None, cx);
                 }),
             ),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Copy Last Output")
+                .action(Box::new(CopyLastOutput))
+                .on_click(on_tab(m, |p, ix, _, cx| p.copy_output(ix, false, cx))),
+        )
+        .item(
+            PopupMenuItem::new("Copy Error")
+                .action(Box::new(CopyError))
+                .on_click(on_tab(m, |p, ix, _, cx| p.copy_output(ix, true, cx))),
         )
 }

@@ -1,6 +1,7 @@
 //! Center pane for the selected instance: controls, port-conflict warning,
 //! live log, and the "new instance" form.
 
+mod copy_logs;
 mod form;
 mod instance;
 

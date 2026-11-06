@@ -115,6 +115,68 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Where the cursor is, counted in rows from the top of the scrollback: a mark that
+    /// [`Session::text_from`] reads output after. Marks move up when the scrollback is full and
+    /// its oldest rows go; a mark above what is left reads from the top.
+    pub fn cursor_mark(&self) -> usize {
+        let term = self.term.lock();
+        let grid = term.grid();
+        grid.history_size() + grid.cursor.point.line.0.max(0) as usize
+    }
+
+    /// The text from row mark `from` up to (not including) row mark `to` ([`Self::cursor_mark`]),
+    /// as plain text: soft-wrapped rows joined into one line, trailing spaces and blank lines at
+    /// the end dropped. A screen holds characters, never escape codes, so none are copied.
+    pub fn text_from(&self, from: usize, to: usize) -> String {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let history = grid.history_size() as i32;
+        let last = grid.screen_lines() as i32 - 1;
+        let row_of = |mark: usize| (mark as i32 - history).clamp(-history, last + 1);
+        let (start, end) = (row_of(from), row_of(to));
+        if start >= end {
+            return String::new();
+        }
+        let cols = grid.columns();
+        let mut lines: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for row in start..end {
+            let r = &grid[Line(row)];
+            for col in 0..cols {
+                let cell = &r[Column(col)];
+                if !cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    current.push(cell.c);
+                    current.extend(cell.zerowidth().into_iter().flatten());
+                }
+            }
+            if !r[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+                lines.push(current.trim_end().to_string());
+                current.clear();
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current.trim_end().to_string());
+        }
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
+    /// The screen as it shows now (not the scrollback), as plain text like [`Self::text_from`].
+    pub fn screen_text(&self) -> String {
+        let (history, rows) = {
+            let term = self.term.lock();
+            (term.grid().history_size(), term.grid().screen_lines())
+        };
+        self.text_from(history, history + rows)
+    }
+}
+
 /// Screen cell to grid point, following the scrollback position.
 fn grid_point<T>(term: &Term<T>, col: usize, row: usize) -> Point {
     let offset = term.grid().display_offset() as i32;

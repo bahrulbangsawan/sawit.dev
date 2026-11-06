@@ -6,7 +6,8 @@ use sawit_core::terminal::PaneId;
 
 use super::{Menu, TerminalTab};
 use crate::terminal::{
-    ClosePane, RenamePane, SplitDown, SplitRight, ToggleSendRightClicks, ZoomPane,
+    ClosePane, CopyError, CopyLastOutput, RenamePane, SplitDown, SplitRight, ToggleSendRightClicks,
+    ZoomPane,
 };
 
 /// One item of the pane menu: its label, `Some(checked)` for a toggle, and
@@ -17,6 +18,8 @@ pub type PaneMenuItem = (&'static str, Option<bool>, Box<dyn Action>);
 /// was opened for; its key acts on the pane with the keyboard.
 pub fn pane_menu_items(zoomed: bool, send_right_clicks: bool) -> Vec<PaneMenuItem> {
     vec![
+        ("Copy Last Output", None, Box::new(CopyLastOutput)),
+        ("Copy Error", None, Box::new(CopyError)),
         ("Rename pane", None, Box::new(RenamePane)),
         ("Split right", None, Box::new(SplitRight)),
         ("Split down", None, Box::new(SplitDown)),
@@ -114,7 +117,16 @@ impl TerminalTab {
             "Zoom" | "Unzoom" => self.toggle_zoom(pane, window, cx),
             "Send right-clicks to pane" => self.toggle_right_clicks(pane, cx),
             "Close pane" => self.close_pane(pane, window, cx),
+            "Copy Last Output" => self.copy_output(pane, false, cx),
+            "Copy Error" => self.copy_output(pane, true, cx),
             _ => {}
+        }
+    }
+
+    /// Copies the output of `pane`'s last command, or only its errors (item 1).
+    pub fn copy_output(&mut self, pane: PaneId, errors: bool, cx: &mut Context<Self>) {
+        if let Some(view) = self.views.get(&pane) {
+            view.update(cx, |v, cx| v.copy_last_output(errors, cx));
         }
     }
 

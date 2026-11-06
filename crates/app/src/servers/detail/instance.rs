@@ -302,10 +302,12 @@ impl ServerDetail {
                 h_flex()
                     .px_4()
                     .py_1()
+                    .justify_between()
                     .text_xs()
                     .font_semibold()
                     .text_color(cx.theme().muted_foreground)
-                    .child("LOG"),
+                    .child("LOG")
+                    .child(self.copy_buttons(log_len == 0, cx)),
             )
             .child(
                 div()
