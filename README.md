@@ -410,6 +410,8 @@ explained. A conflict on the same address can't be forced.
   and **Open Settings** for each pane.
 - **Other agents:** Codex's `approval_policy` and `sandbox_mode`, Gemini CLI's and Qwen Code's allowed and excluded
   tools, OpenCode's `permission`, read only.
+- From the terminal: `sawit permissions` lists the same, and `sawit permissions add|remove|move …` changes one rule
+  with the same diff, question and backup. Agents use `list_permissions` and `edit_permission`.
 
 ### Skills
 
@@ -1175,6 +1177,9 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
 - Search by text or `#tag`. Favorites and the prompts you use most come first.
 - Write `{{variables}}` in a prompt, fill them in its tab, and **Fill & Copy**. Copy a prompt as is from the list.
 - Stored in `prompts.json` in Sawit's data folder.
+- **Back Up Now** and **Restore** keep the library in a private GitHub repository (`sawit-prompts` by default). From
+  the terminal: `sawit prompts backup` and `sawit prompts restore`; agents use `backup_prompts` and
+  `restore_prompts`.
 
 #### Prompt backup
 
@@ -1220,6 +1225,8 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
   files in your home folder are ever written.
 - **Source in Open Terminals** runs `source <file>` in this window's shells waiting at their prompt; busy ones are
   named and left alone.
+- From the terminal: `sawit shell` shows how each file stands against GitHub, `sawit shell upload .zshrc` and
+  `sawit shell download .zshrc` move one way (asking first); agents use `shell_files_sync`.
 <!-- shot: shell-files-sync.png -->
 
 ### Find
@@ -1492,6 +1499,14 @@ sawit list config                            # shell startup files and coding ag
 sawit list keys                              # every shortcut and what it runs (asks the running app)
 sawit list explorer                          # Cloudflare Local Explorers running, and this folder's Workers
 sawit github token --header                  # the GitHub sign-in as {"Authorization":"Bearer …"}, for an AI client's header helper
+sawit permissions                            # "izin": Claude Code's rules per settings file, Sawit's confirm tools, other agents
+sawit permissions add allow "Bash(npm run test:*)"   # add a rule (shows the diff, asks; -y skips; --file project|local|user:<profile>)
+sawit permissions move "Bash(npm run test:*)" ask    # or remove "<rule>"; a .sawit-backup is kept beside the file
+sawit shell                                  # "cangkang": how each shell file stands against sawit-shell-config on GitHub
+sawit shell upload .zshrc                    # send it (asks; refused on secret-looking lines unless --allow-secrets)
+sawit shell download .zshrc                  # replace it with GitHub's, backed up first (asks; --overwrite for both-sides changes)
+sawit prompts backup                         # "mantra": the prompt library to your private sawit-prompts repository
+sawit prompts restore                        # GitHub's prompts back here (asks; --overwrite <id> for both-sides changes)
 ```
 
 - `<db>` is looked up in this order: a Sawit instance or saved connection with that name, a database with that name in
@@ -1501,7 +1516,10 @@ sawit github token --header                  # the GitHub sign-in as {"Authoriza
   `tanam`, `pasang`, `pupuk`, `cabut`, …), use `sawit ./list`.
 - Every word has an English and an Indonesian name: `list`/`ls`/`daftar`, `bakar`/`stop`, `nyalakan`/`start`,
   `browse`/`intip`, `panen`/`export`/`ekspor`, `backup`/`dump`/`cadangkan`, `tanam`/`import`/`impor`,
-  `pasang`/`install`, `pupuk`/`upgrade` and `cabut`/`uninstall`. So do the targets, for `list`: `all`/`semua`,
+  `pasang`/`install`, `pupuk`/`upgrade`, `cabut`/`uninstall`, `permissions`/`izin` (`list`/`lihat`, `add`/`tambah`,
+  `remove`/`hapus`, `move`/`pindah`; `allow`/`izinkan`, `ask`/`tanya`, `deny`/`tolak`), `shell`/`cangkang`
+  (`status`/`cek`, `upload`/`unggah`, `download`/`unduh`) and `prompts`/`mantra` (`backup`/`cadangkan`,
+  `restore`/`pulihkan`). So do the targets, for `list`: `all`/`semua`,
   `instances`/`instance`/`kebun`, `db`/`dbs`/`database`/`databases`/`blok`, `ports`/`port`/`lahan`,
   `connections`/`connection`/`conn`/`koneksi`/`konsesi`, `tools`/`tool`/`alat`/`perkakas`, `mcp`/`colokan`,
   `config`/`configs`/`konfig`, `keys`/`key`/`keymap`/`shortcuts`/`pintasan` and
