@@ -70,6 +70,10 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A key typed in the find bar over the pane is the bar's, never the program's.
+        if !self.focus.is_focused(window) {
+            return;
+        }
         let ks = &event.keystroke;
         let m = &ks.modifiers;
         if m.platform && ks.key == "v" {

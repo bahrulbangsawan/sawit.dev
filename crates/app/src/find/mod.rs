@@ -256,6 +256,9 @@ impl Render for FindBar {
             .debug_selector(|| "find-bar".into())
             .key_context(CONTEXT)
             .track_focus(&self.focus)
+            // A press in the bar is the bar's: the view under it (a terminal pane) would take the
+            // keyboard back.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .role(Role::Group)
             .aria_label("Find")
             .w_full()
