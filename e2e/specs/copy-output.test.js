@@ -20,8 +20,9 @@ sawitTest("copy output: ⇧⌘C copies the last command's output as plain text",
   await win.click({ role: "button", name: "New Terminal" });
   await until(async () => (await windowState(ctx)).terminals.length === before + 1, { what: "a new terminal" });
   await until(async () => /e2e%\s*$/.test(await terminalText(ctx)), { timeoutMs: 20_000, what: "the prompt" });
-  // Ten lines, the fifth an error in red, from a script: the harness types only letters, digits
-  // and a little punctuation, so the command typed at the prompt is a plain `sh <path>`.
+  // Ten lines, the fifth an error in red, from a script in the project (where the new terminal
+  // starts): the harness types only letters, digits and a little punctuation, and a few keys at
+  // a time, so the command typed at the prompt is a short `sh ten-lines.sh`.
   const script = path.join(ctx.world.project, "ten-lines.sh");
   await writeFile(
     script,
@@ -29,7 +30,7 @@ sawitTest("copy output: ⇧⌘C copies the last command's output as plain text",
       "  if [ $i = 5 ]; then printf '\\033[31merror: five\\033[0m\\n'; else echo line-$i; fi\n" +
       "done\n",
   );
-  await win.typeKeys(`sh ${script}`);
+  await win.typeKeys("sh ten-lines.sh");
   await win.press("return");
   await waitForTerminalLine(ctx, "line-10");
   await until(async () => /e2e%\s*$/.test(await terminalText(ctx)), { what: "the prompt after it" });
