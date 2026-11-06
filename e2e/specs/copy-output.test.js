@@ -3,6 +3,8 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 
 import { sawitTest } from "../lib/harness.js";
@@ -18,8 +20,16 @@ sawitTest("copy output: ⇧⌘C copies the last command's output as plain text",
   await win.click({ role: "button", name: "New Terminal" });
   await until(async () => (await windowState(ctx)).terminals.length === before + 1, { what: "a new terminal" });
   await until(async () => /e2e%\s*$/.test(await terminalText(ctx)), { timeoutMs: 20_000, what: "the prompt" });
-  // Ten lines, the fifth an error in red.
-  await win.typeKeys("for i in 1 2 3 4 5 6 7 8 9 10; do if [ $i = 5 ]; then printf '\\033[31merror: five\\033[0m\\n'; else echo line-$i; fi; done");
+  // Ten lines, the fifth an error in red, from a script: the harness types only letters, digits
+  // and a little punctuation, so the command typed at the prompt is a plain `sh <path>`.
+  const script = path.join(ctx.world.project, "ten-lines.sh");
+  await writeFile(
+    script,
+    "for i in 1 2 3 4 5 6 7 8 9 10; do\n" +
+      "  if [ $i = 5 ]; then printf '\\033[31merror: five\\033[0m\\n'; else echo line-$i; fi\n" +
+      "done\n",
+  );
+  await win.typeKeys(`sh ${script}`);
   await win.press("return");
   await waitForTerminalLine(ctx, "line-10");
   await until(async () => /e2e%\s*$/.test(await terminalText(ctx)), { what: "the prompt after it" });
