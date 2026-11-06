@@ -217,7 +217,7 @@ impl BrowserView {
                 total,
                 current: index.filter(|_| total > 0),
             };
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 if let Some(bar) = bar.upgrade() {
                     bar.update(cx, |bar, cx| bar.set_found(found, problem, cx));
                 }

@@ -77,12 +77,12 @@ impl FindState {
     }
 
     /// Steps to the next match, after the last back to the first.
-    pub fn next(&mut self) -> Option<usize> {
+    pub fn step_next(&mut self) -> Option<usize> {
         self.step(1)
     }
 
     /// Steps to the previous match, before the first round to the last.
-    pub fn previous(&mut self) -> Option<usize> {
+    pub fn step_previous(&mut self) -> Option<usize> {
         self.step(-1)
     }
 

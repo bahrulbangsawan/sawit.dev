@@ -226,9 +226,9 @@ impl FileEditor {
             }
             Target::Preview => {
                 if forward {
-                    self.find.preview_state.next();
+                    self.find.preview_state.step_next();
                 } else {
-                    self.find.preview_state.previous();
+                    self.find.preview_state.step_previous();
                 }
                 self.mark_preview(cx);
                 self.find.preview_state

@@ -39,10 +39,10 @@ fn options_change_what_matches() {
 fn state_counts_and_wraps() {
     let mut state = FindState::found(3, None);
     assert_eq!(state.label("q"), "1 of 3");
-    assert_eq!(state.next(), Some(1));
-    assert_eq!(state.next(), Some(2));
-    assert_eq!(state.next(), Some(0), "after the last, the first");
-    assert_eq!(state.previous(), Some(2), "before the first, the last");
+    assert_eq!(state.step_next(), Some(1));
+    assert_eq!(state.step_next(), Some(2));
+    assert_eq!(state.step_next(), Some(0), "after the last, the first");
+    assert_eq!(state.step_previous(), Some(2), "before the first, the last");
     assert_eq!(state.label("q"), "3 of 3");
     // New matches keep the current one where it can.
     assert_eq!(FindState::found(5, Some(2)).current, Some(2));

@@ -71,9 +71,9 @@ impl PdfView {
             return;
         }
         if forward {
-            self.find.state.next();
+            self.find.state.step_next();
         } else {
-            self.find.state.previous();
+            self.find.state.step_previous();
         }
         self.show_found(cx);
     }
