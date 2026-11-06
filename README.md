@@ -756,15 +756,15 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
   their keys.
   - A board has Move and Hand, Marker, Highlighter and Eraser, Sticky notes in eight colours, Shapes, Connectors
     (straight, elbow or curved), Text and Text on a path, Frame, Section and Slice, Rectangle, Line, Arrow, Ellipse,
-    Polygon and Star (with **Place image…** at the end of their list), Pen and Pencil, Stamps, and a picker for
-    templates and tables. A bar over the selection offers its colour, shape, text size and connector style and ends.
+    Polygon and Star (with **Place image…** at the end of their list), Pen, Pencil and Shape Builder, Stamps, the
+    Comment tool, and a picker for templates and tables. A bar over the selection offers its colour, shape, text size and connector style and ends.
   - Every choice shows a picture beside its name: the stamps' badges, the shapes' outlines, a straight, elbow or
     curved line for the connector styles, and the arrowhead itself for a connector's ends. On the bar over a
     connector, the line style and the two ends are pictures alone, in the order of the line: the start's
     arrowheads face left and the end's face right, and pointing at one names it ("Start: None", "End: Triangle
     arrow"). The bar shows **Mixed** in words when the selected items differ.
-  - A design file has Move, Scale and Hand, Frame, Section and Slice, the same shapes and Place image…, Pen and
-    Pencil, and Text and Text on a path. The board's own tools (stickies, shapes with text, connectors, ink, stamps)
+  - A design file has Move, Scale and Hand, Frame, Section and Slice, the same shapes and Place image…, Pen,
+    Pencil and Shape Builder (whose regions show as you hover and drag), Text and Text on a path, and Comment. The board's own tools (stickies, shapes with text, connectors, ink, stamps)
     aren't there: they only work on a board.
   - Keys: <kbd>V</kbd> move, <kbd>H</kbd> hand, <kbd>F</kbd> or <kbd>A</kbd> frame, <kbd>⇧</kbd><kbd>S</kbd>
     section, <kbd>S</kbd> slice, <kbd>R</kbd> rectangle, <kbd>L</kbd> line, <kbd>⇧</kbd><kbd>L</kbd> arrow,
@@ -772,11 +772,34 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
     (<kbd>*</kbd>), <kbd>⇧</kbd><kbd>⌘</kbd><kbd>K</kbd> place image, <kbd>P</kbd> pen, <kbd>⇧</kbd><kbd>P</kbd>
     pencil, <kbd>T</kbd> text, <kbd>⇧</kbd><kbd>T</kbd> text on a path, and on a board <kbd>M</kbd> marker,
     <kbd>U</kbd> highlighter, <kbd>E</kbd> eraser, <kbd>Q</kbd> sticky, <kbd>B</kbd> shape, <kbd>X</kbd>
-    connector, <kbd>W</kbd> stamp.
+    connector, <kbd>W</kbd> stamp, <kbd>C</kbd> comment, <kbd>I</kbd> eyedropper.
 - **Layers and Design panels**: the layers panel on the left (<kbd>⌥</kbd><kbd>1</kbd>) lists the pages and layers.
   Click to select, double-click to rename, hide or lock a layer, drag layers to reorder or nest them, and filter by
-  name. The Design panel on the right (<kbd>⌥</kbd><kbd>8</kbd>) edits the selection: position and size, auto layout,
-  appearance, fill, stroke, effects, typography and export. A board opens with both panels hidden and a design file
+  name. Its **Assets** tab (View ▸ Panels ▸ Assets) lists the file's components with a picture of each; a click
+  places an instance in the middle of the view. The Design panel on the right (<kbd>⌥</kbd><kbd>8</kbd>) edits the
+  selection: a component's or instance's properties (variants, booleans, text, instance swap; add, rename and delete
+  them on the main, Swap, Reset and Detach on an instance), position and size, auto layout (with a grid's columns and
+  rows), constraints, min and max sizes and Ignore auto layout, each variable collection's mode, appearance, fill
+  and stroke (solid, linear, radial, angular and diamond gradients with their angle and stops, images with their
+  fill mode, tile scale, turn, adjustments and Choose…; any colour can be bound to a colour variable), effects
+  (shadows, blurs with a progressive ramp, noise, texture, glass), layout grids, typography (with decoration, case,
+  lists, wrap, paragraph spacing and indent, max lines, OpenType features and variable axes) and export. Editing one
+  paint or effect never touches the others, so their variable bindings stay.
+  - **Prototype** tab: the selected layer's interactions (trigger, action, destination, animation, duration), the
+    page's flows, and **Present** (<kbd>⌥</kbd><kbd>⌘</kbd><kbd>↩</kbd>), which plays the frames: a click on a
+    layer with an interaction follows it, and Back, <kbd>←</kbd> or <kbd>Esc</kbd> go back. While the tab shows,
+    green lines join each layer to the frame it goes to.
+  - **Dev Mode** (<kbd>⇧</kbd><kbd>D</kbd>) puts the **Inspect** panel in the Design panel's place: the layer's
+    properties with their styles and variables, its code in CSS, HTML, React, Leptos, Vue, Tailwind, SwiftUI,
+    Compose, ArkUI or Flutter with Copy, its annotations, and Ready for dev on a top-level frame.
+- **Windows over the canvas**: View ▸ **Variables…** (collections, modes across, variables down: click a name or a
+  value to change it; add and delete collections, modes and variables), View ▸ **Comments…** (the page's threads:
+  reply, resolve, delete; the Comment tool starts one where you click, and View ▸ Comments shows their pins), File ▸
+  **Show version history** (restore or delete a saved version) and **Save to version history**. On a board a pill
+  at the top right runs the shared timer (start, pause, +1 minute, stop) and votes (start, vote on the selection,
+  end, results).
+- **View aids**: View ▸ Layout grids, Pixel grid (from 800%), Rulers (with the page's and frames' guides), Slices,
+  Mask outlines and Frame outlines draw over the canvas. A board opens with both panels hidden and a design file
   with both shown, and the top bar toggles them. Its menus picture their choices too: the blend modes by group
   (darken, lighten, contrast, difference, colour), the stroke inside, on or outside the edge, fixed, hug and fill
   sizing, the four effects, and the export formats.
@@ -784,9 +807,9 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
   <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>⌘</kbd><kbd>/</kbd>) opens the **Actions** palette, which finds any menu command
   by name, and <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd> lists every shortcut. A command that has nothing to act on is
   greyed out in the menus and left out of the palette (Frame selection, Group or Align with nothing selected, Undo
-  with nothing to undo), and its key does nothing. So are the few items that need a dialog the canvas doesn't have
-  yet (Create link, Offset path, Move to page, Batch rename, Color profile, Nudge amount) and Revert to saved, which
-  never applies since the canvas saves as you go. A refusal that does show says why in plain words. While the
+  with nothing to undo), and its key does nothing. So is Revert to saved, which never applies since the canvas saves
+  as you go. Create link, Offset path, Move to page, Batch rename, Color profile, Nudge amount, Find and replace and
+  Save to version history open a small dialog for their value. A refusal that does show says why in plain words. While the
   canvas has the keyboard,
   <kbd>⌘</kbd><kbd>K</kbd> belongs to the palette, so the chords that start with it (the tab chords,
   <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> for the Keymap Editor, and any you add) don't work there. The
@@ -935,8 +958,15 @@ rendered by WebKit (the Browser tab's engine) and kept current as you edit.
   in the project, as the Ports panel lists it (a choice when several run), and its routes: from the app's own files
   for Next.js (app and pages), TanStack Router and Start (`src/routes`), SvelteKit, Remix, React Router (flat
   routes), Nuxt and Astro, and otherwise by following the site's links from `/` (30 pages and 15 s at most). Untick
-  the routes you don't want and pick the viewports (1440, 768 and 390 wide at first), then **Add**. Each route gets a
-  row, a frame per viewport named `<route> / <viewport>`, in a section named for the server (`localhost:5173`).
+  the routes you don't want and pick the viewports (a 1440-wide desktop at first; 1280, 1024, 768, 430 and 390 are
+  offered too), then **Add**. Each route gets a row, a frame per viewport named `<route> · <device> <width>`
+  (`Home · Desktop 1440`), in a section named for the server (`localhost:5173`).
+- **Full page, responsive.** A frame lays its page out at the frame's own size: resize it and the page is laid out
+  again at the new width, without a reload. Each time its page settles (a load, a hot update, a resize) it is measured
+  at the viewport's height (900 for a desktop) and the frame takes the page's full height, growing or shrinking, as a
+  full-page screenshot does; the rows under it move with it. That is no undo step: an undo takes back your own last
+  edit. **Full page** on the bar over a selected frame turns it off (the frame keeps its height) or on again. Until a
+  resized frame's new picture is in, the old one shows at its own proportions, never stretched.
 - **Dynamic routes** (`/blog/[slug]`, `$postId`) need a value: each is added with the first of its pages the site
   links to (`/blog/hello`), and the dialog names those it skipped for want of one.
 - **Staying current.** A frame's page keeps running out of sight. A hot update that changes its DOM, or the page
