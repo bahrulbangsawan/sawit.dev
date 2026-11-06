@@ -8,6 +8,7 @@
 mod agent_tests;
 mod bar;
 mod checks;
+mod frame_bar;
 mod handoff;
 mod ops;
 mod pictures;
@@ -24,7 +25,8 @@ use sawit_board::screens::{self, ScreenData};
 use sawit_core::terminal::AgentKind;
 
 use super::BoardView;
-pub(super) use bar::render_screen_bar;
+pub(super) use bar::{export_button, render_screen_bar};
+pub(super) use frame_bar::render_frame_bar;
 pub(super) use preview::{Preview, render_preview};
 
 /// The screens' side of the canvas's tab.

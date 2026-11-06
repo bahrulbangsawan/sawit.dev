@@ -126,3 +126,33 @@ fn context_menu_labels_follow_the_selection() {
     select(&mut board, &[a, b]);
     assert_eq!(labels(&board).1, "Unlock");
 }
+
+/// A frame selected alone exports as code: Export HTML… and Export React… after Copy as, and File
+/// ▸ Export as HTML… named for it. A sticky doesn't.
+#[test]
+fn a_frame_exports_as_code() {
+    let mut board = crate::BoardDoc::new_board("Canvas").unwrap();
+    let frame = board
+        .execute(
+            "frame.create",
+            &serde_json::json!({"x": 0, "y": 0, "width": 200, "height": 100, "name": "Banner"}),
+        )
+        .unwrap();
+    let id = figcraft_doc::NodeId(frame["id"].as_u64().unwrap());
+    board.session.set_selection(vec![id]);
+    let menu = context_menu(&board.session);
+    let shown = ids(&menu);
+    assert_eq!(
+        shown[shown.len() - 2..],
+        ["sawit.exportHtml", "sawit.exportReact"],
+        "{shown:?}"
+    );
+    assert_eq!(label_of(&menu, "sawit.exportHtml"), "Export HTML…");
+    let main = main_menu(&board.session);
+    assert_eq!(
+        label_of(&main, "sawit.exportReact"),
+        "Export “Banner” as React…"
+    );
+    let sticky = board_with_sticky();
+    assert!(!ids(&context_menu(&sticky.session)).contains(&"sawit.exportHtml"));
+}

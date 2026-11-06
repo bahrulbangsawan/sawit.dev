@@ -1,5 +1,5 @@
 //! A screen as a React component: a mechanical conversion of its HTML to a `.tsx` component and
-//! its CSS ("Download React").
+//! its CSS ("Export React").
 //!
 //! The page is parsed as a browser parses it (html5ever), and its `<body>` written as the JSX the
 //! component returns ([`jsx`]): attributes as React's props ([`attrs`], [`style`]), text with

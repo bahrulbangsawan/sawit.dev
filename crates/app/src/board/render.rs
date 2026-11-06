@@ -111,9 +111,14 @@ impl BoardView {
         let route_bar = (chrome && screen_bar.is_none())
             .then(|| routes::render_route_bar(self, cx))
             .flatten();
-        let over_selection = (chrome && screen_bar.is_none() && route_bar.is_none())
-            .then(|| context_bar::render_context_bar(self, window, cx))
+        // An artboard selected alone has Export HTML and Export React.
+        let frame_bar = (chrome && screen_bar.is_none() && route_bar.is_none())
+            .then(|| screens::render_frame_bar(self, cx))
             .flatten();
+        let over_selection =
+            (chrome && screen_bar.is_none() && route_bar.is_none() && frame_bar.is_none())
+                .then(|| context_bar::render_context_bar(self, window, cx))
+                .flatten();
         // What each route frame waits for, over its picture.
         let web_status = self.render_web_status(cx);
         // The design standard's failures each checked frame has, as a badge on it.
@@ -177,6 +182,7 @@ impl BoardView {
             .children(agents)
             .children(screen_bar)
             .children(route_bar)
+            .children(frame_bar)
             .children(over_selection)
             .children(tools)
             .children(preview)

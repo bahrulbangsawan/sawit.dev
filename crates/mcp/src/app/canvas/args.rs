@@ -248,7 +248,11 @@ pub struct CanvasScreenExportArgs {
     #[schemars(description = SCREEN_NAME)]
     pub screen: Option<String>,
     #[schemars(
-        description = "html (default): one .html file with its CSS and images inlined. react: a .tsx component, its .css beside it, and the images it uses in a <Component>-assets folder beside them"
+        description = "Or an artboard instead of a screen: a frame of layers on the canvas, by its id (\"12:4\") or its name (\"Settings / Mobile\"). It is converted layer by layer: auto layout as flexbox, the rest placed absolutely, images and vectors embedded"
+    )]
+    pub id: Option<String>,
+    #[schemars(
+        description = "html (default): one .html file with its CSS and images inlined. react: a .tsx component, its .css beside it, and the images it uses in a <Component>-assets folder beside them (an artboard's: the .tsx and its <Component>.module.css, images embedded)"
     )]
     pub format: Option<String>,
     #[schemars(

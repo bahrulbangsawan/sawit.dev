@@ -141,6 +141,7 @@ async fn screens_export_as_html_and_react() {
     let export = |format: &str, path: PathBuf| CanvasScreenExportArgs {
         work: None,
         screen: Some("sign-in".into()),
+        id: None,
         format: Some(format.into()),
         path: Some(path.display().to_string()),
         file: None,

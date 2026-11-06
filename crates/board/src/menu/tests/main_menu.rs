@@ -111,7 +111,8 @@ fn separators_are_collapsed() {
 fn file_menu_follows_the_catalog_under_the_policy() {
     // The catalog's File menu has 27 entries and 5 separators. The policy hides 15 of the
     // entries, which leaves 2 separators next to each other, and the last entries are shown.
-    // Sawit's own Add Routes from Dev Server… follows Place image….
+    // Sawit's own Add Routes from Dev Server… follows Place image…, and Export as HTML… and as
+    // React… follow Export frames to PDF….
     let menu = main_menu(&board().session);
     assert_eq!(
         outline(children_of(&menu, "File")),
@@ -125,6 +126,8 @@ fn file_menu_follows_the_catalog_under_the_policy() {
             "-",
             "Export…",
             "Export frames to PDF…",
+            "Export as HTML…",
+            "Export as React…",
             "Export selection as SVG…",
             "-",
             "Color profile…",

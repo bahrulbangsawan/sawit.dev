@@ -61,6 +61,7 @@ use serde_json::{Value, json};
 use crate::doc::BoardDoc;
 
 mod checks;
+mod code;
 mod command;
 mod copy_as;
 mod diagram;
@@ -193,6 +194,9 @@ const BATCH: &str = "command.batch";
 ///   server (a routes work's, with `work`), in one undo step, and answers `{ok, section, page,
 ///   name, server, frames}`; a page that isn't on this Mac is refused ([`routes`],
 ///   [`crate::routes`]).
+/// - `frame_code` (`{id, format?, component?, css_file?}`) answers an artboard (a frame of
+///   layers, by id or name) as HTML or as a React component and its CSS module, and changes
+///   nothing ([`code`], [`crate::frame_code`]).
 /// - `checks` (`{work?, frame?, findings?}`) answers the design standard's machine checks of a
 ///   frame, `{ok, frame, findings}`, or the `findings` given (a screen's), and changes nothing
 ///   ([`checks`], [`crate::checks`]).
@@ -231,6 +235,7 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         Some("progress") => work::progress(board, op),
         Some("screen") => screen::screen(board, op),
         Some("checks") => checks::checks(board, op),
+        Some("frame_code") => code::frame_code(board, op),
         Some("routes") => routes::routes(board, op),
         _ => work::in_work(board, op, run_named),
     }

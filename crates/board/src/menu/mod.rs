@@ -30,7 +30,7 @@ use figcraft_engine::catalog::{MENU, SEP};
 use figcraft_engine::cmd::view::checked;
 use figcraft_engine::keymap::{self, Platform};
 
-use crate::policy::{SAWIT_COMMANDS, is_hidden};
+use crate::policy::{EXPORT_HTML, EXPORT_REACT, SAWIT_COMMANDS, is_hidden};
 use crate::shortcuts::owned_by_sawit;
 
 mod enabled;
@@ -85,6 +85,7 @@ pub const TOP_MENUS: &[&str] = &[
 pub fn main_menu(s: &Session) -> Vec<MenuNode> {
     let mut menu = MAIN_MENU.clone();
     fill(s, &mut menu);
+    name_exports(s, &mut menu);
     menu
 }
 
@@ -186,6 +187,7 @@ pub fn context_menu(s: &Session) -> Vec<MenuNode> {
         }],
         commands(s, &[("select.all", "Select all")]),
     ];
+    let groups = groups.into_iter().chain(exports(s));
     let mut menu = Vec::new();
     for group in groups {
         if !menu.is_empty() {
@@ -260,6 +262,50 @@ fn fill(s: &Session, nodes: &mut [MenuNode]) {
                 *enabled = available(id) && applies(s, id);
             }
             MenuNode::Submenu { children, .. } => fill(s, children),
+            MenuNode::Separator => {}
+        }
+    }
+}
+
+/// The context menu's code exports, for a screen or an artboard selected alone, after Copy as.
+fn exports(s: &Session) -> Option<Vec<MenuNode>> {
+    let ds = s.ds().ok()?;
+    enabled::exportable(&ds.doc, &ds.selection).then(|| {
+        commands(
+            s,
+            &[
+                (EXPORT_HTML, "Export HTML…"),
+                (EXPORT_REACT, "Export React…"),
+            ],
+        )
+    })
+}
+
+/// File ▸ Export as HTML… and as React… with the selection's name: Export “Settings” as HTML….
+fn export_label(s: &Session, id: &str) -> Option<String> {
+    let format = match id {
+        EXPORT_HTML => "HTML",
+        EXPORT_REACT => "React",
+        _ => return None,
+    };
+    let ds = s.ds().ok()?;
+    let [one] = ds.selection.as_slice() else {
+        return None;
+    };
+    let name = ds.doc.node(*one)?.name.clone();
+    enabled::exportable(&ds.doc, &ds.selection).then(|| format!("Export “{name}” as {format}…"))
+}
+
+/// The File menu's code exports named for the selection ([`export_label`]).
+fn name_exports(s: &Session, nodes: &mut [MenuNode]) {
+    for node in nodes {
+        match node {
+            MenuNode::Item { id, label, .. } => {
+                if let Some(named) = export_label(s, id) {
+                    *label = named;
+                }
+            }
+            MenuNode::Submenu { children, .. } => name_exports(s, children),
             MenuNode::Separator => {}
         }
     }

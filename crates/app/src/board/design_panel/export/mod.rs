@@ -5,6 +5,7 @@
 //!   goes into the layer once it is changed, or another is added.
 //! - Layers whose settings differ show "Mixed", and its "Replace all" gives them all that one
 //!   row. Until then the Export button exports each with its own settings.
+//! - A frame alone also has Export HTML and Export React, its code as the bar over it exports it.
 //! - The settings change only through `sawit_board::design::export::set_export_rows`, which keeps
 //!   what a setting holds besides its format and scale while its row is left as it is.
 //!
@@ -70,6 +71,20 @@ pub(super) fn render(sel: &Rc<DesignSelection>, cx: &mut Context<BoardView>) -> 
             .collect()
     };
     rows.push(export_button(sel.ids.len(), &this));
+    // A frame also exports as code, as the bar over it does: two more formats.
+    if let Some(frame) = sel.one_frame() {
+        let html =
+            crate::board::screens::export_button(this.clone(), "design-export-html", frame, false);
+        let react =
+            crate::board::screens::export_button(this.clone(), "design-export-react", frame, true);
+        rows.push(
+            row()
+                .items_center()
+                .child(html.outline().flex_1())
+                .child(react.outline().flex_1())
+                .into_any_element(),
+        );
+    }
     section("export", "Export", vec![add], rows, cx)
 }
 

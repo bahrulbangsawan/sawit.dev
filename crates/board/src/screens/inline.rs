@@ -1,4 +1,4 @@
-//! A screen as one HTML file, its CSS and images inlined ("Download HTML").
+//! A screen as one HTML file, its CSS and images inlined ("Export HTML").
 //!
 //! The page is parsed as a browser parses it (html5ever) and written back with its local files in
 //! it: style sheets as `<style>` (their local `@import`s inlined, their `url(…)`s resolved from

@@ -14,6 +14,8 @@
 //!   PNG the page when nothing is selected (`sawit_board::ops::copy_as`).
 //! - **Add Routes from Dev Server…**, Sawit's own, lays the project's dev server's routes out as
 //!   live frames (`super::routes`).
+//! - **Export as HTML…** and **Export as React…**, Sawit's own, write the screen or the artboard
+//!   selected alone as code, where the user says (`BoardView::export_code`).
 //!
 //! A dialog that is cancelled changes nothing and says nothing. Whatever fails says why in a
 //! toast. Save, Save as and Copy as say so when they go through; an export shows its first file
@@ -69,6 +71,16 @@ pub(super) fn run_ui(
         }
         sawit_board::policy::ADD_ROUTES => view.open_routes_dialog(cx),
         sawit_board::policy::MAXIMIZE => cx.emit(super::ToggleCanvasMaximize),
+        sawit_board::policy::EXPORT_HTML | sawit_board::policy::EXPORT_REACT => {
+            let selected = view
+                .board()
+                .and_then(|b| b.session.ds().ok())
+                .map(|ds| ds.selection.clone());
+            if let Some([frame]) = selected.as_deref() {
+                let react = id == sawit_board::policy::EXPORT_REACT;
+                view.export_code(*frame, react, window, cx);
+            }
+        }
         // An id the policy might add before the canvas carries it out.
         _ => {
             log::debug!("the canvas doesn't carry out {id} yet");

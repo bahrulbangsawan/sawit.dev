@@ -159,9 +159,20 @@ pub fn applies(s: &Session, id: &str) -> bool {
         "edit.undo" => undo > 0 || editing_text,
         "edit.redo" => redo > 0,
         "vector.deleteHeal" => ds.is_some_and(|ds| ds.vector_edit.is_some()),
+        crate::policy::EXPORT_HTML | crate::policy::EXPORT_REACT => {
+            ds.is_some_and(|ds| exportable(&ds.doc, &ds.selection))
+        }
         _ if NEEDS_SELECTION.contains(&id) => {
             !s.selection().is_empty() || (editing_text && keeps_text_edit(id))
         }
         _ => true,
+    }
+}
+
+/// Whether `selection` is one frame that exports as code: a screen, or an artboard.
+pub fn exportable(doc: &figcraft_doc::Document, selection: &[figcraft_doc::NodeId]) -> bool {
+    match selection {
+        [one] => crate::frame_code::is_artboard(doc, *one),
+        _ => false,
     }
 }

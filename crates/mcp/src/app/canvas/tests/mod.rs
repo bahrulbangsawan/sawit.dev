@@ -1,6 +1,7 @@
 //! The canvas tools' tests, with Sawit running (a stand-in answers on its socket) and closed, and
 //! the helpers they share.
 
+mod artboards;
 mod backups;
 mod design;
 mod export;

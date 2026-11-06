@@ -106,11 +106,23 @@ pub const SAWIT_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "file.placeImage",
     ),
     (MAXIMIZE, "Maximize Canvas", "View", ""),
+    (
+        EXPORT_HTML,
+        "Export as HTML…",
+        "File",
+        "file.exportFramesPdf",
+    ),
+    (EXPORT_REACT, "Export as React…", "File", EXPORT_HTML),
 ];
 
 /// Maximize Canvas: the canvas fills the window, or the layout comes back. Sawit's own command,
 /// which the app carries out; its keys are the workspace's (⌃⌘3).
 pub const MAXIMIZE: &str = "sawit.maximize";
+
+/// Export HTML and Export React of the screen or the artboard selected alone: Sawit's own, which
+/// the app carries out (`crate::frame_code`, `crate::screens::export`).
+pub const EXPORT_HTML: &str = "sawit.exportHtml";
+pub const EXPORT_REACT: &str = "sawit.exportReact";
 
 /// Copy, cut and paste. The engine runs them on its own copy of the layers, but each canvas tab
 /// has its own session, and the system clipboard is Sawit's to read and write, so Sawit carries

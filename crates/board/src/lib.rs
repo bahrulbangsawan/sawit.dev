@@ -9,6 +9,7 @@ pub mod design;
 pub mod doc;
 pub mod excalidraw;
 pub mod fonts;
+pub mod frame_code;
 pub mod input;
 pub mod layers;
 pub mod menu;

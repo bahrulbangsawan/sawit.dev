@@ -224,6 +224,14 @@ impl DesignSelection {
             .collect()
     }
 
+    /// The one frame selected (a frame, a component, an instance), which exports as code.
+    pub fn one_frame(&self) -> Option<NodeId> {
+        match (self.ids.as_slice(), self.layers.as_slice()) {
+            ([id], [layer]) if layer.frame_like => Some(*id),
+            _ => None,
+        }
+    }
+
     /// The header's text: the kind of the one layer ("Rectangle"), or how many layers there are
     /// ("3 layers"). Empty when nothing is selected.
     pub fn header(&self) -> String {

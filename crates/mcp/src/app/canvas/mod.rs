@@ -351,7 +351,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Export a UI screen to a file: format html, one .html file with its CSS and images inlined; or react, a mechanical conversion to a .tsx component with its .css (and the images it uses) beside it, for an app to adapt. Works with the app closed too"
+        description = "Export a UI screen, or an artboard (a frame of layers, by `id`), to a file, as Export HTML and Export React do in the app: format html, one .html file with its CSS and images inlined; or react, a mechanical conversion to a .tsx component with its CSS beside it, for an app to adapt (a reference, not production code). An artboard's auto layout becomes flexbox, its other layers are placed absolutely, its components become React components with a prop per variant property. Works with the app closed too"
     )]
     async fn canvas_screen_export(
         &self,

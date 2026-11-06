@@ -175,9 +175,12 @@ impl Sawit {
             "react" | "React" | "tsx" => true,
             other => return fail(format!("Unknown format “{other}”: use html or react.")),
         };
+        if let Some(id) = a.id.clone().filter(|id| !id.trim().is_empty()) {
+            return self.artboard_export(a, id, react).await;
+        }
         let op = json!({"op": "screen", "work": a.work, "screen": a.screen});
         if let Err(e) = names_one(&op) {
-            return fail(format!("canvas_screen_export: {e}"));
+            return fail(format!("canvas_screen_export: {e} (or an artboard's `id`)"));
         }
         let named = match crate::output_path("canvas_screen_export", a.path.as_deref()) {
             Ok(named) => named,
@@ -211,6 +214,70 @@ impl Sawit {
     }
 }
 
+impl Sawit {
+    /// `canvas_screen_export {id}`: artboard `id` as HTML, or as React (`react`), written where
+    /// `a.path` says or in the project's exports folder.
+    async fn artboard_export(
+        &self,
+        a: CanvasScreenExportArgs,
+        id: String,
+        react: bool,
+    ) -> CallToolResult {
+        let named = match crate::output_path("canvas_screen_export", a.path.as_deref()) {
+            Ok(named) => named,
+            Err(e) => return fail(e),
+        };
+        let component = named
+            .as_deref()
+            .filter(|_| react)
+            .and_then(Path::file_stem)
+            .map(|s| s.to_string_lossy().into_owned());
+        let op = json!({
+            "op": "frame_code", "id": id, "format": if react { "react" } else { "html" },
+            "component": component,
+        });
+        let project = crate::agent_project(a.project.as_deref());
+        let cache = self.paths.cache_dir();
+        let code = match self.canvas(a.project, a.file, op).await {
+            Ok(code) => code,
+            Err(e) => return fail(e),
+        };
+        let name = code["name"].as_str().unwrap_or("frame").to_string();
+        let written = blocking(move || {
+            let file = sawit_board::frame_code::file_name(&name, react);
+            let path = named.unwrap_or_else(|| exports_path(project.as_deref(), &cache, &file));
+            let mut files = Vec::new();
+            let text = |key: &str| code[key].as_str().unwrap_or_default().to_string();
+            write_file(&path, &text(if react { "tsx" } else { "html" }))?;
+            files.push(path.clone());
+            if react {
+                let css = path.with_file_name(text("css_file"));
+                write_file(&css, &text("css"))?;
+                files.push(css);
+            }
+            Ok::<_, String>((files, code))
+        })
+        .await;
+        match written {
+            Ok(Ok((files, code))) => ok(pretty(&json!({
+                "ok": true, "frame": code["frame"], "name": code["name"],
+                "format": if react { "react" } else { "html" }, "files": files,
+                "notes": code["notes"],
+            }))),
+            Ok(Err(e)) | Err(e) => fail(e),
+        }
+    }
+}
+
+/// Writes `text` at `path`, its folder made if need be.
+fn write_file(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Unable to create {}: {e}", dir.display()))?;
+    }
+    std::fs::write(path, text).map_err(|e| format!("Unable to write {}: {e}", path.display()))
+}
+
 /// Refuses a screen op that names neither its `work` nor its `screen`.
 fn names_one(op: &Value) -> Result<(), String> {
     let given = |key: &str| op[key].as_str().is_some_and(|v| !v.trim().is_empty());
@@ -227,6 +294,11 @@ fn default_export(project: Option<&Path>, cache: &Path, name: &str, react: bool)
         true => format!("{}.tsx", screens::component_name(name)),
         false => format!("{name}.html"),
     };
+    exports_path(project, cache, &file)
+}
+
+/// File `file` in the project's `.nyawit/exports/`, else in Sawit's cache.
+fn exports_path(project: Option<&Path>, cache: &Path, file: &str) -> PathBuf {
     match project {
         Some(project) => {
             let dir = sawit_core::nyawit::exports_dir(project);

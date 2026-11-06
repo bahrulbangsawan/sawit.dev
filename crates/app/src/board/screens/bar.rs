@@ -1,4 +1,4 @@
-//! The bar over a selected screen, in the context bar's place: Preview, Download HTML, Download
+//! The bar over a selected screen, in the context bar's place: Preview, Export HTML, Export
 //! React, and Send to Agent…, a menu of the coding agents on this Mac that Sawit can start with a
 //! prompt, and Copy Prompt. The downloads ask where to save, starting in the project's folder.
 
@@ -8,6 +8,7 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::*;
 use sawit_board::context_bar as model;
+use sawit_board::frame_code;
 use sawit_board::screens::{self, export};
 use sawit_core::terminal::AgentKind;
 
@@ -61,17 +62,6 @@ pub(in crate::board) fn render_screen_bar(
                 let _ = this.update(cx, |view, cx| view.open_preview(frame, window, cx));
             })
     };
-    let download = |this: WeakEntity<BoardView>, id: &'static str, label: &'static str, react| {
-        Button::new(id)
-            .ghost()
-            .small()
-            .label(label)
-            .on_click(move |_, window, cx| {
-                let _ = this.update(cx, |view, cx| {
-                    view.download_screen(frame, react, window, cx)
-                });
-            })
-    };
     let to_agent = this.clone();
     let send = Button::new("screen-bar-send")
         .ghost()
@@ -100,21 +90,39 @@ pub(in crate::board) fn render_screen_bar(
             .overflow_x_scroll()
             .child(preview)
             .child(divider(line))
-            .child(download(
-                this.clone(),
-                "screen-bar-html",
-                "Download HTML",
-                false,
-            ))
-            .child(download(
-                this.clone(),
-                "screen-bar-react",
-                "Download React",
-                true,
-            ))
+            .child(export_button(this.clone(), "screen-bar-html", frame, false))
+            .child(export_button(this.clone(), "screen-bar-react", frame, true))
             .child(divider(line))
             .child(send),
     )
+}
+
+/// Export HTML or Export React of `frame` (a screen or an artboard): asks where, then writes it
+/// ([`BoardView::export_code`]).
+pub(in crate::board) fn export_button(
+    this: WeakEntity<BoardView>,
+    id: &'static str,
+    frame: NodeId,
+    react: bool,
+) -> Button {
+    let (label, tip) = match react {
+        true => (
+            "Export React",
+            "Save a React component and its CSS: a reference to rebuild from",
+        ),
+        false => (
+            "Export HTML",
+            "Save one HTML file with its CSS and images inlined",
+        ),
+    };
+    Button::new(id)
+        .ghost()
+        .small()
+        .label(label)
+        .tooltip(tip)
+        .on_click(move |_, window, cx| {
+            let _ = this.update(cx, |view, cx| view.export_code(frame, react, window, cx));
+        })
 }
 
 /// Send to Agent's menu: each coding agent found, then Copy Prompt.
@@ -169,40 +177,60 @@ impl BoardView {
         .detach();
     }
 
-    /// Download HTML or Download React of screen frame `frame`: asks where, starting in the
-    /// project's folder with the screen's name, then writes it there off the UI thread.
-    pub(in crate::board) fn download_screen(
+    /// Export HTML or Export React of frame `frame`, a screen or an artboard: asks where,
+    /// starting in the project's folder with the frame's name, then writes it there (a screen's
+    /// off the UI thread, from its folder; an artboard's from the document).
+    pub(in crate::board) fn export_code(
         &mut self,
         frame: NodeId,
         react: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(found) = self.selected_screen().filter(|s| s.frame == frame) else {
+        let Some(ds) = self.board().and_then(|b| b.session.ds().ok()) else {
             return;
         };
-        let name = found.data.screen.clone();
-        let file = match react {
-            true => format!("{}.tsx", screens::component_name(&name)),
-            false => format!("{name}.html"),
+        let Some(node) = ds.doc.node(frame) else {
+            return;
+        };
+        let screen = screens::screen_of(node).map(|s| s.screen);
+        let file = match &screen {
+            Some(name) if react => format!("{}.tsx", screens::component_name(name)),
+            Some(name) => format!("{name}.html"),
+            None => frame_code::file_name(&node.name, react),
         };
         let start = self.canvas_project().unwrap_or_else(|| {
             std::env::var_os("HOME").map_or_else(|| "/".into(), std::path::PathBuf::from)
         });
-        let folder = screens::folder(&self.screens_dir(), &name);
+        let folder = screen
+            .as_ref()
+            .map(|name| screens::folder(&self.screens_dir(), name));
         let picked = cx.prompt_for_new_path(&start, Some(&file));
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(path))) = picked.await else {
                 return;
             };
-            let written = cx
-                .background_spawn(async move {
-                    match react {
-                        true => export::write_react(&folder, &name, &path),
-                        false => export::write_html(&folder, &path),
-                    }
-                })
-                .await;
+            let written = match (screen, folder) {
+                (Some(name), Some(folder)) => {
+                    cx.background_spawn(async move {
+                        match react {
+                            true => export::write_react(&folder, &name, &path),
+                            false => export::write_html(&folder, &path),
+                        }
+                    })
+                    .await
+                }
+                _ => {
+                    let made = this.update(cx, |this, _| {
+                        let board = this.board_mut().ok_or("the canvas isn't open")?;
+                        match react {
+                            true => frame_code::write_react(board, frame, &path),
+                            false => frame_code::write_html(board, frame, &path),
+                        }
+                    });
+                    made.unwrap_or_else(|_| Err("the canvas closed".into()))
+                }
+            };
             let said = match written {
                 Ok(written) => {
                     let first = written.files.first();
