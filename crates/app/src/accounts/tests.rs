@@ -139,3 +139,29 @@ fn a_sign_in_runs_claude_and_takes_the_code(cx: &mut TestAppContext) {
     m.update(cx, |m, cx| m.submit_code("abcdefgh#state", cx));
     wait(cx, &|p| p == Some(super::login::Phase::Done));
 }
+
+/// Turned on, shared settings run at once (and on each switch): the default account's MCP
+/// server reaches the other one.
+#[gpui_kit::test]
+fn sharing_runs_when_turned_on(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(|cx| cx.set_global(crate::rt::Rt(sawit_core::rt::Runtime::start())));
+    let (tmp, m) = model(cx);
+    let home = tmp.path().join("home");
+    std::fs::write(
+        home.join(".claude.json"),
+        r#"{"mcpServers": {"neon": {"url": "https://n"}}}"#,
+    )
+    .unwrap();
+    m.update(cx, |m, cx| m.add("work", None, cx));
+    m.update(cx, |m, cx| m.set_sharing(true, cx));
+    for _ in 0..200 {
+        cx.run_until_parked();
+        if m.read_with(cx, |m, _| m.shared.is_some()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let work = std::fs::read_to_string(home.join(".claude-work/.claude.json")).unwrap();
+    assert!(work.contains("neon"), "{work}");
+}

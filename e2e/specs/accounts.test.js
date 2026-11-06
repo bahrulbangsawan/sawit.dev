@@ -38,4 +38,5 @@ sawitTest("accounts: the Settings tab offers the shell block, the shortcuts and 
   // The test's own ~/.zshrc has no block yet: only Install is offered, nothing is written.
   await win.waitFor({ role: "button", name: "Install…" });
   await win.waitFor({ role: "button", name: "Install Shortcuts" });
+  await win.waitFor({ name: "Share Between Accounts" });
 });

@@ -57,6 +57,8 @@ pub struct AccountsModel {
     pub error: Option<String>,
     /// What the last action did.
     pub notice: Option<String>,
+    /// What the last shared-settings run changed, and when (Unix seconds).
+    pub shared: Option<(i64, Vec<String>)>,
     /// The account whose usage check runs.
     pub checking_usage: Option<String>,
     pub login: Option<login::LoginState>,
@@ -110,15 +112,27 @@ impl AccountsModel {
             error: None,
             notice: None,
             checking_usage: None,
+            shared: None,
             login: None,
             _poll: Task::ready(()),
         };
         this.reload();
         this.seed_default();
         this._poll = cx.spawn(async move |this, cx| {
+            let mut ticks = 0u32;
             loop {
                 cx.background_executor().timer(USAGE_EVERY).await;
-                if this.update(cx, |m, cx| m.read_usage(cx)).is_err() {
+                ticks += 1;
+                // Shared settings once a minute, to catch `claude mcp add` or `/plugin install`
+                // inside a session.
+                let sync = ticks.is_multiple_of(12);
+                let alive = this.update(cx, |m, cx| {
+                    m.read_usage(cx);
+                    if sync {
+                        m.sync_shared(cx);
+                    }
+                });
+                if alive.is_err() {
                     return;
                 }
             }
@@ -255,6 +269,7 @@ impl AccountsModel {
         let Some(a) = self.accounts.get(id).cloned() else {
             return;
         };
+        self.sync_shared(cx);
         match aa::write_active(&self.root, &a) {
             Ok(()) => self.notice = Some(format!("New Claude Code sessions use {}.", a.name)),
             Err(e) => self.error = Some(e.to_string()),
@@ -299,6 +314,7 @@ impl AccountsModel {
         };
         self.save();
         self.check(&id, cx);
+        self.sync_shared(cx);
         cx.notify();
         Some(id)
     }
@@ -357,6 +373,41 @@ impl AccountsModel {
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+        cx.notify();
+    }
+
+    /// Shared settings: one run, when they are on.
+    pub fn sync_shared(&mut self, cx: &mut Context<Self>) {
+        if self.accounts.settings.share_extensions {
+            self.run_shared(cx);
+        }
+    }
+
+    /// One shared-settings run now (Sync Now).
+    pub fn run_shared(&mut self, cx: &mut Context<Self>) {
+        let (root, home) = (self.root.clone(), self.home.clone());
+        let accounts: Vec<Account> = self.list().into_iter().cloned().collect();
+        let rx = rt::spawn_blocking(cx, move || {
+            let refs: Vec<&Account> = accounts.iter().collect();
+            sawit_core::agent_accounts::shared::sync(&root, &home, &refs, sawit_core::github::now())
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(result) = rx.await else { return };
+            let _ = this.update(cx, |m, cx| {
+                match result {
+                    Ok(r) => m.shared = Some((sawit_core::github::now(), r.changes)),
+                    Err(e) => m.error = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn set_sharing(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.accounts.settings.share_extensions = on;
+        self.save();
+        self.sync_shared(cx);
         cx.notify();
     }
 

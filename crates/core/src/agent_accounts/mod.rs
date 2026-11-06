@@ -12,6 +12,7 @@ pub mod cli;
 pub mod collector;
 pub mod login;
 pub mod run;
+pub mod shared;
 pub mod shell;
 pub mod statusline;
 mod store;

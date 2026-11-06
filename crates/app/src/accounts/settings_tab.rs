@@ -217,6 +217,25 @@ impl AccountsPage {
                             }),
                     ),
             )
+            .child({
+                let (on, shared) = (m.accounts.settings.share_extensions, m.shared.clone());
+                card("Shared Settings")
+                    .child(div().text_sm().text_color(muted).child("The same MCP servers, skills, agents, commands, CLAUDE.md, plugins, hooks and permission rules in every account; ~/.claude holds the primary copy. Sign-ins, the status line, theme and model stay per account. Every file changed is backed up first."))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Switch::new("accounts-share").checked(on).label("Share Between Accounts").on_click(cx.listener(|this, on: &bool, _, cx| this.model.update(cx, |m, cx| m.set_sharing(*on, cx)))))
+                            .child(Button::new("accounts-share-now").small().ghost().label("Sync Now").disabled(!on).on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |m, cx| m.run_shared(cx))))),
+                    )
+                    .when_some(shared, |el, (at, changes)| {
+                        let when = sawit_core::github::ago(at, sawit_core::github::now());
+                        el.child(div().text_xs().text_color(muted).child(if changes.is_empty() {
+                            format!("Last run {when}: everything was already the same.")
+                        } else {
+                            format!("Last run {when}: {}", changes.join("; "))
+                        }))
+                    })
+            })
             .child(
                 card("Shortcuts cp1–cp9")
                     .child(div().text_sm().text_color(muted).child("cp2 starts claude as account 2 in the list, right in the terminal you type it in (the same as sawit account open 2)."))

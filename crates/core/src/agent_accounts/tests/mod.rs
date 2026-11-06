@@ -11,6 +11,7 @@ const SIGNED_IN: &str = include_str!("../fixtures/auth-status-claudeai.json");
 const SIGNED_OUT: &str = include_str!("../fixtures/auth-status-signed-out.json");
 const FORBIDDEN: &str = include_str!("../fixtures/auth-status-forbidden-fields.json");
 
+mod shared;
 mod shell;
 mod usage;
 
