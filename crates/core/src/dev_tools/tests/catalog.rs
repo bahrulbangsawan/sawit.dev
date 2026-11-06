@@ -54,7 +54,7 @@ fn puremac_is_the_app_from_its_homebrew_cask() {
     let ids = |tools: Vec<&Tool>| tools.iter().map(|t| t.id).collect::<Vec<_>>();
     assert_eq!(ids(plan(&["puremac"], &|_| false)), ["homebrew", "puremac"]);
     assert_eq!(ids(plan(&["puremac"], &|id| id == "homebrew")), ["puremac"]);
-    assert_eq!(ids(dependents("homebrew")), ["puremac"]);
+    assert_eq!(ids(dependents("homebrew")), ["puremac", "gh"]);
     // No `command -v` for it: that would find the PureMac CLI.
     let script = detect_script();
     assert!(!script.contains(&format!("{MARK}puremac")), "{script}");
@@ -63,10 +63,9 @@ fn puremac_is_the_app_from_its_homebrew_cask() {
 }
 
 /// Every app of the catalog (an app bundle among its places) is one whose copy the rule of
-/// `installed_outside` works out: Cap, Zed and PureMac, each with an uninstaller, which
-/// that rule is built on.
+/// `installed_outside` works out: Cap, Zed and PureMac, each with an uninstaller, which that rule is built on.
 #[test]
-fn the_catalogs_apps_are_cap_zed_and_puremac() {
+fn the_catalogs_apps_have_uninstallers() {
     let apps: Vec<&str> = TOOLS
         .iter()
         .filter(|t| is_app_tool(t))

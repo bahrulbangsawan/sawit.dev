@@ -18,6 +18,8 @@ use crate::db::DbStore;
 use crate::git::GitHubAccount;
 use crate::servers::{ServerStore, status_color};
 
+mod setup;
+
 /// Rows shown per list before "N more".
 const MAX_ROWS: usize = 6;
 
@@ -36,6 +38,9 @@ pub enum WelcomeEvent {
     SignInToGitHub,
     /// Signed in: the GitHub page, to clone one of your repositories.
     OpenGitHub,
+    /// Set Up's Install GitHub CLI: the Dev Tools page installs it, asking before anything
+    /// else it needs.
+    InstallGitHubCli,
 }
 
 impl EventEmitter<WelcomeEvent> for Welcome {}
@@ -47,6 +52,10 @@ pub struct Welcome {
     recent: RecentProjects,
     recent_file: PathBuf,
     home: Option<PathBuf>,
+    /// `gh` isn't installed: Set Up offers it, ticked, and installs it only on a click.
+    gh_missing: bool,
+    /// Set Up's GitHub CLI box, ticked to begin with.
+    gh_picked: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -67,6 +76,8 @@ impl Welcome {
             recent,
             recent_file,
             home: std::env::var_os("HOME").map(PathBuf::from),
+            gh_missing: sawit_core::dev_tools::find_program("gh").is_none(),
+            gh_picked: true,
         }
     }
 
@@ -112,7 +123,7 @@ impl Welcome {
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(event())))
     }
 
-    fn section(title: &'static str, cx: &App) -> Div {
+    pub(super) fn section(title: &'static str, cx: &App) -> Div {
         v_flex().gap_1().child(
             div()
                 .px_2()
@@ -369,7 +380,8 @@ impl Render for Welcome {
                 || WelcomeEvent::OpenTerminal,
                 cx,
             ))
-            .child(self.render_github(cx));
+            .child(self.render_github(cx))
+            .children(self.render_setup(cx));
         let right = v_flex()
             .flex_1()
             .min_w(px(280.))

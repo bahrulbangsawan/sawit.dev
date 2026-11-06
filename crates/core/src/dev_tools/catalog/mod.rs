@@ -3,6 +3,8 @@
 
 use super::{Category, Latest, Tool};
 
+mod brew;
+
 const fn tool(
     id: &'static str,
     name: &'static str,
@@ -27,6 +29,13 @@ const fn tool(
         cask: None,
         latest: Latest::None,
         upgrade: None,
+        formula: None,
+        signature: None,
+        version_arg: "--version",
+        apple_silicon: false,
+        long: false,
+        keeps: &[],
+        warning: None,
     }
 }
 
@@ -409,4 +418,5 @@ rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
             "npm install -g cf",
         )
     },
+    brew::GH,
 ];

@@ -100,7 +100,7 @@ pub(super) fn at_known_place(tool: &Tool, home: &Path) -> Option<PathBuf> {
 }
 
 /// The version of `tool`'s copy at `path`: an app bundle's from its
-/// `Info.plist`, else the number its `--version` prints.
+/// `Info.plist`, else the number its version output has.
 pub(super) async fn version_of(tool: &Tool, path: &Path) -> Option<String> {
     if !tool.version {
         return None;
@@ -108,15 +108,28 @@ pub(super) async fn version_of(tool: &Tool, path: &Path) -> Option<String> {
     if is_app(path) {
         return app_version(path).await;
     }
-    let out = crate::cmd::run(path, ["--version"], Duration::from_secs(3))
+    short_version(&version_text(tool, path).await?)
+}
+
+/// What `tool`'s copy at `path` prints for its version ([`Tool::version_arg`]): its output,
+/// or what it wrote to stderr when that is all.
+pub(super) async fn version_text(tool: &Tool, path: &Path) -> Option<String> {
+    let out = crate::cmd::run(path, [tool.version_arg], Duration::from_secs(3))
         .await
         .ok()?;
-    let text = if out.stdout.trim().is_empty() {
+    Some(if out.stdout.trim().is_empty() {
         out.stderr
     } else {
         out.stdout
-    };
-    short_version(&text)
+    })
+}
+
+/// Whether the command found for `tool` is another program by its name: its version output
+/// lacks the tool's [`Tool::signature`] (Midnight Commander's `mc` says nothing of MinIO).
+/// `text` is that output, `None` when it couldn't be read.
+pub(super) fn another_program(tool: &Tool, text: Option<&str>) -> bool {
+    tool.signature
+        .is_some_and(|sig| !text.is_some_and(|t| t.to_lowercase().contains(&sig.to_lowercase())))
 }
 
 /// [`detect`] with `login` as `$SHELL`.
@@ -185,6 +198,21 @@ pub(super) async fn detect_as(login: Option<&str>) -> Detection {
             paths.insert(t.id, p);
         }
     }
+    // Another program by a tool's name isn't the tool.
+    let others = futures::future::join_all(
+        paths
+            .iter()
+            .filter_map(|(id, path)| Some((find(id)?, path)))
+            .filter(|(t, path)| t.signature.is_some() && !is_app(path))
+            .map(|(t, path)| async move {
+                let text = version_text(t, path).await;
+                another_program(t, text.as_deref()).then_some(t.id)
+            }),
+    )
+    .await;
+    for id in others.into_iter().flatten() {
+        paths.remove(id);
+    }
     let versions = futures::future::join_all(
         paths
             .iter()
@@ -210,13 +238,21 @@ pub(super) async fn detect_as(login: Option<&str>) -> Detection {
     Detection { found, problem }
 }
 
-/// The version number in a `--version` line ("Python 3.13.2" → "3.13.2").
+/// The version number in a `--version` line ("Python 3.13.2" → "3.13.2"), or a MinIO
+/// release's date ("mc version RELEASE.2025-08-13T08-35-41Z" → "2025-08-13T08-35-41Z").
 pub(super) fn short_version(text: &str) -> Option<String> {
     let first = text.lines().find(|l| !l.trim().is_empty())?;
     let word = first
         .split(|c: char| c.is_whitespace() || c == ',' || c == '(' || c == ')')
-        .map(|w| w.trim_start_matches('v'))
-        .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()) && w.contains('.'))?;
+        .map(|w| {
+            w.strip_prefix("RELEASE.")
+                .unwrap_or(w)
+                .trim_start_matches('v')
+        })
+        .find(|w| {
+            w.chars().next().is_some_and(|c| c.is_ascii_digit())
+                && (w.contains('.') || super::versions::dated(w).is_some())
+        })?;
     Some(word.to_string())
 }
 

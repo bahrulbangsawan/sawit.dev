@@ -8,6 +8,7 @@
 //! uninstaller that is running can be stopped.
 
 mod detect;
+mod extras;
 mod list;
 mod queue;
 mod render;
@@ -185,6 +186,13 @@ pub struct ToolsPage {
     /// globally (Gemini CLI, the Cloudflare CLI) install with.
     pms: Vec<Available>,
     pm: Option<PackageManager>,
+    /// The GitHub CLI's sign-in, once `gh auth status` answered.
+    gh_auth: Option<sawit_core::dev_tools::extras::GhAuth>,
+    /// The settings an uninstall kept, of tools not installed, that are there.
+    kept: HashMap<&'static str, Vec<std::path::PathBuf>>,
+    /// A tool another part of Sawit asked to install (Install GitHub CLI on the welcome
+    /// screen): offered once detection says what is missing ([`Self::install_when_detected`]).
+    pending_install: Option<&'static str>,
 }
 
 /// The tool's logo, 20 px: colour logos as images, one-colour ones tinted
@@ -202,6 +210,7 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
         "cf" => ("agent_logos/cloudflare-color.svg", true),
         // The app's own icon.
         "puremac" => ("tool_logos/puremac.png", true),
+        "gh" => ("tool_logos/github.svg", false),
         "bun" | "deno" | "rust" | "flyio" => {
             return svg()
                 .path(SharedString::from(format!("tool_logos/{id}.svg")))
@@ -284,6 +293,9 @@ impl ToolsPage {
             _search: None,
             pms: Vec::new(),
             pm: None,
+            gh_auth: None,
+            kept: HashMap::new(),
+            pending_install: None,
         }
     }
 
@@ -340,6 +352,15 @@ impl Render for ToolsPage {
             self.make_search(window, cx);
         }
         let query = self.query(cx);
+        if !self.loading
+            && let Some(tool) = self.pending_install.take().and_then(find)
+        {
+            cx.defer_in(window, move |this, window, cx| {
+                if !this.installed(tool.id) && !this.busy(tool.id) {
+                    this.request_install(tool, window, cx);
+                }
+            });
+        }
         div()
             .id("tools-page")
             .key_context("ToolsPage")
@@ -355,7 +376,9 @@ impl Render for ToolsPage {
                     this.select(false, window, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &catalog::Confirm, _, cx| this.confirm(cx)))
+            .on_action(
+                cx.listener(|this, _: &catalog::Confirm, window, cx| this.confirm_in(window, cx)),
+            )
             .size_full()
             .overflow_y_scroll()
             .bg(cx.theme().background)

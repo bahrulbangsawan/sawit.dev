@@ -4,7 +4,7 @@
 use gpui_kit::*;
 use sawit_core::dev_tools::{
     Detection, Outside, TOOLS, Tool, detect, install_command, installed_with, is_newer,
-    latest_versions, plan, uninstall_command, upgrade_command,
+    latest_versions, plan, uninstall_command, upgrade_for,
 };
 use sawit_core::package_manager::{self, Use};
 
@@ -81,6 +81,7 @@ impl ToolsPage {
                 || !found && matches!(s, State::Removed | State::Failed(_, None)))
         });
         self.selected.retain(|id| !self.found.contains_key(id));
+        self.refresh_extras(cx);
         cx.notify();
     }
 
@@ -145,8 +146,7 @@ impl ToolsPage {
     /// `tool`'s upgrade: with the package manager that installed the copy
     /// found, for one npm installs globally.
     pub(super) fn upgrade_line(&self, tool: &Tool) -> String {
-        let owner = self.found.get(tool.id).map(|f| installed_with(&f.path));
-        upgrade_command(tool, owner)
+        upgrade_for(tool, self.found.get(tool.id).map(|f| f.path.as_path()))
     }
 
     pub(super) fn busy(&self, id: &str) -> bool {
@@ -156,12 +156,13 @@ impl ToolsPage {
         )
     }
 
-    /// Missing tools that "Install All" covers (not the ones that need the
-    /// terminal).
+    /// Missing tools that "Install All" covers: not the ones that need the terminal (a
+    /// password, or a long build), nor one this Mac can't run.
     pub(super) fn missing(&self) -> Vec<&'static str> {
         TOOLS
             .iter()
-            .filter(|t| !t.interactive && !self.installed(t.id) && !self.busy(t.id))
+            .filter(|t| !t.interactive && !t.long && t.unsupported().is_none())
+            .filter(|t| !self.installed(t.id) && !self.busy(t.id))
             .map(|t| t.id)
             .collect()
     }

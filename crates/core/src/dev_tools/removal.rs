@@ -102,6 +102,35 @@ pub(super) fn uninstall_command_at(
     ours.then(|| own.to_string())
 }
 
+/// The Homebrew formula the copy found at `found` (its links followed) was installed from,
+/// when it lies in Homebrew's Cellar: the keg's name (`minio-mc`), with its tap in front when
+/// its install receipt names one other than Homebrew's core (`minio/stable/mc`). `None` for
+/// a copy outside the Cellar, or a name that isn't a formula's.
+pub fn brew_formula(found: &Path) -> Option<String> {
+    let real = std::fs::canonicalize(found).unwrap_or_else(|_| found.to_path_buf());
+    let parts: Vec<_> = real.components().map(|c| c.as_os_str()).collect();
+    let ix = parts.iter().position(|p| *p == "Cellar")?;
+    let keg = parts.get(ix + 1)?.to_str()?;
+    let version = parts.get(ix + 2)?;
+    let cellar: PathBuf = parts[..=ix].iter().collect();
+    let receipt =
+        std::fs::read_to_string(cellar.join(keg).join(version).join("INSTALL_RECEIPT.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let tap = receipt
+        .as_ref()
+        .and_then(|r| r["source"]["tap"].as_str())
+        .filter(|t| *t != "homebrew/core");
+    let name = match tap {
+        Some(tap) => format!("{tap}/{keg}"),
+        None => keg.to_string(),
+    };
+    // Into a shell command: only a formula's name.
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "@._+-/".contains(c))
+        .then_some(name)
+}
+
 /// Whether `tool` is an app: an app bundle is one of its places (Cap, Zed,
 /// PureMac).
 pub(super) fn is_app_tool(tool: &Tool) -> bool {
@@ -112,7 +141,9 @@ pub(super) fn is_app_tool(tool: &Tool) -> bool {
 /// upgrade (its cask's `brew upgrade`, its install script again) and
 /// uninstall act on the copy they put in place, so a copy that isn't that
 /// one (by the rule of [`uninstall_command`]) gets neither: outside
-/// Homebrew for a cask's app, outside its install script for another. Every
+/// Homebrew for a cask's app, outside its install script for another. So
+/// does a formula's command found outside Homebrew's Cellar (the GitHub
+/// CLI's `.pkg`): `brew upgrade` and `brew uninstall` don't know it. Every
 /// other tool's copy is `None`, as before.
 pub fn installed_outside(tool: &Tool, found: &Path) -> Option<Outside> {
     let real = std::fs::canonicalize(found).unwrap_or_else(|_| found.to_path_buf());
@@ -128,10 +159,13 @@ pub(super) fn installed_outside_at(
     home: &Path,
     caskrooms: &[PathBuf],
 ) -> Option<Outside> {
-    if !is_app_tool(tool) || uninstall_command_at(tool, found, real, home, caskrooms).is_some() {
+    let formula = tool.formula.is_some() && !is_app_tool(tool);
+    if !(is_app_tool(tool) || formula)
+        || uninstall_command_at(tool, found, real, home, caskrooms).is_some()
+    {
         return None;
     }
-    Some(if tool.cask.is_some() {
+    Some(if tool.cask.is_some() || formula {
         Outside::Homebrew
     } else {
         Outside::InstallScript

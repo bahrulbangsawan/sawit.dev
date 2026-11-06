@@ -17,6 +17,22 @@ pub(super) fn cask_version(json: &str) -> Option<String> {
         .then(|| version.to_string())
 }
 
+/// The `version` a release manifest gives at its top level ("0.1.13").
+pub(super) fn manifest_version(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let version = v["version"].as_str()?.trim();
+    version
+        .starts_with(|c: char| c.is_ascii_digit())
+        .then(|| version.to_string())
+}
+
+/// A crate's newest stable version from crates.io's API (`crate.max_stable_version`).
+pub(super) fn crate_version(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let version = v["crate"]["max_stable_version"].as_str()?.trim();
+    (!version.is_empty()).then(|| version.to_string())
+}
+
 /// The version in a release tag ("v1.2.3", "bun-v1.2.3" → "1.2.3").
 pub(super) fn tag_version(tag: &str) -> Option<String> {
     let start = tag.find(|c: char| c.is_ascii_digit())?;
@@ -40,6 +56,16 @@ async fn latest_version(tool: &Tool) -> Option<String> {
             &["-fsSL"],
             format!("https://formulae.brew.sh/api/cask/{token}.json"),
         ),
+        Latest::Manifest(url) => (&["-fsSL"], url.to_string()),
+        // crates.io's API turns away requests without a User-Agent.
+        Latest::Crate(name) => (
+            &[
+                "-fsSL",
+                "-A",
+                "sawit (https://github.com/bahrulbangsawan/sawit.dev)",
+            ],
+            format!("https://crates.io/api/v1/crates/{name}"),
+        ),
     };
     let out = crate::cmd::run(
         "/usr/bin/curl",
@@ -59,6 +85,8 @@ async fn latest_version(tool: &Tool) -> Option<String> {
             Some(v["version"].as_str()?.to_string())
         }
         Latest::Cask(_) => cask_version(&out.stdout),
+        Latest::Manifest(_) => manifest_version(&out.stdout),
+        Latest::Crate(_) => crate_version(&out.stdout),
         _ => tag_version(out.stdout.trim().rsplit_once("/tag/")?.1),
     }
 }
@@ -118,7 +146,22 @@ pub fn upgrade_plan(
         .collect()
 }
 
-/// `latest` is a higher dotted version than `installed`. Pre-release and
+/// A release named by its date and time, as MinIO's are ("RELEASE.2025-08-13T08-35-41Z",
+/// "2025-08-13T08-35-41Z"), as a dotted version that compares by them
+/// ("2025.08.13.08.35.41"); `None` for any other version.
+pub(super) fn dated(version: &str) -> Option<String> {
+    let v = version.trim();
+    let v = v.strip_prefix("RELEASE.").unwrap_or(v);
+    let b = v.as_bytes();
+    let date = b.len() >= 10
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[7] == b'-';
+    date.then(|| v.trim_end_matches('Z').replace(['-', 'T', ':'], "."))
+}
+
+/// `latest` is a higher dotted version than `installed` (or a later dated release). Pre-release and
 /// build suffixes ("-beta.1", "+abc") are ignored; missing parts count as 0.
 pub fn is_newer(latest: &str, installed: &str) -> bool {
     fn parts(v: &str) -> Vec<u64> {
@@ -131,7 +174,11 @@ pub fn is_newer(latest: &str, installed: &str) -> bool {
             })
             .collect()
     }
-    let (a, b) = (parts(latest), parts(installed));
+    let (latest, installed) = (
+        dated(latest).unwrap_or_else(|| latest.to_string()),
+        dated(installed).unwrap_or_else(|| installed.to_string()),
+    );
+    let (a, b) = (parts(&latest), parts(&installed));
     if a.is_empty() || b.is_empty() {
         return false;
     }

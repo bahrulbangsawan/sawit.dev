@@ -149,6 +149,26 @@ impl Workspace {
         self.show_tools_page(true, window, cx);
     }
 
+    /// The GitHub CLI, one click away: without `gh`, the Dev Tools page installs it (asking
+    /// first when Homebrew is missing too); with it, `gh auth login` runs in a terminal. Sawit's
+    /// own GitHub sign-in is never copied into gh.
+    pub(super) fn set_up_github_cli(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if sawit_core::dev_tools::find_program("gh").is_some() {
+            let _ = self.run_in_terminal("gh auth login", Origin::User, window, cx);
+            return;
+        }
+        self.show_tools_page(false, window, cx);
+        let page = self.tabs.iter().find_map(|t| match &t.item {
+            PaneItem::Other { view, key, .. } if key.as_ref() == "tools" => {
+                view.clone().downcast::<ToolsPage>().ok()
+            }
+            _ => None,
+        });
+        if let Some(page) = page {
+            page.update(cx, |page, cx| page.install_when_detected("gh", cx));
+        }
+    }
+
     /// Shows the Dev Tools page; `focus` gives its search the keyboard (not
     /// when an agent opens it: the keyboard stays where the user has it).
     pub(super) fn show_tools_page(

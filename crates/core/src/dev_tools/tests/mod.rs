@@ -2,8 +2,10 @@
 
 use super::*;
 
+mod brew;
 mod catalog;
 mod detect;
+mod extras;
 mod programs;
 mod removal;
 mod script;

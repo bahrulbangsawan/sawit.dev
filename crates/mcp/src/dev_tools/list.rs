@@ -2,7 +2,7 @@
 //! the newer releases, and for an installed tool what upgrades and what removes it.
 
 use rmcp::model::CallToolResult;
-use sawit_core::dev_tools::{self, Category, Removal, TOOLS, Tool};
+use sawit_core::dev_tools::{self, Category, Removal, TOOLS, Tool, extras};
 use sawit_core::package_manager::PackageManager;
 
 use super::needs_it;
@@ -16,8 +16,37 @@ pub(super) fn upgrade_line(tool: &Tool, found: &dev_tools::Found) -> String {
             "none: installed outside {}, so Sawit leaves this copy alone",
             outside.of()
         ),
-        None => tool.upgrade_command().to_string(),
+        None => dev_tools::upgrade_for(tool, Some(&found.path)),
     }
+}
+
+/// What `list_dev_tools` adds under a tool: what uninstalling it stops, the settings it
+/// leaves, the GitHub CLI's sign-in.
+pub(super) async fn notes(tool: &Tool, found: Option<&dev_tools::Found>) -> String {
+    let mut out = String::new();
+    if found.is_some() {
+        if let Some(warning) = tool.warning {
+            out.push_str(&format!("\n    uninstalling: {warning}"));
+        }
+        if !tool.keeps.is_empty() {
+            out.push_str(&format!(
+                "\n    keeps: {} (uninstall_dev_tools never deletes them)",
+                tool.keeps.join(", ")
+            ));
+        }
+    }
+    if let ("gh", Some(f)) = (tool.id, found) {
+        let auth = match extras::gh_auth(&f.path).await {
+                Some(extras::GhAuth::SignedIn(Some(login))) => {
+                    format!("signed in to github.com as @{login}")
+                }
+                Some(extras::GhAuth::SignedIn(None)) => "signed in to github.com".into(),
+                Some(extras::GhAuth::SignedOut) => "not signed in. The user signs in with `gh auth login` in a terminal (it asks questions); Sawit's own GitHub sign-in is separate".into(),
+                None => "unknown (gh didn't answer)".into(),
+            };
+        out.push_str(&format!("\n    gh auth: {auth}"));
+    }
+    out
 }
 
 /// What `list_dev_tools` says about removing an installed tool: what
@@ -70,10 +99,14 @@ impl Sawit {
                             .map(|o| format!(" · installed outside {}", o.of()))
                             .unwrap_or_default()
                     ),
-                    None if t.interactive => {
-                        "not installed (asks for a password: run `install` in a terminal)".into()
-                    }
-                    None => "not installed".into(),
+                    None => match t.unsupported() {
+                        Some(why) => format!("not installed: {why}"),
+                        None if t.interactive => {
+                            "not installed (asks for a password: run `install` in a terminal)"
+                                .into()
+                        }
+                        None => "not installed".into(),
+                    },
                 };
                 let needs = if t.needs.is_empty() {
                     String::new()
@@ -108,8 +141,9 @@ impl Sawit {
                     ),
                     None => String::new(),
                 };
+                let notes = notes(t, found.get(t.id)).await;
                 out.push(format!(
-                    "- {} ({}) · {state}{needs}\n    {}\n    install: {}{others}{installed}",
+                    "- {} ({}) · {state}{needs}\n    {}\n    install: {}{others}{installed}{notes}",
                     t.id, t.name, t.description, t.install
                 ));
             }

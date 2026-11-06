@@ -27,7 +27,11 @@ impl ToolsPage {
         }
         for tool in tools {
             self.selected.remove(tool.id);
-            if tool.interactive {
+            if tool.unsupported().is_some() {
+                continue;
+            }
+            // A password to type, or a long build whose progress shows there.
+            if tool.interactive || tool.long {
                 self.states.insert(tool.id, State::InTerminal);
                 cx.emit(ToolsEvent::RunInTerminal(self.command(tool)));
                 self.upgrades.remove(tool.id);
@@ -79,6 +83,15 @@ impl ToolsPage {
             .filter(|t| self.installed(t.id) && self.outside(t.id).is_none())
             .collect();
         let mut detail = format!("Runs: {command}");
+        if !tool.keeps.is_empty() {
+            detail = format!(
+                "Your settings ({}) stay.\n\n{detail}",
+                tool.keeps.join(", ")
+            );
+        }
+        if let Some(warning) = tool.warning {
+            detail = format!("{warning}\n\n{detail}");
+        }
         if !needed_by.is_empty() {
             // Per kind: a cask's app keeps working, without Homebrew's updates.
             detail = format!("{}.\n\n{detail}", needed_by_warning(&needed_by));

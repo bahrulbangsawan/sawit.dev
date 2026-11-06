@@ -61,6 +61,13 @@ pub async fn pasang(args: PasangArgs) -> i32 {
         }
     }
     for tool in plan {
+        if let Some(why) = tool.unsupported() {
+            ink.warn(&format!(
+                "{} tidak bisa dipasang di Mac ini: {why}.",
+                tool.id
+            ));
+            return 1;
+        }
         if tool.interactive {
             // It asks for a password, which the installer can't read here.
             ink.warn(&format!(
@@ -147,6 +154,15 @@ pub(super) fn cabut_warnings(
 }
 
 /// `sawit pupuk [tool…]`.
+/// What upgrades the copy of `tool` found: `brew upgrade` of the formula it came from, or the
+/// tool's own upgrade with the package manager that installed it ([`dev_tools::upgrade_for`]).
+fn upgrade_line(
+    tool: &crate::dev_tools::Tool,
+    found: &std::collections::HashMap<&'static str, crate::dev_tools::Found>,
+) -> String {
+    crate::dev_tools::upgrade_for(tool, found.get(tool.id).map(|f| f.path.as_path()))
+}
+
 pub async fn pupuk(args: PupukArgs) -> i32 {
     use crate::dev_tools;
     let ink = Ink::stdout();
@@ -185,7 +201,7 @@ pub async fn pupuk(args: PupukArgs) -> i32 {
             ink.gray(&format!("{:>3}.", ix + 1)),
             t.id,
             clip(&format!("{from} → {to}"), 22),
-            ink.gray(t.upgrade_command())
+            ink.gray(&upgrade_line(t, &found))
         );
     }
     println!();
@@ -222,7 +238,7 @@ pub async fn pupuk(args: PupukArgs) -> i32 {
         }
         println!("  {} {}", ink.yellow("⏳"), tool.name);
         let gray = |line: String| println!("     {}", ink.gray(&clip(&line, 100)));
-        match dev_tools::run(tool, tool.upgrade_command(), gray).await {
+        match dev_tools::run(tool, &upgrade_line(tool, &found), gray).await {
             Ok(()) => println!("  {} {} dipupuk", ink.green("✓"), tool.id),
             Err(e) => {
                 println!("  {} {}: {e}", ink.red("✗"), tool.id);

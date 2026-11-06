@@ -94,6 +94,11 @@ impl Sawit {
         }
         let mut failed = false;
         for tool in plan.iter().filter(|t| !found.contains_key(t.id)) {
+            if let Some(why) = tool.unsupported() {
+                out.push(format!("- {}: not run. {why}.", tool.id));
+                failed = true;
+                break;
+            }
             if tool.interactive {
                 // It asks for a password, which only a terminal can answer.
                 out.push(format!(
@@ -171,13 +176,10 @@ impl Sawit {
                 failed = true;
                 continue;
             }
-            // An npm tool upgrades with the package manager that installed it.
-            let command = match found.get(tool.id) {
-                Some(f) => {
-                    dev_tools::upgrade_command(tool, Some(dev_tools::installed_with(&f.path)))
-                }
-                None => tool.upgrade_command().to_string(),
-            };
+            // An npm tool upgrades with the package manager that installed it, a Homebrew
+            // copy with the formula it came from.
+            let command =
+                dev_tools::upgrade_for(tool, found.get(tool.id).map(|f| f.path.as_path()));
             match dev_tools::run(tool, &command, |_| {}).await {
                 Ok(()) => out.push(format!("- {}: upgraded{to}", tool.id)),
                 Err(e) => {
@@ -266,6 +268,17 @@ impl Sawit {
                     }
                     None => format!("- {id}: removed"),
                 };
+                if let Some(warning) = step.tool.warning {
+                    text.push_str(&format!(". {warning}"));
+                }
+                let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+                let kept = dev_tools::kept(step.tool, &home);
+                if !kept.is_empty() {
+                    text.push_str(&format!(
+                        ". Kept: {} (the user's settings; never deleted by this tool)",
+                        kept.iter().map(|p| tilde(p)).collect::<Vec<_>>().join(", ")
+                    ));
+                }
                 if !step.needed_by.is_empty() {
                     text.push_str(&format!(". {}", needs_it(&step.needed_by)));
                 }

@@ -56,6 +56,24 @@ impl ToolsPage {
         cx.notify();
     }
 
+    /// ↩ on a row, as the keys send it: an install that pulls in prerequisites asks first, as
+    /// the row's Install does ([`Self::request_install`]); the rest is [`Self::confirm`].
+    pub(super) fn confirm_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.shown(&self.query(cx));
+        if let Some(&(_, tool)) = self.cursor.and_then(|ix| rows.get(ix))
+            && !self.states.contains_key(tool.id)
+            && self.newer(tool.id).is_none()
+            && !self.installed(tool.id)
+            && !self.busy(tool.id)
+        {
+            if tool.unsupported().is_none() {
+                self.request_install(tool, window, cx);
+            }
+            return;
+        }
+        self.confirm(cx);
+    }
+
     /// ↩ on a row: what its main button does, when that's safe from one key: Install,
     /// Upgrade, Retry of an install or upgrade, and taking it out of the queue. Never
     /// Reinstall, Stop, Uninstall or Retry of an uninstall.

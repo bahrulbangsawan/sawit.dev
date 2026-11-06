@@ -49,6 +49,7 @@ impl Workspace {
             WelcomeEvent::NewProject => self.open_new_project_page(window, cx),
             WelcomeEvent::Dismiss => self.leave_welcome(PANEL_AND_TABS, cx),
             WelcomeEvent::SignInToGitHub => self.sign_in_to_github(window, cx),
+            WelcomeEvent::InstallGitHubCli => self.set_up_github_cli(window, cx),
             WelcomeEvent::OpenGitHub => {
                 self.leave_welcome(PANEL_AND_TABS, cx);
                 self.open_github(window, cx);

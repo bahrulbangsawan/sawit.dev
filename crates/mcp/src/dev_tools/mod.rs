@@ -73,14 +73,14 @@ fn needs_it(tools: &[&Tool]) -> String {
 #[tool_router(router = dev_tools_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "List the developer tools of Sawit's Tools page (package managers, runtimes, AI agents, terminal apps) with whether each is installed, its version, the newer release when there is one, prerequisites, and its install command; for an installed one also where it was found and its upgrade and uninstall commands (with the installed tools that need it). Reads the latest versions from npm/GitHub. Works without the app"
+        description = "List the developer tools of Sawit's Tools page (package managers, runtimes, AI agents, terminal apps, the GitHub CLI, MinIO, HyperFrames, Herdr, voxl) with whether each is installed, its version, the newer release when there is one, prerequisites, and its install command; for an installed one also where it was found, its upgrade and uninstall commands (with the installed tools that need it), what uninstalling stops and the settings it keeps, and the GitHub CLI's sign-in (gh auth status), HyperFrames' Chrome and voxl's macOS permissions. Reads the latest versions from npm/GitHub/crates.io. Works without the app"
     )]
     async fn list_dev_tools(&self) -> CallToolResult {
         self.list_dev_tools_tool().await
     }
 
     #[tool(
-        description = "Install developer tools from list_dev_tools by id, prerequisites first, skipping installed ones. RUNS EACH TOOL'S OFFICIAL INSTALL SCRIPT FROM THE INTERNET (curl … | sh): needs confirm=true. Tools that ask for a password (Homebrew) are not run; their command is returned for a terminal. Can take minutes. Works without the app"
+        description = "Install developer tools from list_dev_tools by id, prerequisites first, skipping installed ones. RUNS EACH TOOL'S OFFICIAL INSTALL SCRIPT FROM THE INTERNET (curl … | sh, brew install, npm install -g, cargo install): needs confirm=true. Tools that ask for a password (Homebrew) are not run; their command is returned for a terminal. One this Mac can't run (the Herdr app on an Intel Mac) is refused. Can take minutes (voxl builds from source). Works without the app"
     )]
     async fn install_dev_tools(
         &self,

@@ -233,6 +233,7 @@ tool_logos!(
     "deno",
     "factory-color",
     "flyio",
+    "github",
     "homebrew-color",
     "nodejs-color",
     "npm-color",

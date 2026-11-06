@@ -119,6 +119,7 @@ actions!(
         OpenCanvas,
         OpenBrowser,
         OpenDevTools,
+        SetUpGitHubCli,
         OpenMcp,
         OpenSkills,
         OpenNewProject,

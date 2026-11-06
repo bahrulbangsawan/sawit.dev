@@ -97,6 +97,11 @@ impl ToolsPage {
                 "Installed".into(),
                 theme.success,
             ),
+            (None, None) if tool.unsupported().is_some() => (
+                Mark::Icon(Lucide::CircleMinus),
+                tool.unsupported().unwrap_or_default().into(),
+                muted,
+            ),
             (None, None) if self.loading => (Mark::Spinner, "Checking…".into(), muted),
             (None, None) => (
                 Mark::Icon(Lucide::CircleDashed),
@@ -167,14 +172,22 @@ impl ToolsPage {
                     .tooltip("Run the Installer Again (Updates to the Latest Version)")
                     .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
             ),
-            _ if tool.interactive => Some(
+            // On an Intel Mac, the Herdr app: the status says why, and nothing offers to fail.
+            _ if tool.unsupported().is_some() => None,
+            _ if tool.interactive || tool.long => Some(
                 Button::new(("tool-terminal", ix))
                     .primary()
                     .small()
                     .icon(Lucide::SquareTerminal)
                     .label("Install in Terminal")
-                    .tooltip("Asks for Your Password, So It Runs in the Terminal")
-                    .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
+                    .tooltip(if tool.interactive {
+                        "Asks for Your Password, So It Runs in the Terminal"
+                    } else {
+                        "Builds From Source, So It Runs in the Terminal"
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.request_install(tool, window, cx)
+                    })),
             ),
             _ => Some(
                 Button::new(("tool-install", ix))
@@ -182,28 +195,31 @@ impl ToolsPage {
                     .small()
                     .icon(Lucide::Download)
                     .label("Install")
-                    .on_click(cx.listener(move |this, _, _, cx| this.enqueue(&[id], cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.request_install(tool, window, cx)
+                    })),
             ),
         };
 
         let can_uninstall = installed && !busy && self.uninstall_command(tool).is_some();
-        let checkbox = if installed || busy || tool.interactive {
-            div().size(px(16.)).flex_none().into_any_element()
-        } else {
-            let checked = self.selected.contains(id);
-            Checkbox::new(("tool-pick", ix))
-                .accessibility_label(format!("Select {}", tool.name))
-                .checked(checked)
-                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                    if *checked {
-                        this.selected.insert(id);
-                    } else {
-                        this.selected.remove(id);
-                    }
-                    cx.notify();
-                }))
-                .into_any_element()
-        };
+        let checkbox =
+            if installed || busy || tool.interactive || tool.long || tool.unsupported().is_some() {
+                div().size(px(16.)).flex_none().into_any_element()
+            } else {
+                let checked = self.selected.contains(id);
+                Checkbox::new(("tool-pick", ix))
+                    .accessibility_label(format!("Select {}", tool.name))
+                    .checked(checked)
+                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                        if *checked {
+                            this.selected.insert(id);
+                        } else {
+                            this.selected.remove(id);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            };
 
         // One chip per prerequisite: green once it's installed.
         let needs = tool.needs.iter().filter_map(|n| find(n)).map(|need| {
@@ -369,6 +385,9 @@ impl ToolsPage {
                     })
                     .children(action),
             ))
+            .when_some(self.render_extras(ix, tool, cx), |el, extras| {
+                el.child(h_flex().pl(indent).child(extras))
+            })
             .when_some(
                 self.outside(id).filter(|_| state.is_none()),
                 |el, outside| {

@@ -130,6 +130,7 @@ impl Render for Workspace {
                 },
             ))
             .on_action(cx.listener(|this, _: &OpenDevTools, w, cx| this.open_tools_page(w, cx)))
+            .on_action(cx.listener(|this, _: &SetUpGitHubCli, w, cx| this.set_up_github_cli(w, cx)))
             .on_action(
                 cx.listener(|this, _: &OpenNewProject, w, cx| this.open_new_project_page(w, cx)),
             )

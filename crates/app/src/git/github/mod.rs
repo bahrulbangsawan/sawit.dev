@@ -258,10 +258,49 @@ impl Render for GitHubView {
             .when(!card, |el| {
                 el.child(self.render_header(cx))
                     .children(self.render_missing_scopes(cx))
+                    .children(render_gh_cli(cx))
                     .child(div().flex_1().min_h_0().child(match self.page {
                         Page::Repository => self.render_repository(cx),
                         Page::Repos => self.render_repos(cx),
                     }))
             })
     }
+}
+
+/// The GitHub CLI put away with Not Now in this run of Sawit.
+static GH_CLI_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Without `gh`, Install GitHub CLI in place of an error wherever it would help: the Dev Tools
+/// page installs it, asking first. With it, nothing: Sawit's own sign-in is what this page uses.
+fn render_gh_cli(cx: &mut Context<GitHubView>) -> Option<impl IntoElement + use<>> {
+    use std::sync::atomic::Ordering;
+    if GH_CLI_HIDDEN.load(Ordering::Relaxed) || sawit_core::dev_tools::find_program("gh").is_some()
+    {
+        return None;
+    }
+    Some(
+        crate::states::Banner::info(
+            "gh-cli-missing",
+            "The GitHub CLI (gh) isn't installed: agents and scripts in your terminal use it for pull requests and issues.",
+        )
+        .action(
+            Button::new("gh-cli-install")
+                .xsmall()
+                .primary()
+                .label("Install GitHub CLI")
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(crate::workspace::SetUpGitHubCli), cx)
+                }),
+        )
+        .action(
+            Button::new("gh-cli-later")
+                .xsmall()
+                .ghost()
+                .label("Not Now")
+                .on_click(cx.listener(|_, _, _, cx| {
+                    GH_CLI_HIDDEN.store(true, Ordering::Relaxed);
+                    cx.notify();
+                })),
+        ),
+    )
 }
