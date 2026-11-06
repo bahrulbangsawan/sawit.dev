@@ -1,5 +1,6 @@
 //! The packs added from their sources' docs: shadcn/ui's official skills, HyperFrames' Core
-//! Skills (its plugin in Claude Code).
+//! Skills (its plugin in Claude Code), and Design to Code, whose repository's example sites
+//! never land on disk.
 
 use super::*;
 use crate::package_manager::PackageManager;
@@ -104,4 +105,60 @@ fn hyperframes_installs_its_plugin_or_its_core_skills() {
         4
     );
     assert!(pack.note.unwrap().contains("/hyperframes:hyperframes"));
+}
+
+/// Design to Code installs its one skill, and only that folder: the skills CLI by name, or a
+/// clone whose `design-to-code` folder (at the repository's top, beside `websites/`) is copied
+/// into Claude Code's, Codex's and Factory Droid's skills folders. Its description says it
+/// overlaps with build-design.
+#[test]
+fn design_to_code_lands_only_its_skill_folder() {
+    let pack = get("design-to-code").unwrap();
+    assert_eq!(
+        (pack.name, pack.by, pack.category),
+        ("Design to Code", "Atharv Jadav", Category::Design)
+    );
+    assert_eq!(pack.home, "https://github.com/Atharvsinh-codez/skills");
+    assert_eq!(pack.repo, "https://github.com/Atharvsinh-codez/skills");
+    assert_eq!(pack.skills, ["design-to-code"]);
+    assert!(pack.about.contains("build-design"), "{}", pack.about);
+    assert!(pack.note.unwrap().contains("Restart"));
+    let none = Installed::default();
+    let main = claude(None);
+    let codex = folder(".agents/skills", Some("codex"));
+    let droid = folder(".factory/skills", Some("droid"));
+    let places = [(&main, &none), (&codex, &none), (&droid, &none)];
+    assert_eq!(
+        lines(pack, pack.methods[0], Action::Install, &places),
+        [
+            "npx -y skills add Atharvsinh-codez/skills --skill design-to-code -g -a claude-code -a codex -a droid -y"
+        ]
+    );
+    let copy = lines(pack, pack.methods[1], Action::Install, &places);
+    assert_eq!(
+        copy[2],
+        "git clone --depth 1 https://github.com/Atharvsinh-codez/skills \"$tmp/skills\""
+    );
+    let copies: Vec<&String> = copy.iter().filter(|l| l.starts_with("cp ")).collect();
+    assert_eq!(
+        copies,
+        [
+            "cp -R \"$tmp/skills/design-to-code\" \"$HOME/.claude/skills\"/",
+            "cp -R \"$tmp/skills/design-to-code\" \"$HOME/.agents/skills\"/",
+            "cp -R \"$tmp/skills/design-to-code\" \"$HOME/.factory/skills\"/",
+        ]
+    );
+    assert!(!copy.iter().any(|l| l.contains("websites")));
+    assert_eq!(
+        sample(pack, pack.methods[1], PackageManager::Npm, &env()),
+        "git clone --depth 1 https://github.com/Atharvsinh-codez/skills && cp -R skills/<skill> <agent's skills folder>/"
+    );
+    let there = Installed {
+        folder: ["design-to-code".to_string()].into(),
+        ..Installed::default()
+    };
+    assert_eq!(
+        lines(pack, pack.methods[0], Action::Remove, &[(&droid, &there)]),
+        ["rm -rf \"$HOME/.factory/skills/design-to-code\""]
+    );
 }

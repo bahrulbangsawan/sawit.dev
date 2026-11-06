@@ -113,6 +113,44 @@ fn round_trip(pack: &Pack, method: Method, home: &Path, targets: &[&Target]) {
     }
 }
 
+/// Design to Code by clone and copy: only the skill's folder lands in Claude Code's, Codex's
+/// and Factory Droid's folders, never the repository's example sites; then by the skills CLI.
+#[test]
+#[ignore = "downloads from GitHub and npm"]
+fn live_design_to_code_installs_and_removes() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let (main, shared, droid) = agents(home);
+    let pack = get("design-to-code").unwrap();
+    // The copy, checked on disk before it's removed.
+    let env = env_in(home);
+    let none = Installed::default();
+    let places = [(&main, &none), (&shared, &none), (&droid, &none)];
+    run_in(
+        home,
+        &script(
+            pack,
+            pack.methods[1],
+            Action::Install,
+            &places,
+            PackageManager::Npm,
+            &env,
+        )
+        .unwrap(),
+    );
+    for t in [&main, &shared, &droid] {
+        let names: Vec<String> = std::fs::read_dir(&t.dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["design-to-code"], "{}", t.dir.display());
+        assert!(t.dir.join("design-to-code/SKILL.md").is_file());
+        assert!(!t.dir.join("design-to-code/websites").exists());
+    }
+    round_trip(pack, pack.methods[1], home, &[&main, &shared, &droid]);
+    round_trip(pack, pack.methods[0], home, &[&main, &shared]);
+}
+
 /// shadcn/ui's skills with the skills CLI, into Claude Code and Codex.
 #[test]
 #[ignore = "downloads from GitHub and npm"]

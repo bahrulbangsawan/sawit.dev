@@ -36,8 +36,8 @@ pub fn sample(pack: &Pack, method: Method, pm: PackageManager, env: &Env) -> Str
         Method::Copy { url, path } => {
             let name = url.rsplit('/').next().unwrap_or("repo");
             format!(
-                "git clone --depth 1 {url} && cp -R {name}/{}/<skill> <agent's skills folder>/",
-                path.trim_matches('/')
+                "git clone --depth 1 {url} && cp -R {}<skill> <agent's skills folder>/",
+                in_clone(name, path)
             )
         }
         Method::Bundled => pack
@@ -205,17 +205,25 @@ pub fn script(
                 "trap 'rm -rf \"$tmp\"' EXIT".to_string(),
                 format!("git clone --depth 1 {} {clone}", quote(url)),
             ];
-            let path = path.trim_matches('/');
             let from: Vec<(&str, String)> = pack
                 .skills
                 .iter()
-                .map(|skill| (*skill, format!("\"$tmp/{name}/{path}/{skill}\"")))
+                .map(|skill| (*skill, format!("\"$tmp/{}{skill}\"", in_clone(name, path))))
                 .collect();
             lines.extend(copy_lines(&from, places, env));
             lines
         }
         Method::Bundled => bundled_lines(pack.skills, places, env)?,
     })
+}
+
+/// The folder of a clone named `name` that holds the skills at `path` in it, with a slash at
+/// its end: `repo/skills/`, or `repo/` for skills at the repository's top.
+fn in_clone(name: &str, path: &str) -> String {
+    match path.trim_matches('/') {
+        "" => format!("{name}/"),
+        path => format!("{name}/{path}/"),
+    }
 }
 
 /// Copies each skill folder of `from` (the skill, and its folder as the shell reads it) into the

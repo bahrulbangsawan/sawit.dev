@@ -129,6 +129,29 @@ pub const PACKS: &[Pack] = &[
         }],
         note: None,
     },
+    // The repository (MIT, Atharv Jadav) holds one skill, `design-to-code`, beside six example
+    // Next.js sites in `websites/`: the skills CLI and the copy take the skill's folder only.
+    Pack {
+        id: "design-to-code",
+        name: "Design to Code",
+        by: "Atharv Jadav",
+        about: "Turns a design image, a Figma frame or a live page into responsive frontend code, then renders it, compares it with the design and repeats until they match. Overlaps with build-design (Interface Skills): pick one.",
+        category: Category::Design,
+        skills: &["design-to-code"],
+        home: "https://github.com/Atharvsinh-codez/skills",
+        repo: "https://github.com/Atharvsinh-codez/skills",
+        methods: &[
+            Method::SkillsCli {
+                source: "Atharvsinh-codez/skills",
+                all: false,
+            },
+            Method::Copy {
+                url: "https://github.com/Atharvsinh-codez/skills",
+                path: "",
+            },
+        ],
+        note: Some("Restart the agent's session after installing, so it loads the skill."),
+    },
     Pack {
         id: "make-interfaces-feel-better",
         name: "Make Interfaces Feel Better",

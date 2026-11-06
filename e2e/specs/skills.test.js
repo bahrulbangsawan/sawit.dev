@@ -1,4 +1,4 @@
-// The Skills page: Sawit Skills' card first, eleven packs (Sawit's own Canvas Design first, its
+// The Skills page: Sawit Skills' card first, fourteen packs (Sawit's own Canvas Design first, its
 // Sawit pack first of the Workflow ones), and each install sheet's "Run with" package-manager menu.
 // The sheet opens from a row's "Install …" button (the ellipsis: it opens a sheet that asks
 // first); the sheet's own Install is never pressed, nor the card's.
@@ -11,7 +11,7 @@ import { openPage, waitForTab } from "../lib/sawit.js";
 /** What the menu may offer: the managers installed on this Mac, each with the command it runs. */
 const MANAGERS = /^(npm \(npx\)|pnpm \(pnpm dlx\)|bun \(bunx\)|yarn \(yarn dlx\))$/;
 
-sawitTest("skills: the page lists Sawit Skills and eleven packs, and an install sheet picks its package manager", async (ctx) => {
+sawitTest("skills: the page lists Sawit Skills and fourteen packs, and an install sheet picks its package manager", async (ctx) => {
   const { win } = ctx;
   // The footer's Pages menu opens it (there is no Skills button of its own any more).
   await openPage(ctx, "Skills");
@@ -21,12 +21,12 @@ sawitTest("skills: the page lists Sawit Skills and eleven packs, and an install 
   await win.waitFor({ role: "group", name: "Sawit Skills" });
   await win.waitFor({ role: "button", name: "Install Sawit Skills", within: "Sawit Skills" });
   const all = await win.waitFor({ role: "switch", name: /^All \d+$/ });
-  assert.equal(all.name, "All 11", "eleven packs");
-  // Eight a page: cf CLI and Cloudflare Skills, the last Platforms & SDKs packs, and Animate, the
-  // one Video & Animation pack, are on the second.
-  await win.waitFor({ role: "statictext", name: "1–8 of 11 packs" });
+  assert.equal(all.name, "All 14", "fourteen packs");
+  // Eight a page: the Platforms & SDKs and Video & Animation packs are on the second.
+  await win.waitFor({ role: "statictext", name: "1–8 of 14 packs" });
   // Each pack is a row named after it.
-  for (const pack of ["Canvas Design", "Interface Skills", "Sawit", "Superpowers", "improve"]) {
+  // The first page: the six Design & UI packs, then Sawit and Superpowers.
+  for (const pack of ["Canvas Design", "Interface Skills", "Design to Code", "shadcn/ui", "Sawit", "Superpowers"]) {
     await win.waitFor({ role: "group", name: pack });
   }
 
