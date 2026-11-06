@@ -364,7 +364,7 @@ impl ShellConfigPanel {
                         .icon(if open {
                             Lucide::ChevronUp
                         } else {
-                            Lucide::FileDiff
+                            Lucide::Diff
                         })
                         .tooltip(if open {
                             "Hide the Differences"

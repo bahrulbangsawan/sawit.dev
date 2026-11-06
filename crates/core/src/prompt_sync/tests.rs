@@ -79,7 +79,7 @@ fn prompts_round_trip_back_up_delete_restore() {
     assert_eq!(restoring[0].state, FileState::OnlyOnGitHub);
     let contents: BTreeMap<String, Vec<u8>> = files.clone().into_iter().collect();
     let (out, _) = apply_restore(&mut lib, &plan, &contents, &[]).unwrap();
-    assert_eq!(out.synced_ids, [gone.id.clone()]);
+    assert_eq!(out.synced_ids, std::slice::from_ref(&gone.id));
     let back = lib.get(&gone.id).unwrap();
     assert_eq!(back.body, gone.body);
     assert_eq!(crate::prompts::variables(&back.body), ["file", "language"]);

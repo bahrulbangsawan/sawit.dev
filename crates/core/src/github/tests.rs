@@ -310,8 +310,10 @@ fn sync_states_follow_the_last_sync() {
         ("gone", "1"),
         ("never", "2"),
     ]);
-    let mut base = SyncBase::default();
-    base.files = map(&[("here", "1"), ("there", "1"), ("both", "1")]);
+    let base = SyncBase {
+        files: map(&[("here", "1"), ("there", "1"), ("both", "1")]),
+        ..Default::default()
+    };
     let plan: BTreeMap<String, FileState> = plan_sync(&local, &remote, &base).into_iter().collect();
     assert_eq!(plan["same"], FileState::Same);
     assert_eq!(plan["here"], FileState::ChangedHere);
