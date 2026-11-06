@@ -366,7 +366,7 @@ pub struct CanvasAddRoutesArgs {
     )]
     pub routes: Option<Vec<String>>,
     #[schemars(
-        description = "The viewports, as widths or sizes: [1440, 768, 390] (the default), [{\"w\": 1280, \"h\": 720}]. A width alone takes its device's height (1440 × 900, 768 × 1024, 390 × 844)"
+        description = "The viewports, as widths or sizes: [1440] (the default: a desktop), [1440, 768, 390], [{\"w\": 1280, \"h\": 720}]. A width alone takes its device's height (1440 × 900, 768 × 1024, 390 × 844), which each frame then grows from to show its whole page"
     )]
     pub viewports: Option<Vec<Value>>,
     #[schemars(description = CANVAS_FILE)]

@@ -163,6 +163,7 @@ impl BoardView {
         let Some(web) = self.web.as_mut() else {
             return;
         };
+        web.measure_first(id);
         let config = web.config;
         let Some(frame) = web.frames.get_mut(&id) else {
             return;

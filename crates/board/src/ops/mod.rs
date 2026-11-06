@@ -89,7 +89,7 @@ use replace::replace;
 
 pub use diagram::{PreparedDiagram, prepare_diagram, run_prepared};
 pub use files::{engine_name, is_canvas_file, is_sawit_file};
-pub use routes::{STEPS as ROUTE_STEPS, viewports as route_viewports};
+pub use routes::{STEPS as ROUTE_STEPS, fit_to_page, viewports as route_viewports};
 pub use screen::{SCREEN_SIZE, export_with_pictures, with_pictures};
 pub use work::{PROGRESS_UNSHOWN, WORK_SIZE, agent_refusal, work_frame, work_of, work_steps};
 

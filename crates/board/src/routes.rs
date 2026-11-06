@@ -5,7 +5,15 @@
 //!
 //! Add Routes from Dev Server, and `canvas_add_routes`, lay a server's routes out in a section
 //! named for the server: a row per route, a frame per viewport in each row ([`layout`]), each frame
-//! named `<route> / <viewport>`.
+//! named `<route> · <device> <width>` ([`frame_name`]). A desktop frame, 1440 wide, is the one
+//! viewport when none is chosen.
+//!
+//! A route frame is responsive: its page is laid out at the frame's own size, so resizing the
+//! frame lays the page out again at the new size. One made with [`WebData::fit`] shows the whole
+//! page, as a full-page screenshot does: each time its page settles (a load, a hot update, a
+//! resize) it is measured at the viewport's height and the frame takes the page's height
+//! ([`page_frame_height`]), growing or shrinking; the layers under it in its section move with
+//! its bottom.
 
 use figcraft_doc::Node;
 use serde::{Deserialize, Serialize};
@@ -14,8 +22,10 @@ use crate::screens::Viewport;
 
 /// The plugin data key of a route frame (a URL frame).
 pub const WEB_KEY: &str = "sawit.web";
-/// The viewports' widths Add Routes lays each route out at when none are chosen.
-pub const DEFAULT_WIDTHS: [f64; 3] = [1440.0, 768.0, 390.0];
+/// The viewports' widths Add Routes lays each route out at when none are chosen: a desktop.
+pub const DEFAULT_WIDTHS: [f64; 1] = [1440.0];
+/// The tallest a frame grows to show its whole page ([`page_frame_height`]).
+pub const MOST_FITTED_HEIGHT: f64 = 16_000.0;
 /// Most routes one Add Routes lays out.
 pub const MOST_ROUTES: usize = 24;
 /// Most viewports one Add Routes lays each route out at.
@@ -33,6 +43,10 @@ pub struct WebData {
     /// The route it shows, `/changelog`, when Add Routes made it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+    /// The frame shows its whole page: it takes the page's height, measured at
+    /// [`Self::viewport`]'s height, each time the page settles ([`page_frame_height`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fit: bool,
 }
 
 impl WebData {
@@ -93,6 +107,18 @@ pub fn viewport_for(w: f64) -> Viewport {
     Viewport { w, h: h.round() }
 }
 
+/// The height a full-page frame ([`WebData::fit`]) whose viewport is `base` CSS px tall takes for
+/// a page `page_height` CSS px tall, measured in a viewport `base` tall: the page's height, never
+/// less than the viewport's nor more than [`MOST_FITTED_HEIGHT`]. The page is always measured at
+/// the viewport's own height, never at the frame's: a page whose height follows its viewport's
+/// (`100vh`) would otherwise grow the frame at every measure. `None` for a height that isn't a
+/// number.
+pub fn page_frame_height(base: f64, page_height: f64) -> Option<f64> {
+    page_height
+        .is_finite()
+        .then(|| page_height.ceil().clamp(base, MOST_FITTED_HEIGHT.max(base)))
+}
+
 /// A frame of [`layout`]: where it goes in the section (from its top-left), its viewport, and the
 /// route it shows (an index into the routes laid out).
 #[derive(Clone, Debug, PartialEq)]
@@ -106,7 +132,7 @@ pub struct Placed {
 /// Room around the frames in a section (more above them, where the section's name is), between
 /// frames in a row, and between rows: frames' names show above them.
 pub const PADDING: f64 = 120.0;
-pub const TOP: f64 = 480.0;
+pub const TOP: f64 = 200.0;
 pub const COLUMN_GAP: f64 = 120.0;
 pub const ROW_GAP: f64 = 200.0;
 
@@ -135,9 +161,21 @@ pub fn layout(routes: usize, viewports: &[Viewport]) -> (Vec<Placed>, (f64, f64)
     (placed, (row_width + 2.0 * PADDING, height))
 }
 
-/// A route frame's name: `/changelog / 1440`.
+/// A route frame's name: `/changelog · Desktop 1440`, and `Home · Phone 390` for `/`.
 pub fn frame_name(route: &str, viewport: Viewport) -> String {
-    format!("{route} / {}", viewport.w)
+    let route = if route == "/" { "Home" } else { route };
+    format!("{route} · {} {}", device_name(viewport.w), viewport.w)
+}
+
+/// What a viewport `w` CSS px wide is: a desktop from 1024, a tablet from 600, else a phone.
+pub fn device_name(w: f64) -> &'static str {
+    if w >= 1024.0 {
+        "Desktop"
+    } else if w >= 600.0 {
+        "Tablet"
+    } else {
+        "Phone"
+    }
 }
 
 /// A section's name for the server at `url`: its host and port, `localhost:5173`.
@@ -195,18 +233,32 @@ mod tests {
 
     #[test]
     fn routes_go_in_rows_of_their_viewports() {
-        let viewports: Vec<Viewport> = DEFAULT_WIDTHS.iter().map(|w| viewport_for(*w)).collect();
+        let viewports: Vec<Viewport> = [1440.0, 768.0, 390.0].map(viewport_for).to_vec();
         let (placed, (w, h)) = layout(2, &viewports);
         assert_eq!(placed.len(), 6);
         // The first row: 1440, 768 and 390 side by side.
         let row: Vec<(f64, f64)> = placed[..3].iter().map(|p| (p.x, p.y)).collect();
-        assert_eq!(row, [(120.0, 480.0), (1680.0, 480.0), (2568.0, 480.0)]);
+        assert_eq!(row, [(120.0, 200.0), (1680.0, 200.0), (2568.0, 200.0)]);
         // The second row is under the tallest of the first (768 × 1024).
-        assert_eq!(placed[3].y, 480.0 + 1024.0 + 200.0);
+        assert_eq!(placed[3].y, 200.0 + 1024.0 + 200.0);
         assert_eq!(placed[5].route, 1);
         assert_eq!(w, 1440.0 + 768.0 + 390.0 + 2.0 * 120.0 + 2.0 * 120.0);
-        assert_eq!(h, 480.0 + 120.0 + 2.0 * 1024.0 + 200.0);
-        assert_eq!(frame_name("/changelog", viewports[0]), "/changelog / 1440");
+        assert_eq!(h, 200.0 + 120.0 + 2.0 * 1024.0 + 200.0);
+        assert_eq!(
+            frame_name("/changelog", viewports[0]),
+            "/changelog · Desktop 1440"
+        );
+        assert_eq!(frame_name("/", viewports[1]), "Home · Tablet 768");
+        assert_eq!(frame_name("/", viewports[2]), "Home · Phone 390");
         assert_eq!(server_name("http://localhost:5173/x"), "localhost:5173");
+    }
+
+    #[test]
+    fn a_full_page_frame_takes_its_pages_height() {
+        assert_eq!(page_frame_height(900.0, 2400.4), Some(2401.0));
+        // Never shorter than the viewport, never past the tallest.
+        assert_eq!(page_frame_height(900.0, 300.0), Some(900.0));
+        assert_eq!(page_frame_height(900.0, 1e9), Some(MOST_FITTED_HEIGHT));
+        assert_eq!(page_frame_height(900.0, f64::NAN), None);
     }
 }

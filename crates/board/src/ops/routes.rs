@@ -9,10 +9,10 @@ use serde_json::{Value, json};
 
 use super::failure;
 use super::work::{on_page, work_frame, work_of};
-use crate::doc::BoardDoc;
+use crate::doc::{BoardDoc, BoardError};
 use crate::routes::{
-    DEFAULT_WIDTHS, MOST_ROUTES, MOST_VIEWPORTS, WEB_KEY, WIDTHS, WebData, frame_name, layout,
-    localhost, refused, server_name, viewport_for,
+    DEFAULT_WIDTHS, MOST_ROUTES, MOST_VIEWPORTS, PADDING, WEB_KEY, WIDTHS, WebData, frame_name,
+    layout, localhost, refused, server_name, viewport_for, web_of,
 };
 use crate::screens::Viewport;
 
@@ -50,8 +50,8 @@ struct Ask {
 }
 
 /// The `routes` op (`{server, routes, viewports?, name?, x?, y?, work?}`): a frame for each route
-/// (`"/changelog"`, or `{path, url}`) at each viewport (widths, or `{w, h}`; 1440, 768 and 390
-/// when none are given), in rows in a section named `name` (the server's host and port when none
+/// (`"/changelog"`, or `{path, url}`) at each viewport (widths, or `{w, h}`; a desktop, 1440 wide,
+/// when none is given), each showing its whole page ([`WebData::fit`]), in rows in a section named `name` (the server's host and port when none
 /// is given), in one undo step. With `work` (a `begin {kind: "routes"}`'s), the frames go into
 /// that work's section, which grows to hold them; else a new section goes at `x`, `y`, or right of
 /// what the page on show holds. Pages that aren't on this Mac are refused. It answers `{ok,
@@ -215,6 +215,7 @@ fn lay_out(board: &mut BoardDoc, op: &Value, ask: &Ask) -> Result<Value, String>
                     url: url.clone(),
                     viewport: frame.viewport,
                     route: Some(path.clone()),
+                    fit: true,
                 };
                 let params = json!({
                     "x": frame.x, "y": frame.y, "width": frame.viewport.w,
@@ -241,4 +242,67 @@ fn lay_out(board: &mut BoardDoc, op: &Value, ask: &Ask) -> Result<Value, String>
         reply["work"] = json!(work);
     }
     Ok(reply)
+}
+
+/// Gives full-page route frame `id` its page's height, `height` ([`crate::routes::
+/// page_frame_height`]): it grows or shrinks, the layers under it in its section move with its
+/// bottom, keeping their distance, and the section keeps its room under its lowest layer (it
+/// never cuts a layer off). It is no undo step: the height follows from the page, which is
+/// measured again whenever it settles, so an undo that brings a frame's old height back is
+/// followed by the page's height again, and the redo it would have cleared stays. Whether it
+/// changed anything: a frame that is gone, isn't a route frame or has that height already is left
+/// as it is.
+pub fn fit_to_page(board: &mut BoardDoc, id: NodeId, height: f64) -> Result<bool, BoardError> {
+    let doc = board.doc()?;
+    let Some(node) = doc.node(id).filter(|node| web_of(node).is_some()) else {
+        return Ok(false);
+    };
+    let Some(before) = doc.world_bounds(id) else {
+        return Ok(false);
+    };
+    let delta = height - node.height;
+    if !delta.is_finite() || delta.abs() < 1.0 || height < 1.0 {
+        return Ok(false);
+    }
+    // The section the frame is in, and its other layers that start under the frame's bottom.
+    let section = (node.parent)
+        .and_then(|parent| doc.node(parent))
+        .filter(|parent| matches!(parent.kind, NodeKind::Section { .. }));
+    let under: Vec<NodeId> = section.map_or_else(Vec::new, |section| {
+        (section.children.iter())
+            .filter(|child| **child != id)
+            .filter(|child| {
+                doc.world_bounds(**child)
+                    .is_some_and(|b| b.y0 >= before.y1 - 0.5)
+            })
+            .copied()
+            .collect()
+    });
+    let section = section.and_then(|section| Some((section.id, doc.world_bounds(section.id)?)));
+    let history = board.session.ds().map(|ds| ds.history.clone())?;
+    crate::doc::grouped(&mut board.session, "Fit to page", |session| {
+        session.execute("node.set", &json!({"id": id, "props": {"height": height}}))?;
+        if !under.is_empty() {
+            let moved = json!({"ids": under, "dx": 0, "dy": delta});
+            session.execute("transform.move", &moved)?;
+        }
+        if let Some((section, bounds)) = section {
+            let doc = session.doc()?;
+            let lowest = (doc.node(section).map(|s| s.children.clone()))
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|child| doc.world_bounds(*child))
+                .map(|b| b.y1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let wanted = (bounds.y1 - bounds.y0 + delta).max(lowest + PADDING - bounds.y0);
+            if (wanted - (bounds.y1 - bounds.y0)).abs() >= 0.5 {
+                let size = json!({"id": section, "props": {"height": wanted}});
+                session.execute("node.set", &size)?;
+            }
+        }
+        Ok(())
+    })?;
+    // No undo step: the history is as it was before the fit.
+    board.session.ds_mut()?.history = history;
+    Ok(true)
 }

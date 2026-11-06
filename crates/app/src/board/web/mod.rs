@@ -29,6 +29,7 @@
 mod bench;
 mod config;
 mod engines;
+mod fit;
 mod fresh;
 mod live;
 mod ops;
@@ -96,6 +97,9 @@ impl Source {
 pub(in crate::board) struct Spec {
     pub source: Source,
     pub viewport: Viewport,
+    /// A full-page route frame ([`routes::WebData::fit`]): the viewport's own height, at which its
+    /// page is measured before the frame takes the page's height ([`fit`]).
+    pub fit: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -116,9 +120,11 @@ pub(in crate::board) fn spec(node: &Node) -> Option<Spec> {
                 w: made.w,
                 h: made.h,
             },
+            fit: None,
         });
     }
     let data = routes::web_of(node)?;
+    let fit = data.fit.then_some(data.viewport.h);
     let sized = data.viewport.w >= 1.0 && data.viewport.h >= 1.0;
     let source = match routes::localhost(&data.url) {
         true => Source::Url(data.url),
@@ -130,6 +136,7 @@ pub(in crate::board) fn spec(node: &Node) -> Option<Spec> {
             w: data.viewport.w,
             h: data.viewport.h,
         },
+        fit,
     })
 }
 
@@ -143,7 +150,8 @@ pub(in crate::board) struct WebNode {
     pub radii: [f64; 4],
 }
 
-/// The web frames on `page`, by id. A screen's viewport is its frame's size, in whole CSS px.
+/// The web frames on `page`, by id. A frame's viewport is its size, in whole CSS px: a screen's
+/// and a route frame's alike are responsive, laid out again when the frame is resized.
 pub(in crate::board) fn web_nodes(doc: &Document, page: NodeId) -> Vec<WebNode> {
     let mut nodes: Vec<WebNode> = doc
         .nodes()
@@ -156,12 +164,10 @@ pub(in crate::board) fn web_nodes(doc: &Document, page: NodeId) -> Vec<WebNode> 
         .filter_map(|node| {
             let mut spec = spec(node)?;
             let r = doc.world_bounds(node.id)?;
-            if matches!(spec.source, Source::Screen(_)) {
-                spec.viewport = Viewport {
-                    w: (r.x1 - r.x0).round().max(1.0),
-                    h: (r.y1 - r.y0).round().max(1.0),
-                };
-            }
+            spec.viewport = Viewport {
+                w: (r.x1 - r.x0).round().max(1.0),
+                h: (r.y1 - r.y0).round().max(1.0),
+            };
             Some(WebNode {
                 id: node.id,
                 spec,
@@ -185,10 +191,13 @@ pub(super) enum Phase {
     Idle,
 }
 
-/// A snapshot on the GPU's side: the image, and the points per CSS px it was taken at.
+/// A snapshot on the GPU's side: the image, the points per CSS px it was taken at, and the CSS
+/// size of the page it pictures, so that until a frame resized has its new picture the old one
+/// shows at its own proportions, not stretched ([`pool`]).
 pub(super) struct Texture {
     pub image: Arc<RenderImage>,
     pub scale: f64,
+    pub css: Viewport,
 }
 
 /// One web frame's view and texture.
@@ -222,6 +231,15 @@ pub(super) struct WebFrame {
     /// A refresh it was due while paused, or while its server was stopped: it comes once that is
     /// over.
     pub owed: bool,
+    /// The settle under way measures a full-page frame's page at the viewport's height ([`fit`]).
+    pub measuring: bool,
+    /// The page was just measured: the next settle, at the frame's new height, measures nothing.
+    pub measured: bool,
+    /// The route frame was resized: its page is laid out again at the new size once its view is
+    /// at rest ([`WebFrames::take_relayouts`]).
+    pub relayout: bool,
+    /// The size a fit just gave the frame: the resize it makes is the fit's own, laid out already.
+    pub fitted_to: Option<Viewport>,
 }
 
 /// The frame live now.
@@ -255,6 +273,8 @@ pub(super) enum WebMsg {
     Probe(NodeId, String),
     /// A screen's blueprint, as the page answered it ([`crate::board::presence::replay::blueprint`]).
     Blueprint(NodeId, String),
+    /// A full-page frame's page measured at its viewport's height, for settle `u32` ([`fit`]).
+    Measured(NodeId, u32, String),
     /// Files of these screens changed on disk ([`watch`]).
     Changed(Vec<String>),
     /// Whether the server of these pages answers ([`servers`]).

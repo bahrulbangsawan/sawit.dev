@@ -46,7 +46,7 @@ async fn with_sawit_closed_routes_are_saved_as_frames() {
     let doc = board.doc().unwrap();
     let id = frames[2]["id"].as_str().unwrap().parse().unwrap();
     let frame = doc.node(id).unwrap();
-    assert_eq!(frame.name, "/pricing / 1440");
+    assert_eq!(frame.name, "/pricing · Desktop 1440");
     let data = sawit_board::routes::web_of(frame).unwrap();
     assert_eq!(data.route.as_deref(), Some("/pricing"));
 }

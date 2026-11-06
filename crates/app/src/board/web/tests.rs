@@ -30,6 +30,7 @@ fn a_frame_with_web_data_is_a_web_frame() {
                 w: 1440.0,
                 h: 900.0
             },
+            fit: None,
         })
     );
     let ipv6 = json!({"url": "http://[::1]:5173/changelog", "viewport": {"w": 390, "h": 844}});
@@ -71,6 +72,7 @@ fn web_node(rect: [f64; 4], w: f64) -> WebNode {
         spec: Spec {
             source: Source::Url("http://localhost:1/".into()),
             viewport: Viewport { w, h: 900.0 },
+            fit: None,
         },
         rect,
         radii: [12.0, 0.0, 6.0, 0.0],

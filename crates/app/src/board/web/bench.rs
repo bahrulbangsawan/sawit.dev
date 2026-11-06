@@ -14,10 +14,12 @@ use serde_json::{Value, json};
 use super::{BoardView, WebFrames, ms};
 use crate::board::ZOOM_SETTLE;
 
-/// A texture to paint, in the window, and its corners.
+/// A texture to paint, in the window: the frame it is clipped to (`at`), where the picture goes
+/// (`image_at`, the frame's width at the picture's proportions), and the frame's corners.
 pub(in crate::board) struct Item {
     pub image: Arc<RenderImage>,
     pub at: Bounds<Pixels>,
+    pub image_at: Bounds<Pixels>,
     pub radii: Corners<Pixels>,
 }
 
@@ -46,7 +48,8 @@ pub(in crate::board) fn paint(painted: Painted, window: &mut Window) -> f64 {
         let _ = window.drop_image(image);
     }
     for item in painted.items {
-        if let Err(error) = window.paint_image(item.at, item.at, item.radii, item.image, 0, false) {
+        let (clip, at) = (item.at, item.image_at);
+        if let Err(error) = window.paint_image(clip, at, item.radii, item.image, 0, false) {
             log::error!("a web frame couldn't be painted: {error}");
         }
     }

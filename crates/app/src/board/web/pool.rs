@@ -71,13 +71,44 @@ impl WebFrames {
                 let old = std::mem::replace(frame, WebFrame::new(node.spec.clone(), has_page));
                 self.stale.extend(old.texture.map(|texture| texture.image));
             } else if frame.spec.viewport != node.spec.viewport {
+                let fitted = frame.fitted_to.take() == Some(node.spec.viewport);
                 frame.spec = node.spec.clone();
-                resized.push(node.id);
+                match node.spec.source {
+                    // A route frame is laid out again where it is, its page as it is: no reload.
+                    // A fit's own resize is laid out already.
+                    Source::Url(_) => frame.relayout |= !fitted,
+                    _ => resized.push(node.id),
+                }
+            } else if frame.spec != node.spec {
+                frame.spec = node.spec.clone();
             }
         }
         for id in resized {
             self.reload(id);
         }
+    }
+
+    /// The route frames resized whose page is to be laid out again now
+    /// ([`BoardView::web_relayout`]): those whose view is at rest and not live. A frame without a
+    /// view is built again instead; a busy one keeps waiting for rest.
+    pub(super) fn take_relayouts(&mut self) -> Vec<figcraft_doc::NodeId> {
+        let live = self.live.as_ref().map(|live| live.id);
+        let mut ready = Vec::new();
+        for (id, frame) in self.frames.iter_mut().filter(|(_, f)| f.relayout) {
+            match (&frame.engine, frame.phase) {
+                (None, _) => {
+                    frame.relayout = false;
+                    frame.refresh = frame.texture.is_some();
+                    frame.phase = Phase::Cold;
+                }
+                (Some(_), Phase::Idle) if live != Some(*id) => {
+                    frame.relayout = false;
+                    ready.push(*id);
+                }
+                _ => {}
+            }
+        }
+        ready
     }
 
     /// Loads frame `id`'s page again, which then settles and is snapshotted: now when its view is
@@ -293,6 +324,7 @@ impl WebFrames {
                 let at = screen_bounds(node.rect, view, bounds.origin);
                 at.intersects(&bounds).then(|| Item {
                     image: texture.image.clone(),
+                    image_at: proportional(at, texture.css),
                     at,
                     radii: corners(node.radii, view.zoom),
                 })
@@ -305,6 +337,17 @@ impl WebFrames {
             times: self.bench.is_some().then(|| self.paint_times.clone()),
         }
     }
+}
+
+/// Where a picture of a page `css` CSS px in size goes in a frame at `at`: the frame's width, and
+/// the height that keeps the picture's proportions, from the frame's top. A frame resized shows
+/// its old picture so, cropped or with room under it, until the new one is in, never stretched.
+pub(super) fn proportional(at: Bounds<Pixels>, css: Viewport) -> Bounds<Pixels> {
+    if css.w < 1.0 || css.h < 1.0 {
+        return at;
+    }
+    let height = f64::from(at.size.width) * css.h / css.w;
+    Bounds::new(at.origin, size(at.size.width, px(height as f32)))
 }
 
 /// `bounds` as a frame in the window.

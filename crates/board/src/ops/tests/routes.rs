@@ -10,7 +10,7 @@ fn id(value: &Value) -> NodeId {
     value.as_str().unwrap().parse().unwrap()
 }
 
-/// Each route gets a frame per viewport, in rows, named `<route> / <viewport>`, inside a section
+/// Each route gets a frame per viewport, in rows, named `<route> · <device> <width>`, inside a section
 /// named for the server, all in one undo step; each frame's plugin data names its page.
 #[test]
 fn routes_are_laid_out_in_a_section_named_for_the_server() {
@@ -18,7 +18,8 @@ fn routes_are_laid_out_in_a_section_named_for_the_server() {
     let before = board.session.ds().unwrap().history.undo.len();
     let reply = ask(
         &mut board,
-        json!({"op": "routes", "server": "http://localhost:5173/", "routes": ["/", "/changelog"]}),
+        json!({"op": "routes", "server": "http://localhost:5173/", "routes": ["/", "/changelog"],
+               "viewports": [1440, 768, 390]}),
     );
     assert_eq!(reply["name"], "localhost:5173");
     let frames = reply["frames"].as_array().unwrap();
@@ -34,12 +35,12 @@ fn routes_are_laid_out_in_a_section_named_for_the_server() {
     assert_eq!(
         names,
         [
-            "/ / 1440",
-            "/ / 768",
-            "/ / 390",
-            "/changelog / 1440",
-            "/changelog / 768",
-            "/changelog / 390"
+            "Home · Desktop 1440",
+            "Home · Tablet 768",
+            "Home · Phone 390",
+            "/changelog · Desktop 1440",
+            "/changelog · Tablet 768",
+            "/changelog · Phone 390"
         ]
     );
     let second = doc.node(id(&frames[3]["id"])).unwrap();
@@ -48,10 +49,11 @@ fn routes_are_laid_out_in_a_section_named_for_the_server() {
     assert_eq!(data.url, "http://localhost:5173/changelog");
     assert_eq!((data.viewport.w, data.viewport.h), (1440.0, 900.0));
     assert_eq!(data.route.as_deref(), Some("/changelog"));
+    assert!(data.fit, "a route frame shows its whole page");
     // In the section, under the first row, which the 768 frame makes 1024 tall.
     let s = doc.world_bounds(section).unwrap();
     let b = doc.world_bounds(second.id).unwrap();
-    assert_eq!((b.x0 - s.x0, b.y0 - s.y0), (120.0, 480.0 + 1024.0 + 200.0));
+    assert_eq!((b.x0 - s.x0, b.y0 - s.y0), (120.0, 200.0 + 1024.0 + 200.0));
     assert!(b.y1 <= s.y1 && b.x1 <= s.x1);
     assert_eq!(board.session.ds().unwrap().history.undo.len(), before + 1);
     assert!(board.session.ds().unwrap().selection.is_empty());
@@ -166,7 +168,7 @@ fn a_routes_work_fills_its_section() {
     let b = doc.world_bounds(section).unwrap();
     assert_eq!(
         (b.x1 - b.x0, b.y1 - b.y0),
-        (390.0 + 240.0, 600.0 + 3.0 * 844.0 + 2.0 * 200.0)
+        (390.0 + 240.0, 320.0 + 3.0 * 844.0 + 2.0 * 200.0)
     );
     let inside = doc.node(section).unwrap().children.len();
     assert_eq!(inside, 3);
@@ -187,4 +189,92 @@ fn a_routes_work_fills_its_section() {
             .plugin_data
             .contains_key(WEB_KEY)
     );
+}
+
+/// With no viewports named, each route gets one desktop frame, 1440 × 900.
+#[test]
+fn routes_are_desktop_frames_by_default() {
+    let mut board = board();
+    let reply = ask(
+        &mut board,
+        json!({"op": "routes", "server": "http://localhost:5173", "routes": ["/", "/pricing"]}),
+    );
+    let frames = reply["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 2);
+    let doc = board.doc().unwrap();
+    for frame in frames {
+        assert_eq!(frame["viewport"], json!({"w": 1440.0, "h": 900.0}));
+        let node = doc.node(id(&frame["id"])).unwrap();
+        assert_eq!((node.width, node.height), (1440.0, 900.0));
+        assert!(node.name.ends_with("· Desktop 1440"), "{}", node.name);
+    }
+}
+
+/// A frame fitted to its page grows or shrinks, the rows under it move with its bottom, and the
+/// section keeps its room under them. The fit is no undo step: the user's undo and redo stay.
+#[test]
+fn a_frame_fitted_to_its_page_moves_the_rows_under_it() {
+    let mut board = board();
+    let reply = ask(
+        &mut board,
+        json!({"op": "routes", "server": "http://localhost:5173", "routes": ["/", "/pricing"]}),
+    );
+    let frames = reply["frames"].as_array().unwrap();
+    let (first, second) = (id(&frames[0]["id"]), id(&frames[1]["id"]));
+    let section = id(&reply["section"]);
+    let doc = board.doc().unwrap();
+    let (top, below, s_before) = (
+        doc.world_bounds(first).unwrap(),
+        doc.world_bounds(second).unwrap(),
+        doc.world_bounds(section).unwrap(),
+    );
+    let gap = below.y0 - top.y1;
+    let undo = board.session.ds().unwrap().history.undo.len();
+    assert!(crate::ops::fit_to_page(&mut board, first, 3000.0).unwrap());
+    let doc = board.doc().unwrap();
+    let grown = doc.world_bounds(first).unwrap();
+    assert_eq!((grown.y0, grown.y1 - grown.y0), (top.y0, 3000.0));
+    let under = doc.world_bounds(second).unwrap();
+    assert_eq!(under.y0, grown.y1 + gap);
+    let s = doc.world_bounds(section).unwrap();
+    assert_eq!(s.y0, s_before.y0);
+    assert_eq!(
+        s.y1 - under.y1,
+        s_before.y1 - below.y1,
+        "the room under the rows stays"
+    );
+    assert_eq!(
+        board.session.ds().unwrap().history.undo.len(),
+        undo,
+        "no undo step"
+    );
+    // The same height again: nothing to do.
+    assert!(!crate::ops::fit_to_page(&mut board, first, 3000.0).unwrap());
+    // A shorter page shrinks it back, and the rows come back up.
+    assert!(crate::ops::fit_to_page(&mut board, first, 900.0).unwrap());
+    let doc = board.doc().unwrap();
+    assert_eq!(doc.world_bounds(first).unwrap(), top);
+    assert_eq!(doc.world_bounds(second).unwrap(), below);
+    assert_eq!(doc.world_bounds(section).unwrap(), s_before);
+}
+
+/// An undo after a fit takes back the user's last step, not the fit, and the redo stays.
+#[test]
+fn a_fit_keeps_the_undo_and_redo_of_the_user() {
+    let mut board = board();
+    let reply = ask(
+        &mut board,
+        json!({"op": "routes", "server": "http://localhost:5173", "routes": ["/"]}),
+    );
+    let frame = id(&reply["frames"][0]["id"]);
+    send(
+        &mut board,
+        "board.sticky",
+        json!({"x": 5000, "y": 0, "text": "a"}),
+    );
+    board.session.undo().unwrap();
+    let (undo, redo) = board.session.undo_depth();
+    assert_eq!(redo, 1);
+    assert!(crate::ops::fit_to_page(&mut board, frame, 2000.0).unwrap());
+    assert_eq!(board.session.undo_depth(), (undo, redo));
 }

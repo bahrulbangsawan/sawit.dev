@@ -1,6 +1,7 @@
 //! The bar over a selected route frame, in the context bar's place: Live (the page itself on the
-//! frame, as a double-click does), Reload, and Open in Browser, which opens the route in the
-//! project's Browser tab.
+//! frame, as a double-click does), Reload, Full page (on: the frame takes its page's whole height
+//! each time the page settles; off: it keeps the height it has; `web::fit`), and Open in Browser,
+//! which opens the route in the project's Browser tab.
 
 use figcraft_doc::NodeId;
 use gpui_kit::component::button::*;
@@ -14,7 +15,7 @@ use crate::board::toolbar::{self, divider};
 
 /// The bar's height and width, and the room between it and the frame's name above the frame.
 const HEIGHT: f64 = 40.;
-const WIDTH: f64 = 300.;
+const WIDTH: f64 = 390.;
 const ABOVE: f64 = 34.;
 
 impl BoardView {
@@ -87,6 +88,17 @@ pub(in crate::board) fn render_route_bar(
         .label("Reload")
         .disabled(!local)
         .on_click(cx.listener(move |view, _, _, cx| view.web_reload_frame(frame, cx)));
+    let full = Button::new("route-bar-full-page")
+        .ghost()
+        .small()
+        .label("Full page")
+        .selected(data.fit)
+        .tooltip(match data.fit {
+            true => "Showing the whole page: click to keep this height",
+            false => "Show the whole page, as tall as it is",
+        })
+        .disabled(!local)
+        .on_click(cx.listener(move |view, _, _, cx| view.web_toggle_full_page(frame, cx)));
     let url = data.url.clone();
     let open = Button::new("route-bar-browser")
         .ghost()
@@ -117,6 +129,7 @@ pub(in crate::board) fn render_route_bar(
             .shadow_md()
             .child(live)
             .child(reload)
+            .child(full)
             .child(divider(line))
             .child(open),
     )

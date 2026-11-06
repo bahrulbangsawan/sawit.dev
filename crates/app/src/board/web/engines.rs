@@ -39,6 +39,10 @@ impl WebFrame {
             refresh: false,
             storm: super::storm::Storm::default(),
             owed: false,
+            measuring: false,
+            measured: false,
+            relayout: false,
+            fitted_to: None,
         }
     }
 }
@@ -83,6 +87,7 @@ impl BoardView {
             host.set_hidden(false);
         }
         web.sync(&nodes);
+        let relayouts = web.take_relayouts();
         web.keep_watching(&nodes);
         let servers = web.servers_due(Instant::now());
         web.build_next(&nodes, &view, window);
@@ -113,6 +118,9 @@ impl BoardView {
         }
         if let Some(wait) = placed.wake_in {
             self.web_wake_in(wait, cx);
+        }
+        for id in relayouts {
+            self.web_relayout(id, cx);
         }
         self.web_check_servers(servers, cx);
         self.routes_rendered(cx);
@@ -146,6 +154,7 @@ impl BoardView {
                 }
             }
             WebMsg::Blueprint(id, json) => self.screen_blueprint(id, &json, cx),
+            WebMsg::Measured(id, token, json) => self.web_measured(id, token, &json, cx),
             WebMsg::Changed(names) => self.web_files_changed(names, cx),
             WebMsg::Server(origin, up) => self.web_server(origin, up, cx),
             WebMsg::Preview(EngineEvent::Ipc(body)) if body == "sawit-web:escape" => {
@@ -205,6 +214,7 @@ impl BoardView {
         let Some(engine) = &frame.engine else {
             return;
         };
+        let css = frame.spec.viewport;
         let width = live_width.unwrap_or(frame.spec.viewport.w * scale).max(1.0);
         let points = width / frame.spec.viewport.w;
         frame.phase = Phase::Snapping;
@@ -242,7 +252,7 @@ impl BoardView {
                 ),
             };
             let _ = this.update(cx, |this, cx| {
-                this.web_texture(id, image, points, entry, cx)
+                this.web_texture(id, image, (points, css), entry, cx)
             });
         })
         .detach();
@@ -255,7 +265,7 @@ impl BoardView {
         &mut self,
         id: figcraft_doc::NodeId,
         image: Option<Arc<RenderImage>>,
-        points: f64,
+        (points, css): (f64, super::Viewport),
         entry: Value,
         cx: &mut Context<Self>,
     ) {
@@ -277,6 +287,7 @@ impl BoardView {
             && let Some(old) = frame.texture.replace(Texture {
                 image,
                 scale: points,
+                css,
             })
         {
             web.stale.push(old.image);
@@ -345,6 +356,11 @@ impl BoardView {
             || self.open_flyout.is_some()
             || self.picker.is_some()
             || self.routes_ui.dialog.is_some()
+            || self.prompt_ui.is_some()
+            || self.variables_ui.is_some()
+            || self.player.is_some()
+            || self.comments_ui.is_some()
+            || self.versions_ui.is_some()
             || self.web_cover.covered
     }
 

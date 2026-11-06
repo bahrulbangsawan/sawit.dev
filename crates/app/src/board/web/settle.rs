@@ -66,9 +66,13 @@ pub(in crate::board) const INIT: &str = r#"(() => {
     }
   };
 })();"#;
-/// Read before each settled snapshot: what ran in the page (the test pages' `__probe`).
+/// Read before each settled snapshot: what ran in the page (the test pages' `__probe`), and how
+/// tall the page is (`pageHeight`) in its viewport (`innerHeight`), which a full-page route frame
+/// grows to ([`super::fit`]).
 pub(super) const PROBE: &str = "JSON.stringify(Object.assign({visibility: document.visibilityState, \
-                     innerWidth: innerWidth, dpr: devicePixelRatio}, window.__probe || {}))";
+                     innerWidth: innerWidth, innerHeight: innerHeight, dpr: devicePixelRatio, \
+                     pageHeight: Math.max(document.documentElement.scrollHeight, \
+                     document.body ? document.body.scrollHeight : 0)}, window.__probe || {}))";
 
 impl BoardView {
     /// A frame's page has loaded (or loaded again): it settles, shown off the canvas unless
@@ -101,6 +105,7 @@ impl BoardView {
         let Some(web) = self.web.as_mut() else {
             return;
         };
+        web.measure_first(id);
         let Some(frame) = web.frames.get_mut(&id) else {
             return;
         };
@@ -157,12 +162,26 @@ impl BoardView {
         if frame.engine.is_none() || frame.phase != Phase::Settling || frame.settle != token {
             return;
         }
+        let measuring = frame.measuring;
         let waited = frame.loaded.map(|at| ms(at.elapsed()));
         let screen = match &frame.spec.source {
             super::Source::Screen(name) => Some(name.clone()),
             _ => None,
         };
-        web.note(json!({"event": "settled", "id": id.0, "how": why, "after_load_ms": waited}));
+        web.note(
+            json!({"event": "settled", "id": id.0, "how": why, "after_load_ms": waited,
+                        "measuring": measuring}),
+        );
+        if measuring {
+            // A full-page frame's page at its viewport's height: measured, then it takes the
+            // page's height and settles again there before its snapshot ([`super::fit`]).
+            if let Some(engine) = web.frames.get(&id).and_then(|f| f.engine.as_ref()) {
+                let _ = engine.eval_with_callback(PROBE, move |json| {
+                    let _ = to_view.unbounded_send(WebMsg::Measured(id, token, json));
+                });
+            }
+            return;
+        }
         if let Some(engine) = web.frames.get(&id).and_then(|f| f.engine.as_ref()) {
             let probe = to_view.clone();
             let _ = engine.eval_with_callback(PROBE, move |json| {
