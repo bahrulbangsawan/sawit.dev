@@ -21,6 +21,7 @@ mod native_cover;
 mod network;
 mod new_project_page;
 mod package_managers;
+mod permissions_page;
 mod ports;
 mod prompts;
 mod rt;

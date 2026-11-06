@@ -33,6 +33,7 @@ use crate::keymap::{OpenKeymapEditor, OpenKeymapFile};
 use crate::layout::{Area, Layout};
 use crate::mcp_page::McpPage;
 use crate::network::NetworkPanel;
+use crate::permissions_page::PermissionsPage;
 use crate::ports::{PortsEvent, PortsPanel};
 use crate::prompts::{PromptStore, PromptStoreEvent, PromptView, PromptsEvent, PromptsPanel};
 use crate::run::{Launch, RunEvent, RunPanel, RunStore};
@@ -129,6 +130,7 @@ actions!(
         SetUpGitHubCli,
         OpenMcp,
         OpenSkills,
+        OpenPermissions,
         OpenNewProject,
         OpenChangelog,
         InstallUpdate,

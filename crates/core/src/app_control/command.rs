@@ -37,6 +37,8 @@ pub enum Page {
     Keymap,
     /// The New Project page: a TypeScript stack from Better-T-Stack's builder.
     NewProject,
+    /// The Permissions page: what agents may do on this Mac.
+    Permissions,
 }
 
 /// A panel that can fill the window (`maximize`): the terminal dock, or the browser's or the

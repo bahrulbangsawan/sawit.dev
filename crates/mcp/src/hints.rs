@@ -34,6 +34,7 @@ const READ_ONLY: &[&str] = &[
     "list_mcp_servers",
     "list_skills",
     "list_config_files",
+    "list_permissions",
     "stack_options",
     "stack_check",
     "app_state",
@@ -77,6 +78,7 @@ const DESTRUCTIVE: &[&str] = &[
     "backup_prompts",
     // download replaces the shell files here with GitHub's (backed up first).
     "shell_files_sync",
+    "edit_permission",
     "stop_instance",
     "restart_instance",
     "remove_instance",

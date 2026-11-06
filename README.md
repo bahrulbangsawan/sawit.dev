@@ -64,7 +64,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (148 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (150 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn/ui and shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop, Design to Code and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -364,6 +364,22 @@ explained. A conflict on the same address can't be forced.
   One tool is installed, upgraded or removed at a time, whether from this page, an agent, `sawit pasang`,
   `sawit pupuk` or `sawit cabut`.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv`, `sawit pupuk` and `sawit cabut bun`.
+
+### Permissions
+
+- Open **Permissions** from the **Pages** menu to see and change what agents may do on this Mac.
+- **Claude Code:** the rules of every settings file in Claude Code's order: managed (read only), each open project's
+  `.claude/settings.local.json` and `.claude/settings.json`, and `settings.json` of each profile. Type a rule
+  (`Bash(npm run test:*)`, `mcp__sawit__execute_sql`) and **Add to Allow…**, **Add to Ask…** or **Add to Deny…**; a
+  rule's menu moves it or removes it. Each change opens a sheet with its diff; **Save** keeps the file as it was
+  beside it (`.sawit-backup`) and changes only that rule's lines, keeping every other key, the order and the
+  formatting. A project file that isn't there yet is created. Rules that look like secrets are refused.
+- **Sawit's tools that need confirmation:** each `sawit` MCP tool that acts only with `confirm=true`, and whether
+  Claude Code's rules allow it, ask or deny it, with **Always Ask…** and **Deny…** for your user settings.
+- **macOS:** Screen Recording, Accessibility, Automation and Files & Folders, with their state where macOS tells it
+  and **Open Settings** for each pane.
+- **Other agents:** Codex's `approval_policy` and `sandbox_mode`, Gemini CLI's and Qwen Code's allowed and excluded
+  tools, OpenCode's `permission`, read only.
 
 ### Skills
 
@@ -1333,7 +1349,7 @@ sawit github token --header                  # the GitHub sign-in as {"Authoriza
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 148 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 150 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -1361,6 +1377,8 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt`, `backup_prompts` / `restore_prompts` (the library in a private GitHub repository, `sawit-prompts` by default, one Markdown file per prompt; prompts changed on both sides are listed, not overwritten) |
 | Files | `search_files` |
 | Config files | `list_config_files` (the Config Files tab's shell and coding-agent config files, as paths: never their contents), `shell_files_sync` (the shell files against the private `sawit-shell-config` repository: `status` per file, `upload` the files named, `download` the files named, each backed up beside itself first; with the user's GitHub sign-in) |
+| Permissions | `list_permissions` (the Permissions page: Claude Code's `permissions.allow`/`ask`/`deny` in each settings file, which `sawit` tools need `confirm` and what the rules say of each, the other agents' permission settings, the macOS permissions Sawit needs) |
+| Permissions | `edit_permission` (add, remove or move one Claude Code rule in `user`, `user:<profile>`, `project` or `local`: without `confirm` it returns the diff; with it the file is backed up and only that rule's line changes; secrets and the managed file refused) |
 | Dev tools | `list_dev_tools` (with newer releases, where each was found, its uninstall command, what uninstalling stops and the settings it keeps, the GitHub CLI's `gh auth status`, HyperFrames' Chrome and voxl's permissions), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
 | MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`; `github` is refused with "Sign in to GitHub in Sawit first" while Sawit is signed out, since agents can't sign in for you), `uninstall_mcp_server` |
 | New project | `stack_options` (every category, option and preset, and the default stack), `stack_check` (a stack by `create-better-t-stack`'s flag names, resolved: what the compatibility rules change, every disabled option and why, the command), `stack_create` (in `<location>/<name>`, never over a folder that exists; in a Sawit terminal that opens the project when the app runs, or with `open: false` only makes it, as Create Project Only does; else here) |

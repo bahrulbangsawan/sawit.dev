@@ -92,7 +92,10 @@ fn sawit_starts_voxl_on_this_mac_only_with_a_random_password() {
     assert_eq!(second.command, "voxl --addr=127.0.0.1 --port=7000");
     assert_ne!(second.env, first.env, "a new password each time");
     // What it needs from macOS, each with its System Settings pane.
-    assert_eq!(privacy_needs("voxl"), Privacy::ALL);
+    assert_eq!(
+        privacy_needs("voxl"),
+        [Privacy::ScreenRecording, Privacy::Accessibility]
+    );
     assert!(privacy_needs("gh").is_empty());
     assert!(
         Privacy::ScreenRecording

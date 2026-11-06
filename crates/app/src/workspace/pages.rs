@@ -234,6 +234,53 @@ impl Workspace {
         self.show_skills_page(true, window, cx);
     }
 
+    /// Shows the Permissions page (one tab) for this window's open projects, reading its files
+    /// again; `focus` gives it the keyboard (not when an agent opens it).
+    pub(super) fn show_permissions_page(
+        &mut self,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.leave_welcome(CENTER_ONLY, cx);
+        self.show_center(cx);
+        let projects = self.roots(cx);
+        let key: SharedString = "permissions".into();
+        let view = if let Some(ix) = self
+            .tabs
+            .iter()
+            .position(|t| matches!(&t.item, PaneItem::Other { key: k, .. } if *k == key))
+        {
+            self.active = ix;
+            let PaneItem::Other { view, .. } = &self.tabs[ix].item else {
+                return;
+            };
+            let Ok(page) = view.clone().downcast::<PermissionsPage>() else {
+                return;
+            };
+            page.update(cx, |page, cx| page.set_projects(projects, cx));
+            page
+        } else {
+            let view = cx.new(|cx| PermissionsPage::new(projects, cx));
+            self.push_tab(
+                PaneItem::Other {
+                    view: view.clone().into(),
+                    key,
+                    title: "Permissions".into(),
+                    icon: Lucide::ShieldCheck,
+                    file: None,
+                },
+                None,
+                cx,
+            );
+            view
+        };
+        if focus {
+            view.read(cx).focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+
     /// Shows the Skills page; `focus` gives its search the keyboard (not when an agent opens it:
     /// the keyboard stays where the user has it).
     pub(super) fn show_skills_page(

@@ -7,7 +7,9 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-use super::{OpenBrowser, OpenCanvas, OpenDevTools, OpenMcp, OpenNewProject, OpenSkills};
+use super::{
+    OpenBrowser, OpenCanvas, OpenDevTools, OpenMcp, OpenNewProject, OpenPermissions, OpenSkills,
+};
 use crate::keymap::OpenKeymapEditor;
 
 /// Adds the pages to `menu`, each with its icon and the action that opens it, so the shortcut
@@ -15,7 +17,7 @@ use crate::keymap::OpenKeymapEditor;
 /// only a binding's first keystroke, so its item runs the action without naming it: no "⌘K" that
 /// opens nothing.
 pub(crate) fn pages(menu: PopupMenu) -> PopupMenu {
-    let pages: [(&'static str, Icon, Box<dyn Action>); 6] = [
+    let pages: [(&'static str, Icon, Box<dyn Action>); 7] = [
         ("Canvas", crate::board::ICON.into(), Box::new(OpenCanvas)),
         (
             "Browser",
@@ -25,6 +27,11 @@ pub(crate) fn pages(menu: PopupMenu) -> PopupMenu {
         ("Dev Tools", Lucide::Package.into(), Box::new(OpenDevTools)),
         ("MCP Servers", Lucide::Plug.into(), Box::new(OpenMcp)),
         ("Skills", Lucide::Sparkles.into(), Box::new(OpenSkills)),
+        (
+            "Permissions",
+            Lucide::ShieldCheck.into(),
+            Box::new(OpenPermissions),
+        ),
         (
             "New Project",
             Lucide::FolderPlus.into(),
@@ -52,6 +59,6 @@ pub(super) fn pages_button() -> impl IntoElement {
         .icon(Lucide::LayoutGrid)
         .label("Pages")
         .dropdown_caret(true)
-        .tooltip("Canvas, Browser, Dev Tools, MCP Servers, Skills and More")
+        .tooltip("Canvas, Browser, Dev Tools, MCP Servers, Skills, Permissions and More")
         .dropdown_menu_with_anchor(Anchor::BottomRight, |menu, _, _| pages(menu))
 }

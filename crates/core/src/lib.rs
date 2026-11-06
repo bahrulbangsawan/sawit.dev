@@ -37,6 +37,7 @@ pub mod nyawit;
 pub mod owners;
 pub mod package_manager;
 pub mod pdf;
+pub mod permissions;
 pub mod pgctl;
 pub mod ports;
 pub mod probe;

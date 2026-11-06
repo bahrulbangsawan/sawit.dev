@@ -122,16 +122,51 @@ fn random_password() -> std::io::Result<String> {
 pub enum Privacy {
     ScreenRecording,
     Accessibility,
+    /// Apple Events to other apps (`osascript`, an agent driving an app).
+    Automation,
+    /// Desktop, Documents, Downloads and removable volumes.
+    FilesAndFolders,
 }
 
 impl Privacy {
-    pub const ALL: [Privacy; 2] = [Privacy::ScreenRecording, Privacy::Accessibility];
+    pub const ALL: [Privacy; 4] = [
+        Privacy::ScreenRecording,
+        Privacy::Accessibility,
+        Privacy::Automation,
+        Privacy::FilesAndFolders,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Privacy::ScreenRecording => "Screen Recording",
             Privacy::Accessibility => "Accessibility",
+            Privacy::Automation => "Automation",
+            Privacy::FilesAndFolders => "Files & Folders",
         }
+    }
+
+    /// Why Sawit (or a program in its terminals, which macOS asks about as Sawit) needs it.
+    pub fn why(self) -> &'static str {
+        match self {
+            Privacy::ScreenRecording => {
+                "Screenshots and screen streams of programs run in Sawit's terminals (voxl, agents)."
+            }
+            Privacy::Accessibility => {
+                "Programs in Sawit's terminals that drive other apps or type for you (voxl, agent-desktop)."
+            }
+            Privacy::Automation => {
+                "Scripts that tell other apps what to do (osascript), as uninstallers that quit an app do."
+            }
+            Privacy::FilesAndFolders => {
+                "Projects in Desktop, Documents, Downloads or on an external disk."
+            }
+        }
+    }
+
+    /// Whether this process has it, when macOS lets that be read without asking: Screen
+    /// Recording and Accessibility; `None` for the others, which only System Settings shows.
+    pub fn state(self) -> Option<bool> {
+        matches!(self, Privacy::ScreenRecording | Privacy::Accessibility).then(|| self.granted())
     }
 
     /// Its pane in System Settings, Privacy & Security.
@@ -143,10 +178,17 @@ impl Privacy {
             Privacy::Accessibility => {
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
             }
+            Privacy::Automation => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+            }
+            Privacy::FilesAndFolders => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
+            }
         }
     }
 
-    /// Whether this process has it. Only asks; it never brings up macOS's prompt.
+    /// Whether this process has it (false for the ones [`Self::state`] can't read). Only asks;
+    /// it never brings up macOS's prompt.
     pub fn granted(self) -> bool {
         #[cfg(target_os = "macos")]
         {
@@ -163,6 +205,7 @@ impl Privacy {
                 match self {
                     Privacy::ScreenRecording => CGPreflightScreenCaptureAccess(),
                     Privacy::Accessibility => AXIsProcessTrusted(),
+                    Privacy::Automation | Privacy::FilesAndFolders => false,
                 }
             }
         }
@@ -174,7 +217,7 @@ impl Privacy {
 /// The permissions `tool` needs on macOS: Screen Recording and Accessibility for voxl.
 pub fn privacy_needs(tool: &str) -> &'static [Privacy] {
     match tool {
-        "voxl" => &Privacy::ALL,
+        "voxl" => &[Privacy::ScreenRecording, Privacy::Accessibility],
         _ => &[],
     }
 }

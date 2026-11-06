@@ -108,6 +108,8 @@ fn every_tool_is_routed() {
         "shell_files_sync",
         "backup_prompts",
         "restore_prompts",
+        "list_permissions",
+        "edit_permission",
         // new project
         "stack_options",
         "stack_check",
