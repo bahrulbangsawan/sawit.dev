@@ -63,12 +63,15 @@ fn groups_differ_by_kind() {
     assert!(on_design.contains(&"tool.frame"));
     assert!(!on_design.contains(&"tool.sticky"));
     // The frame and the design tools are on a board too, where the engine makes them.
-    for command in on_design.iter().filter(|command| **command != "tool.scale") {
+    for command in
+        (on_design.iter()).filter(|command| !matches!(**command, "tool.scale" | "tool.comment"))
+    {
         assert!(on_board.contains(command), "{command} isn't on a board");
     }
-    // Comments are not part of the canvas.
+    // Comments are on a design file's toolbar; a board's has no room left, and keeps C.
     assert!(!on_board.contains(&"tool.comment"));
-    assert!(!on_design.contains(&"tool.comment"));
+    assert!(on_design.contains(&"tool.comment"));
+    assert!(on_design.contains(&"tool.shapeBuilder"));
 }
 
 #[test]
@@ -115,7 +118,7 @@ fn groups_follow_the_specs_lists() {
             ),
             (
                 "pen",
-                vec!["tool.pen", "tool.pencil"],
+                vec!["tool.pen", "tool.pencil", "tool.shapeBuilder"],
                 Some(Flyout::Tools("pen"))
             ),
             ("stamp", vec!["tool.stamp"], Some(Flyout::Stamps)),
@@ -133,7 +136,7 @@ fn groups_follow_the_specs_lists() {
             ("shape", SHAPES_TOOLS.to_vec(), Some(Flyout::Tools("shape"))),
             (
                 "pen",
-                vec!["tool.pen", "tool.pencil"],
+                vec!["tool.pen", "tool.pencil", "tool.shapeBuilder"],
                 Some(Flyout::Tools("pen"))
             ),
             (
@@ -141,6 +144,7 @@ fn groups_follow_the_specs_lists() {
                 vec!["tool.text", "tool.textOnPath"],
                 Some(Flyout::Tools("text"))
             ),
+            ("comment", vec!["tool.comment"], None),
         ]
     );
 }

@@ -24,7 +24,7 @@ fn design() -> BoardDoc {
 
 /// Both kinds of file, with how many tool buttons the toolbar of each has. The tests that go
 /// over every button check the count too, so that an empty toolbar fails them.
-const KINDS: [(DocKind, usize); 2] = [(DocKind::Board, 22), (DocKind::Design, 16)];
+const KINDS: [(DocKind, usize); 2] = [(DocKind::Board, 23), (DocKind::Design, 18)];
 
 /// A file of `kind` with nothing on its page.
 fn empty(kind: DocKind) -> BoardDoc {

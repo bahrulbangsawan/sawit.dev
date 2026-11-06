@@ -10,9 +10,9 @@
 //!
 //! A port of FigCraft's `ui-egui/src/canvas/overlays.rs`, with the frame names of
 //! `frame_labels.rs` and the snap guides `measure_overlay.rs` draws from the tool's overlay,
-//! limited to what the native canvas shows. Not drawn: layout grids, the pixel grid, constraint
-//! guides, rulers and their guides, prototype connections, slot badges, the paint bucket's area,
-//! shape builder regions, the lasso, the box measured to, the Scale tool's readout, auto layout
+//! limited to what the native canvas shows, under which go the View menu's aids ([`aids`]: layout
+//! grids, the pixel grid, rulers and their guides, frame, mask and slice outlines). Not drawn:
+//! constraint guides, slot badges, the box measured to, the Scale tool's readout, auto layout
 //! drop cells, swap targets, comments and the box around several selected points; names are not
 //! turned with a rotated frame, and the caret doesn't blink. Every handle the Move tool answers a
 //! press on is drawn.
@@ -28,13 +28,18 @@ use figcraft_doc::NodeId;
 use figcraft_engine::{Session, ViewState};
 use figcraft_geom::Point;
 
+mod aids;
 mod geometry;
 mod gestures;
+mod links;
 mod names;
 mod selection;
 mod text_edit;
+mod tools;
 mod vector_edit;
 
+pub use aids::RULER;
+pub use links::{LINK, annotation_callouts, prototype_links};
 pub use names::name_room;
 pub use text_edit::{Composition, caret_at};
 
@@ -252,6 +257,7 @@ pub fn overlay_with(s: &Session, composition: Option<&Composition>) -> Vec<Shape
         return Vec::new();
     };
     let mut out = Vec::new();
+    aids::aids(&mut out, ds);
     names::frame_names(&mut out, ds);
     selection::hover(&mut out, s, ds);
     selection::selection(&mut out, s, ds);
@@ -261,6 +267,7 @@ pub fn overlay_with(s: &Session, composition: Option<&Composition>) -> Vec<Shape
     gestures::guides(&mut out, ov, view);
     gestures::drops(&mut out, ov, &ds.doc, view);
     gestures::previews(&mut out, s, ds);
+    tools::tools(&mut out, s, ds);
     vector_edit::vector_edit(&mut out, s, ds);
     out
 }

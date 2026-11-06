@@ -61,6 +61,10 @@ pub enum ToolIcon {
     TextOnPath,
     /// Place image…, which asks for an image file and places it.
     Image,
+    /// The Comment tool, which starts a thread where it is clicked.
+    Comment,
+    /// The Shape Builder, which merges or removes the regions of overlapping shapes.
+    ShapeBuilder,
 }
 
 /// One tool button of the toolbar.

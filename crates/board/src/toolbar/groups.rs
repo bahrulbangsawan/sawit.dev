@@ -54,6 +54,12 @@ const STICKY: ToolDef = ToolDef::new("tool.sticky", ToolId::Sticky, ToolIcon::St
 const SHAPES: ToolDef = ToolDef::new("tool.shape", ToolId::BoardShape, ToolIcon::Shapes);
 const CONNECTOR: ToolDef = ToolDef::new("tool.connector", ToolId::Connector, ToolIcon::Connector);
 const STAMP: ToolDef = ToolDef::new("tool.stamp", ToolId::Stamp, ToolIcon::Stamp);
+const SHAPE_BUILDER: ToolDef = ToolDef::new(
+    "tool.shapeBuilder",
+    ToolId::ShapeBuilder,
+    ToolIcon::ShapeBuilder,
+);
+const COMMENT: ToolDef = ToolDef::new("tool.comment", ToolId::Comment, ToolIcon::Comment);
 const TEXT_ON_PATH: ToolDef =
     ToolDef::new("tool.textOnPath", ToolId::TextOnPath, ToolIcon::TextOnPath);
 
@@ -117,15 +123,16 @@ fn make_groups(kind: DocKind) -> Vec<ToolGroup> {
             tools("text", &[TEXT, TEXT_ON_PATH]),
             tools("frame", &[FRAME, SECTION, SLICE]),
             tools("geometry", &SHAPE_TOOLS),
-            tools("pen", &[PEN, PENCIL]),
+            tools("pen", &[PEN, PENCIL, SHAPE_BUILDER]),
             group("stamp", &[STAMP], Some(Flyout::Stamps)),
         ],
         DocKind::Design => vec![
             group("move", &[MOVE, SCALE, HAND], None),
             tools("frame", &[FRAME, SECTION, SLICE]),
             tools("shape", &SHAPE_TOOLS),
-            tools("pen", &[PEN, PENCIL]),
+            tools("pen", &[PEN, PENCIL, SHAPE_BUILDER]),
             tools("text", &[TEXT, TEXT_ON_PATH]),
+            group("comment", &[COMMENT], None),
         ],
     }
 }
