@@ -125,9 +125,41 @@ fn the_overlay_adds_its_ops() {
             "markers",
             "flash",
             "theme",
+            "ui_scale",
             "presence",
             "details",
             "elements_at"
         ])
     );
+}
+
+/// Drawn at a device preview's scale, the overlay counter-scales so its popover keeps its size on
+/// screen; the popover is 320 px wide on screen, or the viewport's on-screen width less 16.
+#[test]
+fn the_overlay_keeps_its_size_on_screen() {
+    let got = on_overlay(
+        r#"
+            JSON.stringify({
+                full: helpers.uiScale(1),
+                phone: helpers.uiScale(0.4374),
+                none: helpers.uiScale(undefined),
+                tiny: helpers.uiScale(0.01),
+                desktop: helpers.popWidth(1440, 1),
+                // iPhone 15 at 44 %: 393 CSS px are 172 points on screen.
+                phone_width: helpers.popWidth(393, 1 / 0.4374),
+                ipad_width: helpers.popWidth(744, 1 / 0.6),
+                hit: helpers.overlaps({left: 0, top: 0, right: 10, bottom: 10}, {left: 5, top: 5, right: 20, bottom: 20}),
+                miss: helpers.overlaps({left: 0, top: 0, right: 10, bottom: 10}, {left: 10, top: 0, right: 20, bottom: 10}),
+            })
+        "#,
+    );
+    assert_eq!(got["full"], 1);
+    assert!((got["phone"].as_f64().unwrap() - 1. / 0.4374).abs() < 1e-9);
+    assert_eq!(got["none"], 1);
+    assert_eq!(got["tiny"], 8);
+    assert_eq!(got["desktop"], 320);
+    assert_eq!(got["phone_width"], 160);
+    assert_eq!(got["ipad_width"], 320);
+    assert_eq!(got["hit"], true);
+    assert_eq!(got["miss"], false);
 }

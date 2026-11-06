@@ -26,7 +26,9 @@
     write(size, sizeOf(el));
     put(chip, name);
     put(chip, size);
-    css(chip, "left:" + px(Math.max(Math.min(r.left, innerWidth - 120), 4)) + ";top:" + px(r.top < 28 ? Math.min(r.bottom + 6, innerHeight - 26) : r.top - 26));
+    const k = uiK;
+    css(chip, "left:" + px(Math.max(Math.min(r.left, innerWidth - 120 * k), 4)) + ";top:" +
+      px(r.top < 28 * k ? Math.min(r.bottom + 6, innerHeight - 26 * k) : r.top - 26 * k));
     put(layer, chip);
     drawn[drawn.length] = chip;
   };
@@ -54,8 +56,11 @@
     if (!pop || !ui) return;
     if (!pop.el.isConnected) return close();
     const r = pop.el.getBoundingClientRect();
+    // Its width on screen fits the viewport as drawn; its box, measured, includes `uiK`.
+    const w = popWidth(innerWidth, uiK);
+    prop(ui.pop, "width", w + "px");
     const b = boxOf(ui.pop);
-    const at = place(r, { width: b.width || 320, height: b.height || 200 }, { width: innerWidth, height: innerHeight });
+    const at = place(r, { width: b.width || w * uiK, height: b.height || 200 * uiK }, { width: innerWidth, height: innerHeight });
     prop(ui.pop, "left", at.left + "px");
     prop(ui.pop, "top", at.top + "px");
     prop(ui.pop, "--rise", at.side === "above" ? "-4px" : "4px");
@@ -108,6 +113,7 @@
     else if (mode !== "off") drawHighlight(current, true);
     drawMeasure();
     placePopover();
+    agentsClear();
   };
   const schedule = () => {
     if (frame) return;

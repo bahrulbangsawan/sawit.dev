@@ -72,6 +72,13 @@
     applyTheme();
     return { theme: true };
   };
+  // The scale the device preview draws the page at (`{scale}`): the overlay counter-scales by it.
+  const uiScaleOp = (op) => {
+    uiK = uiScale(op.scale);
+    applyTheme();
+    schedule();
+    return { k: uiK };
+  };
   const flash = (op) => {
     let el;
     try {
@@ -90,4 +97,4 @@
     }
     return { found: true };
   };
-  Object.assign(modules, { overlay, pick, markers, flash, theme: themeOp, presence, details: detailsOf, elements_at: elementsAt });
+  Object.assign(modules, { overlay, pick, markers, flash, theme: themeOp, ui_scale: uiScaleOp, presence, details: detailsOf, elements_at: elementsAt });

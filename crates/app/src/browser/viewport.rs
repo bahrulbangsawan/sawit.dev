@@ -149,6 +149,8 @@ impl BrowserView {
                 (scale < 1.).then(|| engine.screen_scale())
             });
             engine.set_device_scale(ratio.map(|r| device_scale(r, scale)));
+            // The overlay keeps its size on screen: it counter-scales by the page's scale.
+            drop(self.page_op(ui_scale_op(scale)));
         }
     }
 
@@ -290,6 +292,11 @@ pub(super) fn device_of(mode: &ViewportMode) -> Option<(&'static Device, bool)> 
 /// up), else the screen's own (`None`), for computers, sizes of no device's and responsive mode.
 pub(super) fn device_ratio(mode: &ViewportMode) -> Option<f64> {
     device_of(mode).and_then(|(device, _)| device.dpr)
+}
+
+/// The op that tells the page's overlay the scale the page is drawn at.
+pub(super) fn ui_scale_op(scale: f64) -> Value {
+    json!({ "op": "ui_scale", "scale": scale })
 }
 
 /// The device scale factor WebKit draws at so a page drawn at `scale` reads `ratio` as its

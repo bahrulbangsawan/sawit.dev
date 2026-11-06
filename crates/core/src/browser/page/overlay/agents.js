@@ -51,6 +51,25 @@
     return { doing: words(verb[0]), done: words(verb[1]) };
   };
   helpers.agentAction = agentAction;
+  const agentClass = (a) => attr(a.node, "class", "agent" + a.side + (a.dot ? " dot" : "") + (a.faded ? " faded" : ""));
+  // The user's open popover is never under an agent's pill: the pill goes to the pointer's other
+  // side, else shrinks to the pointer alone (a dot) until the popover closes. The pointers take
+  // no clicks, and the popover draws above them.
+  const agentClear = (a) => {
+    a.dot = false;
+    agentClass(a);
+    if (!pop || !ui || !ui.pop || !a.pill) return;
+    const p = boxOf(ui.pop);
+    if (!overlaps(boxOf(a.pill), p)) return;
+    a.side = a.side.includes(" west") ? a.side.replace(" west", "") : " west" + a.side;
+    agentClass(a);
+    if (!overlaps(boxOf(a.pill), p)) return;
+    a.dot = true;
+    agentClass(a);
+  };
+  const agentsClear = () => {
+    for (let i = 0; i < agentCursors.length; i++) agentClear(agentCursors[i]);
+  };
   // Where the pointer goes for `el`: its centre in the viewport, kept inside the viewport.
   const agentAim = (el) => {
     const r = el.getBoundingClientRect();
@@ -123,7 +142,7 @@
     put(node, tip);
     put(node, pill);
     put(agentsLayer, node);
-    a = { id: who.id, node, name, doing, typing, x: null, y: null, fade: 0, gone: 0 };
+    a = { id: who.id, node, pill, name, doing, typing, x: null, y: null, fade: 0, gone: 0, side: "", dot: false, faded: false };
     agentCursors[agentCursors.length] = a;
     return a;
   };
@@ -159,8 +178,9 @@
     agentPaint(a.node, who.color);
     prop(a.node, "--glide", (first ? 0 : lead) + "ms");
     prop(a.node, "transform", "translate(" + aim.x + "px," + aim.y + "px)");
-    const side = (aim.x > innerWidth - 220 ? " west" : "") + (aim.y > innerHeight - 48 ? " north" : "");
-    attr(a.node, "class", "agent" + side);
+    a.side = (aim.x > innerWidth - 220 * uiK ? " west" : "") + (aim.y > innerHeight - 48 * uiK ? " north" : "");
+    a.faded = false;
+    agentClear(a);
     write(a.name, String(who.name || "Agent").slice(0, 40));
     write(a.doing, words.doing);
     write(a.typing, op.action === "type" ? "▍" : "");
@@ -194,7 +214,10 @@
     }
     clearTimeout(a.fade);
     clearTimeout(a.gone);
-    a.fade = setTimeout(() => attr(a.node, "class", "agent faded" + side), AGENT_FADE);
+    a.fade = setTimeout(() => {
+      a.faded = true;
+      agentClass(a);
+    }, AGENT_FADE);
     a.gone = setTimeout(() => forgetAgent(a), AGENT_GONE);
     return { shown: true, doing: words.doing, done: words.done, x: aim.x, y: aim.y };
   };

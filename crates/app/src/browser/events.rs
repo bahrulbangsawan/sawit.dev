@@ -197,7 +197,7 @@ impl BrowserView {
     /// Ops to run when a page has loaded: its agent starts fresh, so the overlay takes
     /// Sawit's colours again, picking is armed again and the markers drawn again.
     fn ops_after_load(&self, cx: &App) -> Vec<Value> {
-        let mut ops = vec![theme_op(cx)];
+        let mut ops = vec![theme_op(cx), super::viewport::ui_scale_op(self.scale())];
         ops.extend(rearm_ops(self.pick));
         let markers = self.annotate.read(cx).markers_for(&self.current_url(), cx);
         if !markers.is_empty() {

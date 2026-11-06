@@ -41,7 +41,7 @@
       ["--bg", theme.bg], ["--fg", theme.fg], ["--muted", theme.muted], ["--border", theme.border],
       ["--field", theme.field], ["--accent", theme.accent], ["--primary", theme.primary],
       ["--primary-fg", theme.primaryFg], ["--danger", theme.danger], ["--ring", theme.ring],
-      ["--font", theme.font], ["--mono", theme.mono],
+      ["--font", theme.font], ["--mono", theme.mono], ["--k", String(uiK)],
     ];
     for (let i = 0; i < vars.length; i++) prop(rootNode, vars[i][0], vars[i][1]);
   };

@@ -25,3 +25,18 @@
     return { left: Math.round(left), top: Math.round(top), side };
   };
   helpers.place = place;
+  // The overlay's own scale (`--k`): 1 over the scale the device preview draws the page at, so
+  // the popover, labels, markers and agents' pointers keep their size on screen at 44 % as at
+  // 100 %. 1 when the page is drawn at its own size.
+  let uiK = 1;
+  const uiScale = (scale) => {
+    const s = Number(scale);
+    return s > 0 && s < 1 ? Math.min(1 / s, 8) : 1;
+  };
+  // The popover's width before `uiK` scales it: 320 px on screen, or the viewport's on-screen
+  // width less 16 when that is narrower.
+  const popWidth = (viewWidth, k) => Math.round(Math.max(160, Math.min(320, viewWidth / k - 16)));
+  const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  helpers.uiScale = uiScale;
+  helpers.popWidth = popWidth;
+  helpers.overlaps = overlaps;
