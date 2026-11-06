@@ -60,7 +60,10 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | ✍️ **Full editor** | Tree-sitter parsing for the languages you open most and highlighting for about 200 more, formatters, Markdown/HTML/SVG/Mermaid preview, and image, PDF, and video viewers. |
 | 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, fullscreen with one click, and built-in split panes with a right-click pane menu. |
 | 📡 **Ports & network** | See and stop every dev server you started, and diagnose your internet connection step by step. |
-| 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying. |
+| 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying, and back them up to a private GitHub repository. |
+| 🔎 **Find anywhere** | One <kbd>⌘</kbd><kbd>F</kbd> bar in code, Markdown previews, PDFs, the browser's page, the canvas and the terminal's scrollback, with a match count, Match Case, Whole Word and Regex. |
+| ⛶ **Full-screen panels** | The terminal, the browser or the canvas fills the window with one key, and the layout comes back as it was. |
+| 🔐 **Permissions** | See and change what your agents may do on this Mac: Claude Code's rules, Sawit's confirm tools and the macOS permissions. |
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
@@ -277,7 +280,8 @@ explained. A conflict on the same address can't be forced.
   the green glyph does. `app_state` reports each pane's agent (`agent: "claude-code"`).
 - Drop files on a terminal, from Finder or the file tree, to type their paths, quoted where they need it. Claude Code
   takes a dropped image as an attachment (`[Image #1]`). This works right after you type, too.
-- The **Maximize Terminal** button (or <kbd>⌃⌘1</kbd>) fills the window with the terminal, hiding the sidebar, the tabs and the status bar; click it again, or the title bar's **Restore Layout**, to get the layout you had back, at the same sizes. The browser (<kbd>⌃⌘2</kbd>) and the canvas (<kbd>⌃⌘3</kbd>) fill the window the same way, and <kbd>⇧⌘↩</kbd> does it for the panel you're in. macOS's own full screen stays on <kbd>⌃⌘F</kbd>.
+- The **Maximize Terminal** button (or <kbd>⌃</kbd><kbd>⌘</kbd><kbd>1</kbd>) fills the window with the terminal;
+  click it again, or the title bar's **Restore Layout**, to get your layout back. See [Full screen](#full-screen).
 - Full emulation via `alacritty_terminal`: 256/truecolor, alt-screen, SGR mouse, bracketed paste,
   and resize.
 - Drag to select text; it's copied when you release the mouse. Shift+drag selects even while a program
@@ -295,6 +299,10 @@ explained. A conflict on the same address can't be forced.
   you're typing in it.
 - Terminals end with the app and with their window. So quitting, closing a window and **Restart to Update** ask
   first while a terminal runs a command or an SSH session, and name them. Shells waiting at their prompt don't count.
+<!-- todo: item 1, copy error logs from the terminal and from instances -->
+<!-- todo: item 2, lock, pin and close-all for terminals -->
+<!-- todo: item 12, closing a project closes its terminals -->
+<!-- todo: item 22, the terminal's tab and pane right-click menus -->
 
 ### Dev tools
 
@@ -366,6 +374,8 @@ explained. A conflict on the same address can't be forced.
 - From the terminal: `sawit list tools`, `sawit pasang bun uv`, `sawit pupuk` and `sawit cabut bun`.
 
 ### Permissions
+
+<!-- shot: permissions.png -->
 
 - Open **Permissions** from the **Pages** menu to see and change what agents may do on this Mac.
 - **Claude Code:** the rules of every settings file in Claude Code's order: managed (read only), each open project's
@@ -498,6 +508,8 @@ From the terminal, `sawit skills install`, `sawit skills update` and `sawit skil
 one project's block; each asks first, `-y` skips it). Agents use `install_sawit_skills` (`scope`: `global` or
 `project`, `remove`, and `confirm: true`, since it writes your files).
 
+<!-- todo: item 9, Agent Accounts (the Claude Pool migration) gets its own section here -->
+
 ### New project
 
 <img src="docs/media/new-project.png" alt="New Project page: the project name, location, command and stack on the left, and the stack's categories as cards on the right" width="100%">
@@ -537,12 +549,20 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
   field (text that isn't a URL is searched), the device menu, **Annotate**, **Design**, **Open in Default Browser**
   and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
+- **Local Servers**, the button after the address field, lists every port a dev server listens on right now:
+  `localhost:<port>`, what runs it and its project folder (`bun run dev · shop`), one row per port. Pick one to open
+  it in the tab. The list is read each time it opens, never in the background; databases, Docker's published ports
+  and apps that aren't dev tools are left out.
+<!-- shot: browser-local-servers.png -->
+- While a page loads, a thin bar along the foot of the toolbar shows how far it has got, and Reload turns into Stop,
+  so a slow page never looks hung.
 - **Tabs**: the strip above the toolbar holds the browser's tabs, each with its own address, history, device size
   and notes. **+** or <kbd>⌘</kbd><kbd>T</kbd> opens one, <kbd>⌘</kbd><kbd>W</kbd> closes the tab on show,
   <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>8</kbd> show a tab by its place and <kbd>⌘</kbd><kbd>9</kbd> the last
   (while the browser has the keyboard; elsewhere those keys stay the workspace's); drag a tab to move it. A tab off
   screen gives its page up after a minute, so memory doesn't grow with the tab count, and gets it back, history
   and all, when it shows. The tabs come back when the project's browser opens again.
+<!-- shot: browser-tabs.png -->
 - A link to another app (`mailto:`, `zoommtg:`, …) asks before it opens. After **Cancel**, the page's links to other
   apps do nothing until you reload it or open another page.
 - **Keys**: once you click the page (or press Enter in the address field), <kbd>⌘</kbd><kbd>C</kbd>,
@@ -557,7 +577,12 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
 - **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
   Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again. The device
   button shows the device in use (its name, or the size an agent set), and the menu ticks it, and **Rotate** while
-  it's turned. While the menu is open the page steps aside for it and comes back at the size you picked.
+  it's turned. While the menu is open the page steps aside for it and comes back at the size you picked. The **×**
+  beside the device button (**Back to Responsive**) fills the tab again in one click.
+- A device keeps its real size and density when it is drawn smaller: an iPhone 15 is 393 × 852 CSS px with a pixel
+  ratio of 3 at any scale, and small text keeps its size (only the drawing shrinks, not the page's zoom). Sawit's
+  note popover and Annotate's measuring tools stay their usual size on screen at any device scale.
+<!-- shot: browser-device-iphone.png -->
 - **Annotate** (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd>): point at the page and write what should change.
   - Hovering outlines the element under the pointer, with a label of its tag, classes and size. <kbd>↑</kbd> or
     <kbd>[</kbd> walks to the parent, <kbd>↓</kbd> or <kbd>]</kbd> back to the child, and <kbd>⌥</kbd>-click picks
@@ -705,6 +730,7 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
 - **Several canvases**: a canvas tab's menu has **New Canvas** (another `.sawit` file in the project's `.nyawit/`,
   in a tab of its own), **Rename Canvas…** and **Delete Canvas…** (to the Trash, after asking). The project's
   `canvas.sawit` stays its first canvas. The canvases that were open come back when the project's canvas opens.
+<!-- shot: canvas-tabs.png -->
 - **Tools and the toolbar**: the toolbar floats at the bottom of the canvas, and each tool's tooltip shows its key.
   A button with a ^ beside it holds several tools: it shows the one you used last, and the ^ lists them all with
   their keys.
@@ -860,6 +886,7 @@ stay vector.
   export), to follow Sawit's design standard and to check it against `design.png` in Sawit's browser. Then that
   agent's CLI opens in a new terminal tab in the project with the prompt. **Copy Prompt** writes the same files and
   copies the prompt instead; **Reveal Handoff Folder** shows them in the Finder. A toast names the folder.
+<!-- shot: canvas-handoff.png -->
 - **Artboards export too.** A frame drawn in layers (an artboard right on its page) gets the same **Export HTML**
   and **Export React** on a bar over it, in its right-click menu, in File ▸ Export as HTML… and as React… (named
   for the selection) and in the design panel's Export section, as a screen does. Sawit converts it layer by layer
@@ -870,6 +897,7 @@ stay vector.
   component with a prop per variant property and its text overrides. Both say at their top that they are a
   mechanical reference, not production code. Agents get the same with `canvas_screen_export {id}`, and FigCraft's
   `inspect.code` (html, react, tailwind) through `canvas_command`.
+<!-- shot: canvas-export.png -->
 - **Agents build screens live.** `canvas_begin {kind: "screen"}` makes the screen's frame and folder at once, with
   the agent's row and a skeleton; each `canvas_screen_write` (the whole page, edits to it, or its other files)
   renders again, so you watch the screen go from layout to copy to styles. `canvas_screen_get` reads a screen back,
@@ -906,6 +934,8 @@ rendered by WebKit (the Browser tab's engine) and kept current as you edit.
   picture is in. With Sawit closed the section and frames are saved, and render when the app opens the canvas.
 
 ### Agent cursors
+
+<!-- todo: item 30, live build cursors for every agent and every element as it is built -->
 
 When AI agents drive the canvas or the browser through `sawit-mcp`, you see each one at work, the way a multiplayer
 canvas shows other people. Every agent has its own pointer in its own colour (one of twelve), with its name. On the
@@ -978,9 +1008,13 @@ components' frames and content are saved; `canvas_progress` then says nothing sh
   (as the footer's **Pages** menu does), and is where you **Sign Out**, which turns every
   GitHub feature off again. If GitHub stops accepting the sign-in (you revoked it, or it expired), Sawit signs you
   out everywhere and says so once.
+- The sign-in lasts across restarts. Only **Sign Out**, or GitHub refusing it when Sawit asks who you are, ends it:
+  one refused request elsewhere makes Sawit check, never sign you out. Offline, you stay signed in. If the Keychain
+  can't be read, the title bar's menu and the GitHub page say so, with **Try Again**, and the sign-in is kept. Why
+  a sign-in ended is written to `github-sign-in.log` in Sawit's data folder (never the token).
 - The **GitHub** page: the repository's pull requests and issues with their timelines; comment, close, reopen and
-  merge them, open new ones; and your repositories to clone. **Save Shell Files to GitHub** (Config Files) uses the
-  same sign-in.
+  merge them, open new ones; and your repositories to clone. [Shell files sync](#shell-files-sync) and
+  [prompt backup](#prompt-backup) use the same sign-in.
 - Push, pull and fetch use your own Git credentials first (SSH keys, the macOS Keychain helper, `gh`), so they work
   signed out and with any remote. For an HTTPS remote on github.com that nothing else answers for, Sawit lends git
   the sign-in through a credential helper scoped to `https://github.com`, which reads it from that one git run's
@@ -1065,6 +1099,19 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
 - Write `{{variables}}` in a prompt, fill them in its tab, and **Fill & Copy**. Copy a prompt as is from the list.
 - Stored in `prompts.json` in Sawit's data folder.
 
+#### Prompt backup
+
+- The Prompts tab's footer backs the library up to a private GitHub repository (`sawit-prompts` unless you name
+  another; a public one is refused), with your [GitHub sign-in](#github). Signed out, it offers **Sign In to Back Up
+  Prompts**.
+- **Back Up Now** sends the prompts changed on this Mac; **Restore** (it asks first) brings in those changed on
+  GitHub. **Back Up Automatically** backs up 30 s after your last change.
+- Each prompt is one Markdown file (`prompts/<id>.md`, its name, tags and variables at the top), and a `README.md`
+  lists them, so the repository reads well on GitHub. Use counts stay on this Mac.
+- A prompt changed on both sides is left alone and listed, with **Keep Mine** (back up) or **Keep GitHub's**
+  (restore).
+<!-- shot: prompts-backup.png -->
+
 ### Config files
 
 - The **Config Files** tab lists the shell startup files on this Mac (`~/.zshrc`, `/etc/profile`, …), dimming the
@@ -1080,10 +1127,65 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
   from `list_config_files`. Both give paths and what each file is, never what it holds.
 - Right-click a file to reveal it in Finder, open it in its default app, duplicate it (`.zshrc copy`, a quick
   backup), copy its path, move it to the Trash or delete it. The Files tab's shortcuts work here too.
-- **Save Shell Files to GitHub** commits your own startup files to a private repository (`sawit-shell-config`),
-  with your [GitHub sign-in](#github) (until you sign in it's off, with Sign In to GitHub beside it). Each save
-  that would send a line that looks like a secret (an API key, a token, a password, in any shell's syntax) names
-  those lines and asks first.
+
+#### Shell files sync
+
+- The Config Files tab's footer shows one control for where you are: **Sign In to GitHub** while signed out, the
+  sign-in's progress, the reason and **Try Again** when the Keychain or GitHub can't be reached, **Save Shell Files to
+  GitHub** until the private repository (`sawit-shell-config`) exists, then the sync.
+- The sync shows the repository, the last sync and a row per startup file, each **Same**, **Changed Here**,
+  **Changed on GitHub**, **Changed on Both**, **Only Here** or **Only on GitHub**, with a diff (− this Mac, + GitHub).
+  Tick files to **Upload** or **Download**; a file changed on both sides offers **Keep Local**, **Keep GitHub's** or
+  **Open Both**.
+- An upload that would send a line that looks like a secret (an API key, a token, a password, in any shell's
+  syntax) names those lines and asks first. A download asks before it replaces files, backs each one up beside
+  itself first (`~/.zshrc.sawit-backup-<time>`), keeps its permissions, and can be undone. Only your shell startup
+  files in your home folder are ever written.
+- **Source in Open Terminals** runs `source <file>` in this window's shells waiting at their prompt; busy ones are
+  named and left alone.
+<!-- shot: shell-files-sync.png -->
+
+### Find
+
+- <kbd>⌘</kbd><kbd>F</kbd> opens the same find bar in the view you're in: a code file, a Markdown preview, a PDF, the
+  browser's page, the canvas or a terminal pane. With text selected, it starts with that text; in an open bar it
+  selects the query.
+- The bar sits above the view, at its top right (over the top right of a terminal pane), so it never covers a match.
+  It says "3 of 12", "No results" or "Invalid regular expression". <kbd>↩</kbd> and <kbd>⇧</kbd><kbd>↩</kbd> in it,
+  or <kbd>⌘</kbd><kbd>G</kbd> and <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd>, step through the matches; every match is
+  highlighted and the current one more strongly. <kbd>⎋</kbd> closes it and gives the keyboard back to where it was.
+- **Match Case**, **Whole Word** and **Regex** where the view can match that way:
+  - **Code:** the editor's own search, with Match Case. <kbd>⌥</kbd><kbd>⌘</kbd><kbd>F</kbd> adds **Replace** and
+    **Replace All**, in a file that isn't read-only.
+  - **Markdown:** the preview's text when the preview shows; side by side, the half that has the keyboard. An HTML,
+    SVG or diagram preview says "Search isn't available here".
+  - **PDF:** its text layer (a scanned page has none), the match's lines highlighted on the page.
+  - **Browser:** the text the page shows. <kbd>⌘</kbd><kbd>F</kbd> reaches Sawit's bar even while the page has the
+    keyboard, and the page's own <kbd>⌘</kbd><kbd>F</kbd> never runs. Closing the bar removes the highlights.
+  - **Canvas:** layers whose text (text layers, stickies, shapes' labels) or name matches, on this page or with
+    **All Pages** on every page; each match is selected and zoomed to. Outside the bar <kbd>⌘</kbd><kbd>G</kbd> still
+    groups.
+  - **Terminal:** the scrollback and the screen, a long line wrapped over several rows read as one; new output keeps
+    the highlights right. The search starts from the newest match. <kbd>⌘</kbd><kbd>F</kbd> never reaches the
+    shell; <kbd>⌃</kbd><kbd>F</kbd> stays the program's.
+- An image, a video or a page with nothing to search says "Search isn't available here". The keys are in the Keymap
+  Editor (`find::Find`, `find::FindNext`, `find::FindPrevious`, `find::Replace`) and in **Edit ▸ Find**.
+<!-- shot: find-bar.png -->
+
+### Full screen
+
+- <kbd>⇧</kbd><kbd>⌘</kbd><kbd>↩</kbd> fills the window with the panel you're in: the terminal, the browser or the
+  canvas, with no sidebar, other area, tab bar or status bar. The same key puts the layout back as it was, at the
+  same sizes. A split terminal tab zooms its pane first.
+- <kbd>⌃</kbd><kbd>⌘</kbd><kbd>1</kbd>, <kbd>⌃</kbd><kbd>⌘</kbd><kbd>2</kbd> and <kbd>⌃</kbd><kbd>⌘</kbd><kbd>3</kbd>
+  go straight to the terminal, the browser and the canvas, opening the browser or the canvas if needed.
+- While a panel fills the window, the title bar says "⇧⌘↩ to exit" for a moment and has a **Restore Layout** button.
+  <kbd>⎋</kbd> also restores it in the browser, outside the page (the terminal and the canvas keep their own
+  <kbd>⎋</kbd>).
+- The same actions are in the menu bar's **View** menu, in the canvas's **View** menu and Actions palette (**Maximize Canvas**), and on
+  the terminal's Maximize button. macOS's own full screen stays on <kbd>⌃</kbd><kbd>⌘</kbd><kbd>F</kbd>.
+- Agents use `app_maximize` with `terminal`, `browser` or `canvas`; it never moves your keyboard.
+<!-- shot: full-screen.png -->
 
 ### Tabs & layout
 
@@ -1102,6 +1204,14 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
   with shortcuts (see below).
 - Every panel has a designed empty state that says what goes there and offers the next step, and every
   error says what happened with a way to try again or copy the message.
+- **The keyboard stays where you put it.** The area that has it (the tabs or the terminal dock) shows a line along
+  its top. A web page (the browser's, or a live frame on the canvas) gets your keys only after you click it or press
+  Return in the address field, and gives them back when you move on. An agent's work (a terminal command, a
+  browser or canvas action, a new tab) never takes the keyboard from where you're typing.
+- **Menus fit.** A long item (a session title, a branch, a path) ends in an ellipsis inside its menu, keeps its
+  shortcut, and shows all of it in a tooltip; a menu is as wide as its items, never wider than the window. Tooltips
+  wrap at 360 px.
+<!-- todo: item 13, every destructive action asks first (the shared confirm dialog) -->
 
 ### Updates & changelog
 
@@ -1163,6 +1273,18 @@ French…), the defaults move where macOS menus put them.
 | Close Clean (tabs without changes) | <kbd>⌘</kbd><kbd>K</kbd> <kbd>U</kbd> |
 | Close All | <kbd>⌘</kbd><kbd>K</kbd> <kbd>W</kbd> |
 | Pin Tab | <kbd>⌘</kbd><kbd>K</kbd> <kbd>⇧</kbd><kbd>↩</kbd> |
+| Next tab / previous tab | <kbd>⌃</kbd><kbd>⇥</kbd> / <kbd>⌃</kbd><kbd>⇧</kbd><kbd>⇥</kbd> |
+| New terminal | <kbd>⌘</kbd><kbd>T</kbd> |
+| Sidebar: Instances, Files, Git, Database, Run, Ports, Network, SSH, Config Files, Prompts | <kbd>⌘</kbd><kbd>1</kbd> … <kbd>⌘</kbd><kbd>9</kbd>, <kbd>⌘</kbd><kbd>0</kbd> |
+| Next project / previous project | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>]</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>[</kbd> |
+| Add project / close project / copy project path | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>O</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>W</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>P</kbd> |
+| Canvas / Dev Tools / MCP / New Project / Changelog page | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>M</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>N</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>V</kbd> |
+| Install update / install the `sawit` command | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>U</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>I</kbd> |
+| Find / find and replace (editable files) | <kbd>⌘</kbd><kbd>F</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>F</kbd> |
+| Next match / previous match | <kbd>⌘</kbd><kbd>G</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> (in the find bar also <kbd>↩</kbd> / <kbd>⇧</kbd><kbd>↩</kbd>); <kbd>⎋</kbd> closes it |
+| Browser: new tab / close tab | <kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌘</kbd><kbd>W</kbd> (while the browser has the keyboard) |
+| Browser: show tab 1–8 / the last tab | <kbd>⌘</kbd><kbd>1</kbd> … <kbd>⌘</kbd><kbd>8</kbd> / <kbd>⌘</kbd><kbd>9</kbd> (while the browser has the keyboard) |
+| Browser: Annotate | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd> |
 | Files / Config Files: reveal in Finder | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
 | Files / Config Files: open in default app | <kbd>⌃</kbd><kbd>⇧</kbd><kbd>↩</kbd> |
 | Files / Config Files: duplicate | <kbd>⌘</kbd><kbd>D</kbd> |
@@ -1699,6 +1821,8 @@ Measured on an Apple Silicon MacBook (M3, macOS 26.6.1), release build (`lto = "
 | Clean release build | 12 min 8 s, on a busy machine |
 
 Figures for other apps are not listed because they have not been measured on the same machine.
+
+<!-- todo: item 7, the size and memory measurements and what was cut -->
 
 ## Known limitations
 
