@@ -68,6 +68,15 @@ fn menu_of(
                 .on_click(move |_, _, cx| global(cx).update(cx, |m, cx| m.set_active(&id, cx))),
         );
     }
+    if let Some(id) = m.suggested()
+        && let Some(a) = m.accounts.get(&id)
+    {
+        let name = a.name.clone();
+        menu = menu.separator().item(
+            PopupMenuItem::new(format!("Most Room Left: {name} · Switch"))
+                .on_click(move |_, _, cx| global(cx).update(cx, |m, cx| m.set_active(&id, cx))),
+        );
+    }
     menu.separator().item(
         PopupMenuItem::new("Accounts Page")
             .icon(Lucide::Users)

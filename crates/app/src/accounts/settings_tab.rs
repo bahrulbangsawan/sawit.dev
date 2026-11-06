@@ -236,6 +236,35 @@ impl AccountsPage {
                         }))
                     })
             })
+            .child({
+                let st = &m.accounts.settings;
+                let (alerts, suggest, threshold) = (st.limit_alerts, st.suggest_account, st.limit_threshold);
+                card("Limit Alerts")
+                    .child(div().text_sm().text_color(muted).child("Off by default. They only inform: nothing ever switches accounts by itself."))
+                    .child(Switch::new("accounts-alerts").checked(alerts).label("Notify Near and at a Limit").on_click(cx.listener(|this, on: &bool, _, cx| {
+                        this.model.update(cx, |m, cx| {
+                            m.accounts.settings.limit_alerts = *on;
+                            m.save();
+                            cx.notify()
+                        })
+                    })))
+                    .child(Switch::new("accounts-suggest").checked(suggest).label("Suggest the Account with the Most Room").on_click(cx.listener(|this, on: &bool, _, cx| {
+                        this.model.update(cx, |m, cx| {
+                            m.accounts.settings.suggest_account = *on;
+                            m.save();
+                            cx.notify()
+                        })
+                    })))
+                    .child(h_flex().gap_1().child(div().text_xs().text_color(muted).child("At")).children([75u8, 80, 85, 90, 95].into_iter().map(|t| {
+                        Button::new(SharedString::from(format!("accounts-threshold-{t}"))).xsmall().ghost().label(format!("{t}%")).selected(t == threshold).on_click(cx.listener(move |this, _, _, cx| {
+                            this.model.update(cx, |m, cx| {
+                                m.accounts.settings.limit_threshold = t;
+                                m.save();
+                                cx.notify()
+                            })
+                        }))
+                    })))
+            })
             .child(
                 card("Shortcuts cp1–cp9")
                     .child(div().text_sm().text_color(muted).child("cp2 starts claude as account 2 in the list, right in the terminal you type it in (the same as sawit account open 2)."))

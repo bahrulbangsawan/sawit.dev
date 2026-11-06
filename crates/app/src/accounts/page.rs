@@ -31,17 +31,27 @@ impl EventEmitter<AccountsEvent> for AccountsPage {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Accounts,
+    Usage,
     StatusLine,
+    Diagnostics,
     Settings,
 }
 
 impl Tab {
-    pub const ALL: &[Tab] = &[Tab::Accounts, Tab::StatusLine, Tab::Settings];
+    pub const ALL: &[Tab] = &[
+        Tab::Accounts,
+        Tab::Usage,
+        Tab::StatusLine,
+        Tab::Diagnostics,
+        Tab::Settings,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Accounts => "Accounts",
+            Tab::Usage => "Usage",
             Tab::StatusLine => "Status Line",
+            Tab::Diagnostics => "Diagnostics",
             Tab::Settings => "Settings",
         }
     }
@@ -55,6 +65,8 @@ pub struct AccountsPage {
     pub(super) renaming: bool,
     pub(super) code: Entity<InputState>,
     tab: Tab,
+    /// The Usage tab's period, in seconds.
+    pub(super) period: i64,
     /// The status line layout being edited (the one in use until changed).
     pub(super) layout: Option<sawit_core::agent_accounts::statusline::Config>,
     focus: FocusHandle,
@@ -97,6 +109,7 @@ impl AccountsPage {
             rename: input("Name", window, cx),
             renaming: false,
             tab: Tab::Accounts,
+            period: 7 * 86_400,
             layout: None,
             code: input("Paste the code from the sign-in page", window, cx),
             focus: cx.focus_handle(),
@@ -140,41 +153,6 @@ impl AccountsPage {
         cx.spawn(async move |_, cx| {
             if answer.await == Ok(0) {
                 model.update(cx, |m, cx| m.remove(&a.id, cx));
-            }
-        })
-        .detach();
-    }
-
-    /// Shows the `statusLine` before and after, then turns tracking on.
-    fn confirm_tracking(&mut self, a: Account, window: &mut Window, cx: &mut Context<Self>) {
-        let root = self.model.read(cx).root.clone();
-        let (before, after) = match tracking::preview(&root, &a) {
-            Ok(p) => p,
-            Err(e) => {
-                self.model.update(cx, |m, cx| {
-                    m.error = Some(e.to_string());
-                    cx.notify()
-                });
-                return;
-            }
-        };
-        let show = |v: &serde_json::Value| serde_json::to_string_pretty(v).unwrap_or_default();
-        let detail = format!(
-            "Before:\n{}\n\nAfter:\n{}\n\nClaude Code runs Sawit on every status line update. It reads only the usage windows and keeps them on this Mac; your own status line keeps showing. settings.json is backed up first.",
-            before.as_ref().map(show).unwrap_or_else(|| "(none)".into()),
-            show(&after)
-        );
-        let answer = window.prompt(
-            PromptLevel::Info,
-            &format!("Track usage of “{}”?", a.name),
-            Some(&detail),
-            &["Turn On Tracking", "Cancel"],
-            cx,
-        );
-        let model = self.model.clone();
-        cx.spawn(async move |_, cx| {
-            if answer.await == Ok(0) {
-                model.update(cx, |m, cx| m.set_tracking(&a.id, true, cx));
             }
         })
         .detach();
@@ -430,7 +408,9 @@ impl Render for AccountsPage {
                     .child(detail)
                     .into_any_element()
             }
+            Tab::Usage => self.render_usage(cx),
             Tab::StatusLine => self.render_statusline(cx),
+            Tab::Diagnostics => self.render_diagnostics(cx),
             Tab::Settings => self.render_settings(cx),
         };
         let current = self.tab;
@@ -448,6 +428,11 @@ impl Render for AccountsPage {
                     .selected(t == current)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tab = t;
+                        if t == Tab::Usage {
+                            let period = this.period;
+                            this.model
+                                .update(cx, |m, cx| m.refresh_analytics(period, cx));
+                        }
                         cx.notify();
                     }))
             }));

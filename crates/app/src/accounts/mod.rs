@@ -6,10 +6,12 @@ mod card;
 mod chip;
 mod list;
 mod login;
+mod ops;
 mod page;
 mod rows;
 mod settings_tab;
 mod statusline_tab;
+mod usage_tab;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,6 +34,19 @@ actions!(
         /// Shows the Accounts page: Claude Code's accounts, their sign-in and usage.
         OpenAccounts
     ]
+);
+
+type AnalyticsRows = (
+    Vec<(
+        String,
+        String,
+        sawit_core::agent_accounts::analytics::Totals,
+    )>,
+    Vec<(
+        String,
+        String,
+        sawit_core::agent_accounts::analytics::Totals,
+    )>,
 );
 
 /// How often the usage files are read again (they are tiny).
@@ -58,6 +73,12 @@ pub struct AccountsModel {
     pub error: Option<String>,
     /// What the last action did.
     pub notice: Option<String>,
+    /// The analytics: per account and model, the period and the one before.
+    pub analytics: Option<AnalyticsRows>,
+    /// Limit alerts sent (account·window·reset → level), and whether the values at launch were
+    /// recorded yet (they never alert).
+    pub alerts_sent: std::collections::BTreeMap<String, u8>,
+    pub alerts_primed: bool,
     /// What the last shared-settings run changed, and when (Unix seconds).
     pub shared: Option<(i64, Vec<String>)>,
     /// The account whose usage check runs.
@@ -114,6 +135,9 @@ impl AccountsModel {
             notice: None,
             checking_usage: None,
             shared: None,
+            analytics: None,
+            alerts_sent: Default::default(),
+            alerts_primed: false,
             login: None,
             _poll: Task::ready(()),
         };
@@ -182,6 +206,7 @@ impl AccountsModel {
             }
         }
         if self.usage != before {
+            self.check_alerts(cx);
             cx.notify();
         }
     }
@@ -353,101 +378,6 @@ impl AccountsModel {
             ));
         }
         cx.notify();
-    }
-
-    /// Turns usage tracking on or off (after the page's confirmation).
-    pub fn set_tracking(&mut self, id: &str, on: bool, cx: &mut Context<Self>) {
-        let Some(mut a) = self.accounts.get(id).cloned() else {
-            return;
-        };
-        let now = sawit_core::github::now();
-        let done = if on {
-            tracking::enable(&self.root, &mut a, now)
-        } else {
-            tracking::disable(&self.root, &mut a, now)
-        };
-        match done {
-            Ok(backup) => {
-                if let Some(slot) = self.accounts.accounts.iter_mut().find(|x| x.id == id) {
-                    *slot = a;
-                }
-                self.save();
-                self.notice = Some(match backup {
-                    Some(b) => format!(
-                        "Usage tracking is {}. settings.json was backed up to {}.",
-                        if on { "on" } else { "off" },
-                        b.display()
-                    ),
-                    None => format!("Usage tracking is {}.", if on { "on" } else { "off" }),
-                });
-            }
-            Err(e) => self.error = Some(e.to_string()),
-        }
-        cx.notify();
-    }
-
-    /// Shared settings: one run, when they are on.
-    pub fn sync_shared(&mut self, cx: &mut Context<Self>) {
-        if self.accounts.settings.share_extensions {
-            self.run_shared(cx);
-        }
-    }
-
-    /// One shared-settings run now (Sync Now).
-    pub fn run_shared(&mut self, cx: &mut Context<Self>) {
-        let (root, home) = (self.root.clone(), self.home.clone());
-        let accounts: Vec<Account> = self.list().into_iter().cloned().collect();
-        let rx = rt::spawn_blocking(cx, move || {
-            let refs: Vec<&Account> = accounts.iter().collect();
-            sawit_core::agent_accounts::shared::sync(&root, &home, &refs, sawit_core::github::now())
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = rx.await else { return };
-            let _ = this.update(cx, |m, cx| {
-                match result {
-                    Ok(r) => m.shared = Some((sawit_core::github::now(), r.changes)),
-                    Err(e) => m.error = Some(e.to_string()),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    pub fn set_sharing(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.accounts.settings.share_extensions = on;
-        self.save();
-        self.sync_shared(cx);
-        cx.notify();
-    }
-
-    /// "Check Usage Now" for `id`.
-    pub fn check_usage(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(account) = self.accounts.get(id).cloned() else {
-            return;
-        };
-        let (home, root) = (self.home.clone(), self.root.clone());
-        let Some(bin) = self.claude.clone() else {
-            return;
-        };
-        self.checking_usage = Some(id.into());
-        cx.notify();
-        let rx = rt::spawn_blocking(cx, move || run::check_usage(&bin, &account, &home, &root));
-        let id = id.to_string();
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = rx.await else { return };
-            let _ = this.update(cx, |m, cx| {
-                m.checking_usage = None;
-                match result {
-                    Ok(s) => {
-                        m.usage.insert(id, s);
-                    }
-                    Err(e) => m.error = Some(e.to_string()),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     /// What `app_state` and agents see: names, active, sign-in and usage, never a secret.

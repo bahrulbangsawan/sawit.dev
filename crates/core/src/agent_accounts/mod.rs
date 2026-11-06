@@ -7,11 +7,14 @@
 //! Keychain, per folder), and signing in is the agent's own command. What Sawit keeps here is the
 //! list of accounts, which one is active, and usage the agent itself reported.
 
+pub mod advice;
+pub mod analytics;
 pub mod claude;
 pub mod cli;
 pub mod collector;
 pub mod login;
 pub mod run;
+pub mod sessions;
 pub mod shared;
 pub mod shell;
 pub mod statusline;

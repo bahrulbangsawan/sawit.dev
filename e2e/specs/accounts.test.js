@@ -49,3 +49,13 @@ sawitTest("accounts: the Status Line tab previews the layout and offers presets"
   await win.waitFor({ role: "button", name: "Start From…" });
   await win.waitFor({ role: "button", name: "Undo Last Apply" });
 });
+
+sawitTest("accounts: the Usage and Diagnostics tabs open", async (ctx) => {
+  const { win } = ctx;
+  await ctx.call({ cmd: "open_page", page: "accounts" });
+  await win.click({ role: "button", name: "Usage" });
+  await win.waitFor({ role: "button", name: "7 Days" });
+  await win.click({ role: "button", name: "Diagnostics" });
+  // The test's PATH has no claude: Diagnostics says so, with the fix.
+  await win.waitFor({ name: /Install Claude Code/ });
+});

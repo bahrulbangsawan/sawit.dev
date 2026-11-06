@@ -5,13 +5,53 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::*;
 use gpui_kit::*;
-use sawit_core::agent_accounts::Account;
+use sawit_core::agent_accounts::{Account, tracking};
 
 use super::login::Phase;
 use super::page::AccountsPage;
 use crate::states::Banner;
 
 impl AccountsPage {
+    /// Shows the `statusLine` before and after, then turns tracking on.
+    pub(super) fn confirm_tracking(
+        &mut self,
+        a: Account,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let root = self.model.read(cx).root.clone();
+        let (before, after) = match tracking::preview(&root, &a) {
+            Ok(p) => p,
+            Err(e) => {
+                self.model.update(cx, |m, cx| {
+                    m.error = Some(e.to_string());
+                    cx.notify()
+                });
+                return;
+            }
+        };
+        let show = |v: &serde_json::Value| serde_json::to_string_pretty(v).unwrap_or_default();
+        let detail = format!(
+            "Before:\n{}\n\nAfter:\n{}\n\nClaude Code runs Sawit on every status line update. It reads only the usage windows and keeps them on this Mac; your own status line keeps showing. settings.json is backed up first.",
+            before.as_ref().map(show).unwrap_or_else(|| "(none)".into()),
+            show(&after)
+        );
+        let answer = window.prompt(
+            PromptLevel::Info,
+            &format!("Track usage of “{}”?", a.name),
+            Some(&detail),
+            &["Turn On Tracking", "Cancel"],
+            cx,
+        );
+        let model = self.model.clone();
+        cx.spawn(async move |_, cx| {
+            if answer.await == Ok(0) {
+                model.update(cx, |m, cx| m.set_tracking(&a.id, true, cx));
+            }
+        })
+        .detach();
+    }
+
     pub(super) fn render_login(
         &self,
         a: &Account,
