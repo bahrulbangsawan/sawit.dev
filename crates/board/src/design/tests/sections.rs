@@ -55,7 +55,8 @@ fn sections_come_in_the_panels_order() {
     assert_eq!(
         read(&f.board, &[frame]).sections(),
         [
-            Header, Position, AutoLayout, Appearance, Fill, Stroke, Effects, Export
+            Header, Position, AutoLayout, Resizing, Appearance, Fill, Stroke, Effects, LayoutGrid,
+            Export
         ]
     );
     assert_eq!(

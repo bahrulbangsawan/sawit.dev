@@ -89,10 +89,11 @@ fn the_effects_section_edits_the_effects(cx: &mut TestAppContext) {
     assert!(!drawn(&mut cx, "design-field-effects.0.x"));
 }
 
-/// Ruling P5-C4: an effect the panel doesn't edit shows its name, its eye and its remove
-/// button only, and edits of the effects beside it leave it as it is.
+/// A glass effect shows its name (it has no kind menu: that holds the shadows and blurs), its
+/// eye, its remove button and its settings, which open its own fields; edits of the effects
+/// beside it leave it as it is.
 #[gpui_kit::test]
-fn a_glass_effect_shows_but_is_not_edited(cx: &mut TestAppContext) {
+fn a_glass_effect_shows_its_name_and_its_own_fields(cx: &mut TestAppContext) {
     let tmp = Scratch::new("effects-glass");
     let path = tmp.0.join("design.sawit");
     let id = with_effects(&path, json!([{"type": "glass"}, {"type": "dropShadow"}]));
@@ -101,7 +102,7 @@ fn a_glass_effect_shows_but_is_not_edited(cx: &mut TestAppContext) {
     let glass = effects(&cx)[0].clone();
     assert!(drawn(&mut cx, "design-effects-0-name"));
     assert!(!drawn(&mut cx, "design-effects-0-kind"));
-    assert!(!drawn(&mut cx, "design-effects-0-edit"));
+    assert!(drawn(&mut cx, "design-effects-0-edit"));
     assert!(drawn(&mut cx, "design-effects-1-kind"));
     click(&mut cx, "design-effects-1-visible");
     assert_eq!(effects(&cx)[1]["visible"], json!(false));

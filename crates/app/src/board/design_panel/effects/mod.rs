@@ -1,8 +1,8 @@
 //! The Effects section (spec "Design panel" 7): the layers' effects, the top one first as in
 //! FigCraft's own panel. Each has its kind, its eye and a button that removes it, and an editor
 //! that opens below it: a drop or inner shadow's x, y, blur, spread and colour, a layer or
-//! background blur's radius. Noise, texture and glass, which the panel doesn't edit, show their
-//! name, eye and remove button only (ruling P5-C4). Layers whose effects differ show "Mixed", and
+//! background blur's radius and progressive ramp, and a noise's, a texture's and a glass's own
+//! fields ([`extra`]). Layers whose effects differ show "Mixed", and
 //! its "Replace all" gives them all one drop shadow.
 //!
 //! The effects change only through `sawit_board::design::effects`. A typed value is checked before
@@ -10,6 +10,8 @@
 //! ruling on P5.T2): a hex must be a colour, x, y and spread finite numbers, a blur a finite
 //! number not below 0, and an opacity a percentage (ruling P5-C7). The shadow's colour picker is
 //! the paints' ([`paints::colour_swatch`]).
+
+mod extra;
 
 use std::rc::Rc;
 
@@ -109,17 +111,6 @@ fn effect_rows(
         &this,
         move |sel| Some(remove_effect(sel, index)),
     );
-    if matches!(effect.kind, EffectKind::Other(_)) {
-        let selector = format!("design-{id}-name");
-        let name = div()
-            .debug_selector(move || selector)
-            .flex_1()
-            .min_w_0()
-            .truncate()
-            .child(kind_name(&effect.kind));
-        let row = row().items_center().min_h(px(28.));
-        return vec![row.child(name).child(eye).child(remove).into_any_element()];
-    }
     let open = view.design.effects_open.contains(&index);
     let toggle = {
         let view = this.clone();
@@ -140,7 +131,19 @@ fn effect_rows(
             });
         })
     };
-    let kind = kind_menu(&id, index, &effect.kind, &this);
+    // Noise, texture and glass name themselves: the kind menu holds the shadows and blurs.
+    let kind = if matches!(effect.kind, EffectKind::Other(_)) {
+        let selector = format!("design-{id}-name");
+        div()
+            .debug_selector(move || selector)
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .child(kind_name(&effect.kind))
+            .into_any_element()
+    } else {
+        kind_menu(&id, index, &effect.kind, &this)
+    };
     let heading = row()
         .items_center()
         .child(toggle)
@@ -224,9 +227,11 @@ fn editor(
         EffectKind::LayerBlur | EffectKind::BackgroundBlur => {
             let blur = field(view, sel, index, effect, Part::Blur, window, cx);
             // Half the row, as wide as a shadow's fields.
-            vec![row().child(blur).child(div().flex_1()).into_any_element()]
+            let mut rows = vec![row().child(blur).child(div().flex_1()).into_any_element()];
+            rows.extend(extra::rows(view, sel, index, window, cx));
+            rows
         }
-        EffectKind::Other(_) => Vec::new(),
+        EffectKind::Other(_) => extra::rows(view, sel, index, window, cx),
     }
 }
 

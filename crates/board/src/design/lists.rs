@@ -58,28 +58,6 @@ pub(super) fn remove_row(
     }
 }
 
-/// The edit that makes row `index` of list `key` the row `change` gives for it, which sees the row
-/// as read. Refused ([`refused`]) when there is no such row, the layers hold different lists, or
-/// `change` gives none.
-pub(super) fn change_row(
-    sel: &DesignSelection,
-    key: &str,
-    index: usize,
-    change: impl FnOnce(&Value) -> Option<Value>,
-) -> Edit {
-    let Some(mut list) = rows(sel, key) else {
-        return refused();
-    };
-    let Some(slot) = list.get_mut(index) else {
-        return refused();
-    };
-    let Some(row) = change(slot) else {
-        return refused();
-    };
-    *slot = row;
-    replace(sel, key, list)
-}
-
 /// The edit for a request that can't apply: a row that isn't in the list, or a list that differs
 /// from layer to layer. It names no layers and sets nothing, so `node.set` refuses it twice over
 /// and the document stays as it was, the way [`DesignSelection::set`] answers a text key when no

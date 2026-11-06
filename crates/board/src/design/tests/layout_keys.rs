@@ -16,7 +16,7 @@ fn frame_at(board: &mut BoardDoc, name: &str, x: f64, auto_layout: bool) -> Node
 }
 
 /// The auto layout keys, listed by hand: what the panel has to treat as a frame's own.
-const AUTO_LAYOUT_KEYS: [&str; 11] = [
+const AUTO_LAYOUT_KEYS: [&str; 13] = [
     "layout",
     "gap",
     "crossGap",
@@ -28,6 +28,8 @@ const AUTO_LAYOUT_KEYS: [&str; 11] = [
     "mainAlign",
     "crossAlign",
     "wrap",
+    "gridColumns",
+    "gridRows",
 ];
 
 /// A frame without auto layout lacks every auto layout key, yet `node.set` of one gives it an

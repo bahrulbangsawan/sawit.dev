@@ -8,8 +8,12 @@
 //!   read, and the swatch no longer drawn for the layers the scrub began on end the scrub first,
 //!   kept, and close the picker ([`BoardView::end_colour_scrub`]), so that nothing else joins the
 //!   colour's undo step.
-//! - A gradient, an image or a pattern shows what it is, and becomes a solid only when its
-//!   "Replace with solid" button is clicked (Review Focus 4).
+//! - A solid row's Make gradient button turns it into a linear gradient, and a gradient row's
+//!   kind menu (Solid, Linear, Radial, Angular, Diamond) into another kind ([`editors`]). A gradient row shows its angle, then its stops,
+//!   each its position, colour and alpha, with buttons to add and remove one; an image row its
+//!   fill mode, quarter turn, tile scale, adjustments and a button to choose another image. A
+//!   pattern shows what it is. A gradient, an image or a pattern becomes a solid when its "Replace
+//!   with solid" button is clicked (Review Focus 4).
 //! - Every paint has its eye and a button that removes it. Layers whose paints differ show
 //!   "Mixed", and its "Replace all" gives them all one new paint, as the section's add button
 //!   does then.
@@ -19,6 +23,7 @@
 //! engine's own command, so that the rows after it keep their variable bindings (final review
 //! m1); the stroke's weight, position and dashes are plain properties.
 
+mod editors;
 mod picker;
 
 use std::rc::Rc;
@@ -28,7 +33,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::*;
 use gpui_kit::*;
 use sawit_board::design::paints::{
-    PaintKind, PaintRow, add_paint, paints, remove_paint, replace_with_solid, set_solid,
+    PaintKind, PaintRow, add_paint, gradient, paints, remove_paint, replace_with_solid, set_solid,
     set_visible,
 };
 use sawit_board::design::{DesignSelection, Mixed};
@@ -49,6 +54,8 @@ pub(super) const ADD_ICON: Lucide = Lucide::Plus;
 pub(super) const REMOVE_ICON: Lucide = Lucide::Minus;
 /// The picture of a gradient, image or pattern row's "Replace with solid" button.
 pub(super) const REPLACE_ICON: Lucide = Lucide::Replace;
+/// The picture of a solid row's "Make gradient" button.
+pub(super) const GRADIENT_ICON: Lucide = Lucide::Blend;
 /// What an image paint and a pattern paint show in place of a swatch.
 pub(super) const IMAGE_ICON: Lucide = Lucide::Image;
 pub(super) const PATTERN_ICON: Lucide = Lucide::Shapes;
@@ -159,8 +166,19 @@ fn paint_row(
     let this = cx.entity().downgrade();
     let id = format!("{key}-{index}");
     let row = row().items_center().min_h(px(28.));
-    let row = match &paint.kind {
-        PaintKind::Solid { hex, opacity } => {
+    let mut below: Vec<AnyElement> = Vec::new();
+    let editable_gradient = gradient::gradient(sel, key, index);
+    let row = match (&paint.kind, editable_gradient) {
+        (PaintKind::Solid { hex, opacity }, _) => {
+            // A solid becomes a gradient with one button: a menu would leave its hex no room.
+            let kind = row_button(
+                &id,
+                "gradient",
+                GRADIENT_ICON,
+                "Make gradient",
+                &this,
+                move |sel| Some(gradient::set_kind(sel, key, index, "linear")),
+            );
             let of = ColourOf::Paint { key, index };
             let swatch = colour_swatch(view, &id, of, hex, *opacity, window, cx);
             // The row's hex and opacity as the section read them, which is what their rules read.
@@ -172,9 +190,34 @@ fn paint_row(
                     .width(OPACITY_WIDTH)
                     .showing(number_field::percent(*opacity))
                     .render(view, sel, window, cx);
-            row.child(swatch).child(hex).child(opacity)
+            let bind =
+                editors::bind_menu(view, sel, format!("{key}/{index}/color"), "color", &this);
+            row.child(swatch)
+                .child(hex)
+                .child(opacity)
+                .children(bind)
+                .child(kind)
         }
-        other => {
+        (PaintKind::Gradient(_), Some(data)) => {
+            let kind = editors::kind_menu(key, index, editors::shown_kind(&data), &this);
+            let angle = editors::angle_field(view, sel, key, index, &data, window, cx);
+            below = editors::stop_rows(view, sel, key, index, &data, window, cx);
+            let replace = move |sel: &DesignSelection| Some(replace_with_solid(sel, key, index));
+            let replace = row_button(
+                &id,
+                "replace",
+                REPLACE_ICON,
+                "Replace with solid",
+                &this,
+                replace,
+            );
+            row.child(kind)
+                .child(gradient_swatch(cx))
+                .child(div().flex_1())
+                .child(angle)
+                .child(replace)
+        }
+        (other, _) => {
             let (preview, name) = match other {
                 PaintKind::Gradient(kind) => (gradient_swatch(cx), gradient_name(kind)),
                 PaintKind::Image => (icon_swatch(IMAGE_ICON, cx), "Image".to_string()),
@@ -189,6 +232,9 @@ fn paint_row(
                 &this,
                 replace,
             );
+            if let Some(image) = gradient::image(sel, key, index) {
+                below = editors::image_rows(view, sel, key, index, &image, window, cx);
+            }
             row.child(preview)
                 .child(div().flex_1().min_w_0().truncate().child(name))
                 .child(replace)
@@ -201,7 +247,15 @@ fn paint_row(
     let remove = row_button(&id, "remove", REMOVE_ICON, "Remove", &this, move |sel| {
         Some(remove_paint(sel, key, index))
     });
-    row.child(eye).child(remove).into_any_element()
+    let row = row.child(eye).child(remove);
+    if below.is_empty() {
+        return row.into_any_element();
+    }
+    v_flex()
+        .gap_1()
+        .child(row)
+        .children(below)
+        .into_any_element()
 }
 
 /// What a gradient row says it is: "Linear gradient".

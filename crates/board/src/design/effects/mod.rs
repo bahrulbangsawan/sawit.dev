@@ -4,9 +4,10 @@
 //! `color` (`{r, g, b, a}`), an `offset` (`[x, y]`), a `radius` (its blur), a `spread`, a `blend`
 //! and `showBehind`; a blur has a `radius` and its progressive settings. The engine has three
 //! kinds more (noise, texture and glass) that the panel lists, hides and removes but doesn't edit.
-//! An edit that changes or adds an effect sends the whole list back through `node.set`, so every
-//! effect it doesn't change goes back as it was read, and an effect the panel can't edit is
-//! neither lost nor rewritten. [`remove_effect`] uses the engine's command for one effect, whose
+//! An edit of one effect goes through the engine's `effect.set`, so the effects around it are
+//! never sent back and keep their variable bindings; adding one sends the list back with the new
+//! effect after the others, which keep their places. An effect the panel can't edit is neither
+//! lost nor rewritten. [`remove_effect`] uses the engine's command for one effect, whose
 //! variable bindings follow the effects that move (`node.set` would leave them by place).
 //!
 //! Where the layers hold different lists there is no row to change. [`add_effect`] then makes the
@@ -17,7 +18,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::lists::{change_row, remove_row, replace, rows};
+use super::lists::{refused, remove_row, replace, rows};
 use super::paints::{byte, hex_of, parse_rgb};
 use super::{DesignSelection, Edit};
 
@@ -147,7 +148,14 @@ pub fn add_effect(sel: &DesignSelection, kind: EffectKind) -> Edit {
 /// edit the engine refuses and that changes nothing. Check typed input first:
 /// [`parse_hex`](super::paints::parse_hex).
 pub fn set_effect(sel: &DesignSelection, index: usize, row: &EffectRow) -> Edit {
-    change_row(sel, KEY, index, |old| written(old, row))
+    let effect = rows(sel, KEY).and_then(|list| written(list.get(index)?, row));
+    match effect {
+        Some(effect) => Edit {
+            command: "effect.set",
+            params: json!({"ids": sel.ids, "index": index, "effect": effect}),
+        },
+        None => refused(),
+    }
 }
 
 /// The edit that removes effect `index`, with the engine's `effect.remove`: the variable bindings
@@ -258,6 +266,8 @@ fn stored_rgb(color: &Value) -> Option<[f64; 3]> {
     let channel = |name: &str| color.get(name)?.as_f64();
     Some([channel("r")?, channel("g")?, channel("b")?])
 }
+
+pub mod fields;
 
 #[cfg(test)]
 mod tests;

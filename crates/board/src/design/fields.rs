@@ -46,6 +46,15 @@ pub(super) const TEXT_KEYS: &[&str] = &[
     "textAlign",
     "textAlignVertical",
     "textAutoResize",
+    "textDecoration",
+    "textCase",
+    "listStyle",
+    "paragraphSpacing",
+    "paragraphIndent",
+    "maxLines",
+    "wrapStyle",
+    "features",
+    "fontVariations",
 ];
 
 /// The keys of a frame's auto layout: the ones [`flatten_layout`] lifts out of `node_json`'s
@@ -64,6 +73,8 @@ pub(super) const LAYOUT_KEYS: &[&str] = &[
     "mainAlign",
     "crossAlign",
     "wrap",
+    "gridColumns",
+    "gridRows",
 ];
 
 /// The sides of a layout's padding, in the order of its `[top, right, bottom, left]` list.
@@ -122,7 +133,19 @@ pub fn parse_number(key: &str, input: &str) -> Option<f64> {
 fn is_never_negative(key: &str) -> bool {
     matches!(
         key,
-        "width" | "height" | "strokeWeight" | "fontSize" | "gap" | "crossGap" | "cornerRadius"
+        "width"
+            | "height"
+            | "strokeWeight"
+            | "fontSize"
+            | "gap"
+            | "crossGap"
+            | "cornerRadius"
+            | "minWidth"
+            | "maxWidth"
+            | "minHeight"
+            | "maxHeight"
+            | "gridColumns"
+            | "gridRows"
     ) || key.starts_with("padding")
         || key.ends_with("Radius")
 }
@@ -191,7 +214,15 @@ fn flatten_layout(props: &mut Map<String, Value>) {
     if let Some(mode) = layout.get("mode") {
         props.insert("layout".into(), mode.clone());
     }
-    for key in ["gap", "crossGap", "mainAlign", "crossAlign", "wrap"] {
+    for key in [
+        "gap",
+        "crossGap",
+        "mainAlign",
+        "crossAlign",
+        "wrap",
+        "gridColumns",
+        "gridRows",
+    ] {
         if let Some(value) = layout.get(key) {
             props.insert(key.into(), value.clone());
         }

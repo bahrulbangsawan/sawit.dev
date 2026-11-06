@@ -92,6 +92,109 @@ pub(super) fn fold_runs(text: &TextData, props: &mut Map<String, Value>) -> Vec<
     mixed
 }
 
+/// A text detail: its key, its label, and its choices, each a value and its label.
+pub type Detail = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+/// The text details the Typography section offers beside its fields, each a key `node.set` takes
+/// and its choices: decoration, case, list and wrap style.
+pub const DETAIL_CHOICES: [Detail; 4] = [
+    (
+        "textDecoration",
+        "Decoration",
+        &[
+            ("none", "None"),
+            ("underline", "Underline"),
+            ("strikethrough", "Strikethrough"),
+        ],
+    ),
+    (
+        "textCase",
+        "Case",
+        &[
+            ("original", "As typed"),
+            ("upper", "UPPER"),
+            ("lower", "lower"),
+            ("title", "Title"),
+            ("smallCaps", "Small caps"),
+        ],
+    ),
+    (
+        "listStyle",
+        "List",
+        &[
+            ("none", "None"),
+            ("bulleted", "Bulleted"),
+            ("numbered", "Numbered"),
+        ],
+    ),
+    (
+        "wrapStyle",
+        "Wrap",
+        &[
+            ("auto", "Auto"),
+            ("balance", "Balance"),
+            ("pretty", "Pretty"),
+        ],
+    ),
+];
+
+/// OpenType features typed as `liga=off, tnum, ss01`: a tag alone is on, `=off` / `=0` turns it
+/// off. As `node.set`'s `features` takes them, `{tag: bool}`; `None` for a tag that isn't four
+/// characters or a value that is no switch. Empty text is no features.
+pub fn parse_features(text: &str) -> Option<serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (tag, value) = match part.split_once('=') {
+            Some((t, v)) => (t.trim(), v.trim().to_ascii_lowercase()),
+            None => (part, "on".to_string()),
+        };
+        if tag.chars().count() != 4 || !tag.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return None;
+        }
+        let on = match value.as_str() {
+            "on" | "1" | "true" | "yes" => true,
+            "off" | "0" | "false" | "no" => false,
+            _ => return None,
+        };
+        out.insert(tag.to_string(), serde_json::Value::Bool(on));
+    }
+    Some(serde_json::Value::Object(out))
+}
+
+/// Variable font axes typed as `wght=550, wdth=90`, as `fontVariations` takes them: `{axis:
+/// number}`. `None` for an axis that isn't four characters or a value that isn't a number.
+pub fn parse_variations(text: &str) -> Option<serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (tag, value) = part.split_once(['=', ' '])?;
+        let (tag, value) = (tag.trim(), value.trim().parse::<f64>().ok()?);
+        if tag.chars().count() != 4 || !value.is_finite() {
+            return None;
+        }
+        out.insert(tag.to_string(), serde_json::json!(value));
+    }
+    Some(serde_json::Value::Object(out))
+}
+
+/// Features or axes as their field shows them: `liga=off, tnum`, `wght=550`.
+pub fn tags_text(value: &serde_json::Value) -> String {
+    let Some(map) = value.as_object() else {
+        return String::new();
+    };
+    map.iter()
+        .map(|(k, v)| match v {
+            serde_json::Value::Bool(true) => k.clone(),
+            serde_json::Value::Bool(false) => format!("{k}=off"),
+            other => format!("{k}={other}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use figcraft_doc::NodeId;

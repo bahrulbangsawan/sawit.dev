@@ -2,16 +2,12 @@
 //!
 //! `fills` and `strokes` are lists of paints. A solid paint reads as
 //! `{type: "solid", color: "#RRGGBB", opacity?, blend?, visible?}`, and a gradient, an image or a
-//! pattern as the engine's own paint JSON. An edit that changes or adds a row sends the whole list
-//! back through `node.set`, so every row it doesn't change goes back as it was read, and a
-//! gradient or an image is never rewritten as a solid: only [`replace_with_solid`] does that.
-//! [`remove_paint`] uses the engine's command for one row, so the variable bindings of the rows
-//! after it move with them.
-//!
-//! The one thing a whole list sent back can lose is a binding a solid row holds: the row goes back
-//! as its 8-bit hex, and a colour bound to a variable that isn't on the 8-bit grid (or isn't
-//! opaque) lets go of the variable when another row of the list is edited. Variables are a
-//! non-goal of the spec, and the final review accepts this (its m1).
+//! pattern as the engine's own paint JSON. Every edit of one row uses the engine's command for one
+//! row (`fill.set`, `fill.add`, `fill.remove` and their `stroke.*` twins), so the other rows are
+//! never sent back: they keep their exact colours and their variable bindings, which a whole list
+//! sent back as 8-bit hex lost (the final review's m1). A row's own bindings let go only of what
+//! the edit changes: a new opacity keeps a colour bound to a variable, and a gradient or an image
+//! is never rewritten as a solid but by [`replace_with_solid`].
 //!
 //! Where a list can't be edited row by row, because the layers hold different lists, the panel
 //! shows "Mixed" with a "Replace all" button. [`add_paint`] is that button: it makes one new paint
@@ -22,7 +18,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::lists::{change_row, refused, remove_row, replace, rows};
+use super::lists::{refused, remove_row, replace, rows};
 use super::{DesignSelection, Edit};
 
 /// A new fill's colour: the default of a new shape in Figma.
@@ -82,14 +78,52 @@ pub fn set_solid(
     if !opacity.is_finite() {
         return None;
     }
-    let mut list = rows(sel, key)?;
-    let fields = list.get_mut(index)?.as_object_mut()?;
-    if fields.get("type").and_then(Value::as_str) != Some("solid") {
+    let list = rows(sel, key)?;
+    let row = list.get(index)?;
+    if row.get("type").and_then(Value::as_str) != Some("solid") {
         return None;
     }
-    fields.insert("color".into(), json!(hex));
+    let mut fields = Map::new();
+    // The colour goes only when it changed: sent as it shows, an 8-bit hex, it would let go of a
+    // variable whose colour isn't on the 8-bit grid.
+    let shown = match solid_kind(row) {
+        Some(PaintKind::Solid { hex, .. }) => Some(hex),
+        _ => None,
+    };
+    if shown.as_deref() != Some(hex.as_str()) {
+        fields.insert("color".into(), json!(hex));
+    }
     fields.insert("opacity".into(), json!(opacity.clamp(0.0, 1.0)));
-    Some(replace(sel, key, list))
+    Some(set_row(sel, key, index, fields))
+}
+
+/// The engine's command that changes one row of list `key`.
+fn row_command(key: &str) -> Option<&'static str> {
+    match key {
+        "fills" => Some("fill.set"),
+        "strokes" => Some("stroke.set"),
+        _ => None,
+    }
+}
+
+/// The edit that changes row `index` of list `key` of every selected layer with `fields`
+/// (`paint`, `color`, `opacity`, `visible`, `blend`), through `fill.set` or `stroke.set`: the
+/// other rows aren't touched. Refused ([`refused`]) when there is no such row or the layers hold
+/// different lists.
+fn set_row(sel: &DesignSelection, key: &str, index: usize, fields: Map<String, Value>) -> Edit {
+    let (Some(command), Some(list)) = (row_command(key), rows(sel, key)) else {
+        return refused();
+    };
+    if index >= list.len() {
+        return refused();
+    }
+    let mut params = fields;
+    params.insert("ids".into(), json!(sel.ids));
+    params.insert("index".into(), json!(index));
+    Edit {
+        command,
+        params: Value::Object(params),
+    }
 }
 
 /// The edit that adds a solid paint after the rows of list `key`: `#D9D9D9` for the fills, the
@@ -98,9 +132,23 @@ pub fn set_solid(
 /// When the layers hold different lists there is none to add to, and the new paint becomes the
 /// only one of every layer: the "Replace all" of a mixed list.
 pub fn add_paint(sel: &DesignSelection, key: &str) -> Edit {
-    let mut list = rows(sel, key).unwrap_or_default();
-    list.push(json!({"type": "solid", "color": default_hex(key)}));
-    replace(sel, key, list)
+    let command = match key {
+        "fills" => "fill.add",
+        "strokes" => "stroke.add",
+        _ => return refused(),
+    };
+    match rows(sel, key) {
+        // On top of the rows there are, which keep theirs.
+        Some(_) => Edit {
+            command,
+            params: json!({"ids": sel.ids, "color": default_hex(key)}),
+        },
+        None => replace(
+            sel,
+            key,
+            vec![json!({"type": "solid", "color": default_hex(key)})],
+        ),
+    }
 }
 
 /// The edit that removes row `index` of list `key`, with the engine's `fill.remove` or
@@ -122,18 +170,28 @@ pub fn remove_paint(sel: &DesignSelection, key: &str, index: usize) -> Edit {
 /// opacity, blend and eye stay; a solid row stays as it is. A row that isn't there, or lists that
 /// differ from layer to layer, make an edit the engine refuses and that changes nothing.
 pub fn replace_with_solid(sel: &DesignSelection, key: &str, index: usize) -> Edit {
-    change_row(sel, key, index, |row| Some(solid_in_place_of(row, key)))
+    let Some(row) = rows(sel, key).and_then(|list| list.get(index).cloned()) else {
+        return refused();
+    };
+    if row.get("type").and_then(Value::as_str) == Some("solid") {
+        // A solid stays as it is: an edit that changes nothing.
+        let visible = row.get("visible").and_then(Value::as_bool).unwrap_or(true);
+        let mut fields = Map::new();
+        fields.insert("visible".into(), json!(visible));
+        return set_row(sel, key, index, fields);
+    }
+    let mut fields = Map::new();
+    fields.insert("paint".into(), solid_in_place_of(&row, key));
+    set_row(sel, key, index, fields)
 }
 
 /// The edit that shows or hides row `index` of list `key`, whatever it paints with, and changes
 /// nothing else about it. A row that isn't there, or lists that differ from layer to layer, make
 /// an edit the engine refuses and that changes nothing.
 pub fn set_visible(sel: &DesignSelection, key: &str, index: usize, visible: bool) -> Edit {
-    change_row(sel, key, index, |row| {
-        let mut fields = row.as_object()?.clone();
-        fields.insert("visible".into(), json!(visible));
-        Some(Value::Object(fields))
-    })
+    let mut fields = Map::new();
+    fields.insert("visible".into(), json!(visible));
+    set_row(sel, key, index, fields)
 }
 
 /// The Stroke section's fields besides its paints, as the keys [`DesignSelection::get`] reads and
@@ -299,6 +357,8 @@ fn first_stop(gradient: &Value) -> Option<(String, f64)> {
     ];
     Some((hex_of(rgb), channel("a").unwrap_or(1.0)))
 }
+
+pub mod gradient;
 
 #[cfg(test)]
 mod tests;

@@ -12,7 +12,7 @@ fn set_solid_changes_one_row() {
     let before = held(&board, r, "fills");
 
     let edit = set_solid(&read(&board, &[r]), "fills", 1, "#00ff00", 0.5).unwrap();
-    assert_eq!(edit.command, "node.set");
+    assert_eq!(edit.command, "fill.set");
     apply(&mut board, &edit);
 
     let after = held(&board, r, "fills");

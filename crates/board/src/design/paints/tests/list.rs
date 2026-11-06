@@ -2,7 +2,7 @@
 //! that are refused.
 
 use super::*;
-use crate::design::lists::testing::{bind, bound, set_variable, variables};
+use crate::design::lists::testing::{bind, bound, edit, set_variable, variables};
 use crate::doc::BoardError;
 
 #[test]
@@ -12,7 +12,7 @@ fn add_and_remove_paint() {
 
     // A fill goes after the fills there are.
     let edit = add_paint(&read(&board, &[r]), "fills");
-    assert_eq!(edit.command, "node.set");
+    assert_eq!(edit.command, "fill.add");
     apply(&mut board, &edit);
     assert_eq!(
         rows_of(&board, &[r], "fills"),
@@ -210,4 +210,41 @@ fn set_visible_shows_and_hides_one_row_and_changes_nothing_else() {
     let edit = set_visible(&read(&board, &[r]), "fills", 1, true);
     apply(&mut board, &edit);
     assert_eq!(held(&board, r, "fills"), before);
+}
+
+/// Final review m1, fixed: an edit of one row never sends the other rows back, so a colour bound
+/// to a variable that isn't on the 8-bit grid keeps its variable when another row is edited, shown
+/// or hidden, or a row is added; and a row's new opacity keeps its own colour's variable.
+#[test]
+fn editing_a_paint_keeps_the_bindings_of_the_other_rows() {
+    let mut board = design_file();
+    let r = rectangle(&mut board, "R", 0.0);
+    node_set(&mut board, &[r], json!({"fills": ["#FF0000", "#00FF00"]}));
+    // Off the 8-bit grid: 0.5 is no byte.
+    let off = json!({"r": 0.5, "g": 0.25, "b": 0.125, "a": 1.0});
+    variables(&mut board, &[("brand", "color", off)]);
+    bind(&mut board, r, "fills/1/color", "brand");
+
+    let e = set_solid(&read(&board, &[r]), "fills", 0, "#123456", 1.0).unwrap();
+    assert_eq!(e.command, "fill.set");
+    apply(&mut board, &e);
+    edit(&mut board, &[r], |s| set_visible(s, "fills", 0, false));
+    edit(&mut board, &[r], |s| add_paint(s, "fills"));
+    assert_eq!(bound(&board, r), ["fills/1/color"]);
+
+    // Its own opacity: the colour stays bound.
+    let shown = match &paints(&read(&board, &[r]), "fills").unwrap()[1].kind {
+        PaintKind::Solid { hex, .. } => hex.clone(),
+        other => panic!("{other:?}"),
+    };
+    let e = set_solid(&read(&board, &[r]), "fills", 1, &shown, 0.5).unwrap();
+    apply(&mut board, &e);
+    assert_eq!(bound(&board, r), ["fills/1/color"]);
+    set_variable(&mut board, "brand", json!("#ABCDEF"));
+    assert_eq!(rows_of(&board, &[r], "fills")[1], solid("#ABCDEF", 0.5));
+
+    // A new colour for it lets go of the variable, as an explicit edit does.
+    let e = set_solid(&read(&board, &[r]), "fills", 1, "#000000", 1.0).unwrap();
+    apply(&mut board, &e);
+    assert!(bound(&board, r).is_empty());
 }

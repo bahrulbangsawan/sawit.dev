@@ -119,6 +119,8 @@ pub(super) fn render(
         aligns.into_any_element(),
         buttons("textAutoResize", &RESIZES, sel, &this).into_any_element(),
     ];
+    let mut rows = rows;
+    rows.extend(super::type_details::details(view, sel, window, cx));
     section("typography", "Typography", Vec::new(), rows, cx)
 }
 
