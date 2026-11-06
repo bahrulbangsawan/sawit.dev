@@ -198,22 +198,36 @@ fn routes(dialog: &Dialog, cx: &mut Context<BoardView>) -> AnyElement {
             (None, Some(file)) => file.clone(),
             (None, None) => "linked from the site".to_string(),
         };
+        let full = SharedString::from(path.clone());
         h_flex()
             .gap_2()
             .py_0p5()
+            .min_w_0()
             .child(
-                Checkbox::new(("routes-route", index))
-                    .label(path.clone())
-                    .checked(ticked)
-                    .on_click(cx.listener(move |view, on: &bool, _, cx| {
-                        if let Some(dialog) = view.routes_ui.dialog.as_mut() {
-                            match on {
-                                true => dialog.left_out.remove(&path),
-                                false => dialog.left_out.insert(path.clone()),
-                            };
-                        }
-                        cx.notify();
-                    })),
+                // A long route is cut with an ellipsis, its whole path in a tooltip; the "from"
+                // column keeps a share of the row.
+                div()
+                    .id(("routes-route-path", index))
+                    .min_w_0()
+                    .max_w(relative(0.7))
+                    .overflow_hidden()
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+                    })
+                    .child(
+                        Checkbox::new(("routes-route", index))
+                            .label(path.clone())
+                            .checked(ticked)
+                            .on_click(cx.listener(move |view, on: &bool, _, cx| {
+                                if let Some(dialog) = view.routes_ui.dialog.as_mut() {
+                                    match on {
+                                        true => dialog.left_out.remove(&path),
+                                        false => dialog.left_out.insert(path.clone()),
+                                    };
+                                }
+                                cx.notify();
+                            })),
+                    ),
             )
             .child(
                 div()

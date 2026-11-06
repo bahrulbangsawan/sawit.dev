@@ -237,6 +237,7 @@ fn header(
                         div()
                             .text_sm()
                             .font_semibold()
+                            .truncate()
                             .text_color(cx.theme().popover_foreground)
                             .child(title.clone()),
                     )
@@ -244,6 +245,7 @@ fn header(
                         el.child(
                             div()
                                 .text_xs()
+                                .line_clamp(3)
                                 .text_color(if warn { cx.theme().warning } else { muted })
                                 .child(text),
                         )

@@ -139,8 +139,10 @@ impl RenderOnce for Placeholder {
                 el.child(
                     div()
                         .max_w(px(if danger { 520. } else { 360. }))
-                        .max_h(px(160.))
-                        .overflow_hidden()
+                        // Eight lines at most, the last one ending in an ellipsis (Copy Error
+                        // copies the whole of it), not cut mid-line.
+                        .line_clamp(8)
+                        .text_ellipsis()
                         .text_xs()
                         .text_center()
                         .whitespace_normal()

@@ -48,6 +48,10 @@ impl BoardView {
                         .aria_label(text.clone())
                         .debug_selector(|| "board-toast".into())
                         .max_w(px(560.))
+                        // Three lines at most: a long error ends in an ellipsis (its accessible
+                        // name has all of it).
+                        .line_clamp(3)
+                        .text_ellipsis()
                         .px_3()
                         .py_1p5()
                         .rounded_md()

@@ -7,6 +7,7 @@ use std::time::Duration;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -18,10 +19,6 @@ use crate::terminal::RunningAgent;
 
 /// How often the open panel looks again for the agents running in the terminals.
 const AGENT_POLL: Duration = Duration::from_secs(1);
-
-/// How wide an agent menu may be: it opens over the panel, never over the page, whose webview
-/// draws above it.
-const MENU_WIDTH: f32 = 236.;
 
 /// What the send button does, from the agents running and those installed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,7 +212,7 @@ impl AnnotatePanel {
                         .disabled(!has_rows)
                         .menu_accessibility_label("Choose the agent to send the notes to")
                         .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-                            let mut menu = menu.max_w(px(MENU_WIDTH)).label("Send the notes to");
+                            let mut menu = menu.label("Send the notes to");
                             for (agent, name, ticked) in entries.iter().cloned() {
                                 let this = this.clone();
                                 let pane = agent.pane;
@@ -265,7 +262,7 @@ impl AnnotatePanel {
                         .disabled(!has_rows)
                         .menu_accessibility_label("Choose the agent to open")
                         .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-                            let mut menu = menu.max_w(px(MENU_WIDTH)).label("Open with the notes");
+                            let mut menu = menu.label("Open with the notes");
                             for other in installed.iter().copied() {
                                 let this = this.clone();
                                 menu = menu.item(
@@ -331,12 +328,22 @@ fn button_text(text: String) -> impl IntoElement {
     div().min_w_0().truncate().child(text)
 }
 
-/// A menu line: the agent's logo and what tells it apart.
+/// A menu line: the agent's logo and what tells it apart, on one line: a long session title is cut
+/// with an ellipsis where the menu ends (it fits its content up to the window's width), and the
+/// whole of it shows in a tooltip.
 fn menu_entry(kind: AgentKind, name: String, tint: Hsla, window: &Window, cx: &App) -> Div {
+    let full = SharedString::from(name.clone());
     h_flex()
         .gap_2()
         .min_w_0()
         .items_center()
         .child(crate::terminal::agent_logo(kind, px(16.), tint, window, cx))
-        .child(div().min_w_0().truncate().child(name))
+        .child(
+            div()
+                .id(SharedString::from(format!("agent-entry-{name}")))
+                .min_w_0()
+                .truncate()
+                .child(name)
+                .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx)),
+        )
 }
