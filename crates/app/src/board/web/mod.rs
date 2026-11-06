@@ -253,6 +253,8 @@ pub(super) struct Live {
 pub(super) enum WebMsg {
     Engine(NodeId, EngineEvent),
     Probe(NodeId, String),
+    /// A screen's blueprint, as the page answered it ([`crate::board::presence::replay::blueprint`]).
+    Blueprint(NodeId, String),
     /// Files of these screens changed on disk ([`watch`]).
     Changed(Vec<String>),
     /// Whether the server of these pages answers ([`servers`]).

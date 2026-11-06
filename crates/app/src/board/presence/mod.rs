@@ -34,6 +34,7 @@
 mod announce;
 mod edges;
 mod labels;
+mod live_screens;
 mod marks;
 mod ops;
 mod paint;
@@ -191,6 +192,10 @@ pub(super) struct Presence {
     pub announcer: announce::Announcer,
     /// The agents' ops played over the canvas, a queue per lane.
     pub replays: replay::Replays,
+    /// Who last wrote each screen, and when: its next blueprint plays as theirs.
+    pub screen_writers: std::collections::HashMap<String, (Look, Instant)>,
+    /// Each screen frame's last blueprint, to play only what changed.
+    pub blueprints: std::collections::HashMap<NodeId, replay::blueprint::Blueprint>,
     /// The agent whose pointer the user's pointer rests on: its name shows.
     pub hovered: Option<SharedString>,
     next_ghost: u64,

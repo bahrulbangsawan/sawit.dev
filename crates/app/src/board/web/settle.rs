@@ -158,11 +158,24 @@ impl BoardView {
             return;
         }
         let waited = frame.loaded.map(|at| ms(at.elapsed()));
+        let screen = match &frame.spec.source {
+            super::Source::Screen(name) => Some(name.clone()),
+            _ => None,
+        };
         web.note(json!({"event": "settled", "id": id.0, "how": why, "after_load_ms": waited}));
         if let Some(engine) = web.frames.get(&id).and_then(|f| f.engine.as_ref()) {
+            let probe = to_view.clone();
             let _ = engine.eval_with_callback(PROBE, move |json| {
-                let _ = to_view.unbounded_send(WebMsg::Probe(id, json));
+                let _ = probe.unbounded_send(WebMsg::Probe(id, json));
             });
+            // A screen an agent just wrote: its blueprint, for the build to play (30e).
+            let now = cx.background_executor().now();
+            if screen.is_some_and(|name| self.agents.screen_writer(&name, now).is_some()) {
+                let script = crate::board::presence::replay::blueprint::SCRIPT;
+                let _ = engine.eval_with_callback(script, move |json| {
+                    let _ = to_view.unbounded_send(WebMsg::Blueprint(id, json));
+                });
+            }
         }
         self.web_snapshot(id, why, cx);
     }

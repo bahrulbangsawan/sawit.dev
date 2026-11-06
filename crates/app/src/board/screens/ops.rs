@@ -103,6 +103,8 @@ impl BoardView {
             web.wrote(&name);
         }
         self.web_reload_screen(&name, cx);
+        let now = cx.background_executor().now();
+        self.agents.screen_written(&name, look, now);
         self.agent_at_screen(op, &found, look, cx);
         found["written"] = json!(written);
         found["rendered"] = json!(true);

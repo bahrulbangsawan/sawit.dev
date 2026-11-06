@@ -145,6 +145,7 @@ impl BoardView {
                     frame.probe = Some(probe);
                 }
             }
+            WebMsg::Blueprint(id, json) => self.screen_blueprint(id, &json, cx),
             WebMsg::Changed(names) => self.web_files_changed(names, cx),
             WebMsg::Server(origin, up) => self.web_server(origin, up, cx),
             WebMsg::Preview(EngineEvent::Ipc(body)) if body == "sawit-web:escape" => {

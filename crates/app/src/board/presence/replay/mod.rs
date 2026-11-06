@@ -14,6 +14,7 @@
 //! user, changed again) snaps at once, and so does one the user selects; off-screen layers don't
 //! play at all. Nothing waits on the replay: the op's answer went before it began.
 
+pub(in crate::board) mod blueprint;
 pub(in crate::board) mod marks;
 pub(in crate::board) mod script;
 #[cfg(test)]
@@ -47,6 +48,18 @@ impl Speed {
             Speed::Fast => 2.0,
             Speed::Off => f64::INFINITY,
         }
+    }
+}
+
+/// How long a screen element's cover takes to fade to the live page once it has played.
+pub(in crate::board) const GO_LIVE: std::time::Duration = std::time::Duration::from_millis(220);
+
+/// How long after its end a task still draws: a screen element's cover fading out.
+fn linger(t: &Timed) -> std::time::Duration {
+    if t.task.cover {
+        GO_LIVE
+    } else {
+        std::time::Duration::ZERO
     }
 }
 
@@ -141,6 +154,37 @@ impl Replays {
             .into_iter()
             .filter(|t| shown(&t.rect))
             .collect();
+        self.schedule(look, page, after, tasks, start_at, now);
+    }
+
+    /// Plays a screen's changed elements (`tasks`, [`blueprint::tasks`]) for `look` over its
+    /// frame on `page`, in the document `doc`.
+    pub fn play_screen(
+        &mut self,
+        look: &Look,
+        page: NodeId,
+        doc: &Arc<Document>,
+        tasks: Vec<Task>,
+        start_at: (f64, f64),
+        now: Instant,
+        reduce: bool,
+    ) {
+        if reduce || self.speed == Speed::Off || tasks.is_empty() {
+            return;
+        }
+        self.schedule(look, page, doc, tasks, start_at, now);
+    }
+
+    /// Puts `tasks` in `look`'s lane after what it still plays, which speeds up or snaps.
+    fn schedule(
+        &mut self,
+        look: &Look,
+        page: NodeId,
+        after: &Arc<Document>,
+        tasks: Vec<Task>,
+        start_at: (f64, f64),
+        now: Instant,
+    ) {
         let factor = self.speed.factor();
         let ix = match self.lanes.iter().position(|l| l.look.id == look.id) {
             Some(ix) => ix,
@@ -243,7 +287,7 @@ impl Replays {
                     (None, None) => true,
                     _ => false,
                 };
-                t.end > now && same && !selected.contains(&node)
+                t.end + linger(t) > now && same && !selected.contains(&node)
             });
         }
         self.lanes.retain(|l| !l.tasks.is_empty());
@@ -300,6 +344,9 @@ impl Replays {
 /// typed to the last whole word; `None` once it is whole (or for a task that shows its layer as
 /// it plays: an image wiping in, a moved layer, a deletion).
 fn stage(t: &Timed, now: Instant) -> Option<Stage> {
+    if t.task.cover {
+        return None;
+    }
     let progress = t.progress(now);
     match &t.task.kind {
         Kind::Delete | Kind::Image => match progress {

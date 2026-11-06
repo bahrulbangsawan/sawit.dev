@@ -76,7 +76,28 @@ pub(in crate::board) fn lane_marks(
     marks: &mut Vec<Mark>,
 ) {
     let color = lane.look.color;
+    let white: Hsla = gpui_kit::hsla(0.0, 0.0, 1.0, 1.0);
     for t in &lane.tasks {
+        // A screen's element: the live page under it hides until it plays, then fades in.
+        if t.task.cover {
+            let cover = match t.progress(now) {
+                None => 1.0,
+                Some(p) if p < 1.0 => 1.0,
+                Some(_) => {
+                    let since = now.saturating_duration_since(t.end).as_secs_f32();
+                    1.0 - (since / super::GO_LIVE.as_secs_f32()).min(1.0)
+                }
+            };
+            if cover > 0.0 {
+                marks.push(Mark::Box {
+                    rect: screen(t.task.rect),
+                    color: white,
+                    alpha: 0.0,
+                    dashed: false,
+                    fill: cover,
+                });
+            }
+        }
         let Some(p) = t.progress(now).filter(|p| *p < 1.0) else {
             continue;
         };

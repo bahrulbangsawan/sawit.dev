@@ -43,6 +43,23 @@ pub(in crate::board) struct Task {
     pub rect: [f64; 4],
     pub time: Duration,
     pub spacing: Option<([f64; 4], f64)>,
+    /// A screen's element ([`super::blueprint`]): `node` is the screen's frame, which the drawn
+    /// copy leaves alone; a cover over the element's box hides the live page until it plays.
+    pub cover: bool,
+}
+
+impl Task {
+    pub fn new(node: NodeId, kind: Kind, rect: [f64; 4], spacing: Option<([f64; 4], f64)>) -> Self {
+        let time = kind.time();
+        Task {
+            node,
+            kind,
+            rect,
+            time,
+            spacing,
+            cover: false,
+        }
+    }
 }
 
 /// The most one op plays for, at 1×: past it every task is shortened to fit.
@@ -226,18 +243,11 @@ fn walk(before: &Document, after: &Document, id: NodeId, in_copy: bool, tasks: &
 }
 
 fn task(node: NodeId, kind: Kind, rect: [f64; 4], spacing: Option<([f64; 4], f64)>) -> Task {
-    let time = kind.time();
-    Task {
-        node,
-        kind,
-        rect,
-        time,
-        spacing,
-    }
+    Task::new(node, kind, rect, spacing)
 }
 
 /// Shortens every task alike so the op plays within [`OP_BUDGET`].
-fn fit(tasks: &mut [Task]) {
+pub(in crate::board) fn fit(tasks: &mut [Task]) {
     let total: Duration = tasks.iter().map(|t| t.time).sum();
     if total <= OP_BUDGET || total.is_zero() {
         return;
