@@ -28,6 +28,9 @@ gpui_kit::assets::icon_assets!(
         FileText,
         FileSpreadsheet,
         Upload,
+        // The Accounts page: the page icon and Import from Claude Pool.
+        Users,
+        FolderInput,
         // The find bar's options and Replace All.
         WholeWord,
         Regex,
