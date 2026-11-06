@@ -1,7 +1,7 @@
 //! The browser's toolbar: back, forward, reload (Stop and a progress bar while the page loads,
-//! [`super::progress`]), the address, Local Explorer while the page's dev server serves one,
-//! the device menu ([`super::device`]), the Annotate and Design toggles, open externally and Web
-//! Inspector.
+//! [`super::progress`]), the address, the local servers' list ([`super::servers`]), Local
+//! Explorer while the page's dev server serves one, the device menu ([`super::device`]), the
+//! Annotate and Design toggles, open externally and Web Inspector.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -93,6 +93,7 @@ impl BrowserView {
                     .children(self.render_agent_opening())
                     .child(self.render_agent_status()),
             )
+            .child(self.servers_button(cx))
             .when_some(explorer, |el, (port, on_explorer)| {
                 el.child(explorer_button(port, on_explorer, cx))
             })

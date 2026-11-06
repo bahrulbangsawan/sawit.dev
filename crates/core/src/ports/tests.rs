@@ -305,3 +305,48 @@ fn conflict_also_reports_shadowing_listeners() {
         other => panic!("expected conflict, got {other:?}"),
     }
 }
+
+fn a_job(label: &str, cmdline: &str, ports: &[u16], cwd: Option<&str>, dev: bool) -> PortJob {
+    PortJob {
+        root: 1,
+        pids: vec![1],
+        label: label.into(),
+        tool: String::new(),
+        cmdline: cmdline.into(),
+        listeners: vec![(1, label.into())],
+        ports: ports.iter().map(|p| (*p, BindAddr::AnyV4)).collect(),
+        cwd: cwd.map(str::to_string),
+        dev,
+    }
+}
+
+/// The browser's list of local servers: each port of a dev server once, ascending, with what
+/// runs it and its project folder; databases on their own and apps that aren't dev tools left out.
+#[test]
+fn local_servers_are_the_dev_servers_ports() {
+    let jobs = [
+        a_job(
+            "bun run dev",
+            "bun run dev",
+            &[5173, 24678],
+            Some("/Users/me/shop/"),
+            true,
+        ),
+        a_job("postgres", "postgres -D /data", &[5432], None, true),
+        a_job("ControlCenter", "ControlCenter", &[7000], None, false),
+        a_job(
+            "npm run dev",
+            "npm run dev",
+            &[3000],
+            Some("/Users/me/blog"),
+            true,
+        ),
+    ];
+    let servers = local_servers(&jobs);
+    let ports: Vec<u16> = servers.iter().map(|s| s.port).collect();
+    assert_eq!(ports, [3000, 5173, 24678]);
+    assert_eq!(servers[0].name, "npm run dev");
+    assert_eq!(servers[0].project.as_deref(), Some("blog"));
+    assert_eq!(servers[1].project.as_deref(), Some("shop"));
+    assert_eq!(servers[1].url(), "http://localhost:5173/");
+}

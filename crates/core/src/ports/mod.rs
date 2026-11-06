@@ -4,11 +4,13 @@ mod commands;
 mod conflict;
 mod jobs;
 mod parse;
+mod servers;
 
 pub use commands::{short_command, tool};
 pub use conflict::{PortVerdict, analyze};
 pub use jobs::{PortJob, group_into_jobs};
 pub use parse::{Proc, parse_lsof, parse_lsof_cwd, parse_ps};
+pub use servers::{LocalServer, local_servers};
 
 use std::net::IpAddr;
 

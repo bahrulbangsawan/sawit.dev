@@ -25,6 +25,7 @@ mod panel;
 mod picking;
 mod presence;
 mod progress;
+mod servers;
 mod shots;
 mod toolbar;
 mod viewport;
@@ -187,6 +188,8 @@ pub struct BrowserView {
     loading: bool,
     /// How far the page in [`Self::loading`] has come, while it loads ([`progress`]).
     progress: progress::LoadProgress,
+    /// The local servers' list, while it is open ([`servers`]).
+    servers: Option<servers::Scan>,
     /// Something was opened (by the user or an agent); the dev server
     /// found at start no longer replaces the blank page.
     navigated: bool,
@@ -329,6 +332,7 @@ impl BrowserView {
             title: String::new(),
             loading: false,
             progress: Default::default(),
+            servers: None,
             navigated,
             token: navigation::new_token(),
             logs: Logs::default(),
