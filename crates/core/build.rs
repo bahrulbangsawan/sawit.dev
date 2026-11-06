@@ -6,6 +6,10 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+/// The design standard's digest, made here from its SKILL.md (`skills::digest`).
+#[path = "src/skills/digest.rs"]
+mod digest;
+
 fn main() {
     let manifest =
         PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -38,6 +42,12 @@ fn main() {
     code.push_str("];\n");
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     std::fs::write(out.join("bundled_skills.rs"), code).expect("write bundled_skills.rs");
+    // The design standard's digest: a rule it names that SKILL.md lost fails the build.
+    let skill = root.join(digest::SKILL).join("SKILL.md");
+    let text = std::fs::read_to_string(&skill)
+        .unwrap_or_else(|e| panic!("{} can't be read: {e}", skill.display()));
+    let made = digest::digest(&text).unwrap_or_else(|e| panic!("the design digest: {e}"));
+    std::fs::write(out.join("design_digest.md"), made).expect("write design_digest.md");
 }
 
 /// What `dir` holds, by name, without hidden files (`.DS_Store`). Its absence fails the build:

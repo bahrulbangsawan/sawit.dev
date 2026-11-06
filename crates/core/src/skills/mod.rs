@@ -17,6 +17,7 @@ mod built_in;
 pub mod bundled;
 mod catalog;
 mod commands;
+pub mod digest;
 mod installed;
 mod targets;
 #[cfg(test)]

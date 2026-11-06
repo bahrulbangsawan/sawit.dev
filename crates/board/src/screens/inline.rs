@@ -24,7 +24,7 @@ use markup5ever_rcdom::{Handle, Node, NodeData, RcDom, SerializableHandle};
 use super::{INDEX, css, mime, read, resolve};
 
 /// The namespaces html5ever puts elements and attributes in.
-pub(super) const HTML_NS: &str = "http://www.w3.org/1999/xhtml";
+pub(crate) const HTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub(super) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 pub(super) const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 
@@ -346,12 +346,12 @@ pub fn rewrite_srcset(value: &str, mut f: impl FnMut(&str) -> Option<String>) ->
 }
 
 /// `html` parsed as a browser parses a page.
-pub(super) fn parse(html: &str) -> RcDom {
+pub(crate) fn parse(html: &str) -> RcDom {
     html5ever::parse_document(RcDom::default(), Default::default()).one(html)
 }
 
 /// The value of `attrs`' attribute `name` (one in no namespace).
-pub(super) fn attr<'a>(attrs: &'a [Attribute], name: &str) -> Option<&'a str> {
+pub(crate) fn attr<'a>(attrs: &'a [Attribute], name: &str) -> Option<&'a str> {
     let found = attrs
         .iter()
         .find(|a| a.name.ns.is_empty() && &*a.name.local == name);

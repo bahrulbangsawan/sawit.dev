@@ -7,6 +7,7 @@
 #[cfg(test)]
 mod agent_tests;
 mod bar;
+mod checks;
 mod handoff;
 mod ops;
 mod pictures;
@@ -34,6 +35,10 @@ pub(in crate::board) struct ScreenUi {
     /// The coding agents on this Mac that Send to Agent can start, once they are looked for.
     pub agents: Option<Vec<AgentKind>>,
     pub finding_agents: bool,
+    /// The design standard's failures each frame's last check found ([`checks`]), and the
+    /// frame whose list is open.
+    pub checks: std::collections::HashMap<NodeId, Vec<sawit_board::checks::Finding>>,
+    pub checks_open: Option<NodeId>,
 }
 
 /// The one screen selected on the canvas: its frame, its plugin data and its frame's name.

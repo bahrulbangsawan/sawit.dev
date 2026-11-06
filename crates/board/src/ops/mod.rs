@@ -60,6 +60,7 @@ use serde_json::{Value, json};
 
 use crate::doc::BoardDoc;
 
+mod checks;
 mod command;
 mod copy_as;
 mod diagram;
@@ -192,6 +193,9 @@ const BATCH: &str = "command.batch";
 ///   server (a routes work's, with `work`), in one undo step, and answers `{ok, section, page,
 ///   name, server, frames}`; a page that isn't on this Mac is refused ([`routes`],
 ///   [`crate::routes`]).
+/// - `checks` (`{work?, frame?, findings?}`) answers the design standard's machine checks of a
+///   frame, `{ok, frame, findings}`, or the `findings` given (a screen's), and changes nothing
+///   ([`checks`], [`crate::checks`]).
 ///
 /// While the user holds a drag on the canvas, every op that changes the document (`add`,
 /// `update`, `delete`, `clear`, `replace`, `mermaid`, `begin`, `routes` and `command`) answers
@@ -226,6 +230,7 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         Some("begin") => work::begin(board, op),
         Some("progress") => work::progress(board, op),
         Some("screen") => screen::screen(board, op),
+        Some("checks") => checks::checks(board, op),
         Some("routes") => routes::routes(board, op),
         _ => work::in_work(board, op, run_named),
     }

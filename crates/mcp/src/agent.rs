@@ -14,6 +14,8 @@ use sawit_core::agents::{AgentIdentity, client_name, session_id};
 /// This process's agent session: its id from the start, the client's name once it has said it.
 #[derive(Debug)]
 pub struct Session {
+    /// What of Sawit's design standard this session has been sent with its work.
+    pub design: crate::app::design::Sent,
     id: String,
     project: Option<String>,
     client: OnceLock<(String, Option<String>)>,
@@ -39,6 +41,7 @@ impl Session {
 
     fn with(id: String, project: Option<String>) -> Self {
         Self {
+            design: Default::default(),
             id,
             project,
             client: OnceLock::new(),

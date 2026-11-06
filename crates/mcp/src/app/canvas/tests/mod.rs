@@ -2,6 +2,7 @@
 //! the helpers they share.
 
 mod backups;
+mod design;
 mod export;
 mod files;
 mod guide;

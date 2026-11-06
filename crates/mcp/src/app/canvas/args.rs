@@ -162,11 +162,11 @@ pub struct CanvasBeginArgs {
     )]
     pub frame: Value,
     #[schemars(
-        description = "The steps it goes through, shown one at a time on its row: [\"Laying out\", \"Writing copy\", \"Styling\"]. canvas_progress says which is running"
+        description = "The steps it goes through, shown one at a time on its row: [\"Laying out\", \"Writing copy\", \"Styling\"]. canvas_progress says which is running. Steps that name a part of the design standard (a form, a table, navigation, states, colour, motion) bring that section of it with the answer"
     )]
     pub steps: Option<Vec<String>>,
     #[schemars(
-        description = "\"component\" (the default): a frame you draw into with the canvas tools. \"screen\": a UI screen, an HTML page in .nyawit/screens/<screen>/ shown in the frame (1440 × 900 when `frame` names no size, its CSS viewport); write it with canvas_screen_write and the answer's `screen`"
+        description = "\"screen\" for UI (a screen, a page, an app view): an HTML page in .nyawit/screens/<screen>/ shown in the frame (1440 × 900 when `frame` names no size, its CSS viewport); write it with canvas_screen_write and the answer's `screen`. \"component\" (the default when left out): a frame you draw into with the canvas tools, for components, diagrams, sketches the user asked for and illustrations"
     )]
     pub kind: Option<String>,
     #[schemars(description = CANVAS_FILE)]

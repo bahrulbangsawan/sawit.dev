@@ -33,10 +33,12 @@ pub(super) fn said(result: &CallToolResult) -> String {
     texts.map(|t| t.text.clone()).collect::<Vec<_>>().join("\n")
 }
 
-/// The JSON a tool that succeeded answered.
+/// The JSON a tool that succeeded answered: its first text (canvas_begin's design standard
+/// comes after it, as text of its own).
 pub(super) fn answer(result: &CallToolResult) -> Value {
     assert_ne!(result.is_error, Some(true), "{}", said(result));
-    serde_json::from_str(&said(result)).unwrap()
+    let first = result.content.iter().find_map(|c| c.as_text());
+    serde_json::from_str(&first.expect("a text").text).unwrap()
 }
 
 /// A stand-in for the running app that answers any command, each with the next of `answers`.

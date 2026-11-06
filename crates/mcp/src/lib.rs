@@ -7,8 +7,10 @@
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{
-    CallToolResult, ContentBlock as Content, Implementation, InitializeRequestParams,
-    InitializeResult, ServerCapabilities, ServerConfig,
+    CallToolResult, ContentBlock as Content, GetPromptRequestParams, GetPromptResponse,
+    Implementation, InitializeRequestParams, InitializeResult, ListPromptsResult,
+    ListResourcesResult, PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
+    ServerCapabilities, ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, tool_handler};
@@ -105,30 +107,31 @@ const MAX_OUTPUT: usize = 100_000;
 /// stay at 4,000 at most, and the step an agent designing UI takes first comes first.
 pub const INSTRUCTIONS: &str = "\
 Sawit is a macOS developer workbench. Before you design, build or review UI on the Sawit canvas, read canvas_design_guide and follow it.
+Build UI as screens (canvas_begin {kind: \"screen\"}, canvas_screen_write): their answers bring the rules and checks.
 These tools work without the Sawit app running:
-- Instances: local PostgreSQL servers Sawit manages (create, start, stop, logs, …).
+- Instances: local PostgreSQL servers (create, start, stop, logs, …).
 - Databases: detect; PostgreSQL: list, describe, create, drop, truncate, refresh, export, back up, import CSV; D1 and SQLite: list, describe, export; `query` (always read-only), `execute_sql` (read-write); saved connections, DATABASE_URL in .env. `target`: an instance or connection name (list_connections), or an id from detect_databases.
-- Diagrams: render_diagram draws Mermaid syntax to SVG with Pele (built in, offline); schema_diagram draws a database schema.
+- Diagrams: render_diagram draws Mermaid to SVG with Pele (offline); schema_diagram draws a database schema.
 - Ports: listening dev servers; stop them.
-- Cloudflare Local Explorer: local_explorer finds Workers dev servers' explorers; local_explorer_request calls their API.
+- Cloudflare Local Explorer: local_explorer finds Workers dev servers' explorers; local_explorer_request calls them.
 - Network: diagnose the connection, ping a host.
-- SSH: saved and ~/.ssh/config hosts: add, update, remove, probe, run a command.
+- SSH: saved and ~/.ssh/config hosts: add, update, remove, probe, run commands.
 - Run: a project's scripts (package.json, Makefile, …) and saved commands.
 - Git: status, log, diff, show, branches, stage/unstage, commit, switch.
 - Prompts: the prompt library (with {{variables}}).
 - Files: text search in a folder.
-- Config files: list_config_files lists shell and agent config files (paths, never contents).
-- Dev tools: the Tools page catalog (Homebrew, Bun, uv, Claude Code, …): install, upgrade, uninstall.
-- MCP servers: the MCP page catalog; install or remove a server in an AI client's config.
-- New project: stack_options, stack_check and stack_create build a Better-T-Stack project.
+- Config files: list_config_files lists shell and agent config files (paths only).
+- Dev tools: the Tools page catalog (Homebrew, Bun, uv, …): install, upgrade, uninstall.
+- MCP servers: the MCP page catalog; add or remove one in an AI client's config.
+- New project: stack_options, stack_check, stack_create (Better-T-Stack).
 - Skills: the Skills page's packs per agent: install, update, remove; install_sawit_skills (Sawit's own).
 These need the running app (launch_app starts it; app_state shows windows, tabs and terminals):
 - app_*: open files and folders, panels, layout, tabs, pages (canvas, MCP, git graph, …), Run panel scripts, SSH sessions, table/SQL/diagram tabs, prompts.
-- GitHub: only the user can sign in to GitHub in Sawit; app_state's `github` says if they have.
+- GitHub: only the user signs in to GitHub in Sawit; app_state's `github` says if they have.
 - terminal_*: run commands in Sawit's terminal or beside one (terminal_split), read output, type keys, name or close tabs and panes. terminal_run, terminal_split, app_run_script and app_ssh_connect return the tab and `pane` used: pass both to terminal_read, terminal_input, terminal_rename and terminal_close; the user may type in another (app_state lists them).
 - canvas_*: the Sawit canvas: list, clear and export SVG/PNG the page on show; add shapes, stickies, arrows and Mermaid diagrams (canvas_add_diagram); update and delete layers by id, on any page; load another canvas in place of every page. They use your project's canvas (.nyawit/canvas.sawit), or the .sawit file named by `file`. They also work on the saved file when the app is closed, and keep what they clear, load over or delete in backups beside it (.bak, .del.bak).
 - canvas_command: run any canvas engine command by id (board.sticky, align.left, edit.undo, …); canvas_commands lists the ids, and with a filter what each takes. With the app closed each call starts from the saved file (no undo, no selection, no view): pass ids, or run the steps in one command.batch.
-- browser_*: a browser tab (WebKit) to check the app being built: navigate, snapshot (an outline with element refs), act by ref or selector, screenshot, console, network, JS, devices, the user's annotations, page tools, its design. Snapshot again after the page changes: refs reset.
+- browser_*: a WebKit tab to check the app being built: navigate, snapshot (an outline with element refs, which reset when the page changes), act by ref or selector, screenshot, console, network, JS, devices, the user's annotations, page tools, its design.
 - keymap_*: read and change the key bindings (keymap_list, keymap_bind, keymap_unbind). They need the app: the default keys live in it.
 Most app tools take `project` to pick the window that has that folder open; without it, the window that has the folder sawit-mcp runs in open is used, else the frontmost. The browser_* and canvas_* tools (and app_open_page browser or canvas) use that project's own browser tab and canvas, even while the user looks at another project of the window.";
 
@@ -270,7 +273,12 @@ impl Sawit {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Sawit {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_prompts()
+            .build();
+        ServerConfig::new(capabilities)
             .with_server_info(Implementation::new("sawit-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }
@@ -285,6 +293,45 @@ impl ServerHandler for Sawit {
         self.agent.met(&request.client_info);
         context.peer.set_peer_info(request.clone());
         self.negotiate_initialize(&request)
+    }
+
+    /// Sawit's design standard, whole and by section (`sawit://design-guide`).
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(ListResourcesResult::with_all_items(app::design::resources()))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        app::design::read(&request.uri)
+            .map(Into::into)
+            .map_err(|e| ErrorData::resource_not_found(e, None))
+    }
+
+    /// `design-ui`: UI on the canvas with the design standard.
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        Ok(ListPromptsResult::with_all_items(app::design::prompts()))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        let what = request.arguments.as_ref().and_then(|a| a.get("what"));
+        app::design::prompt(&request.name, what.and_then(|w| w.as_str()))
+            .map(Into::into)
+            .map_err(|e| ErrorData::invalid_params(e, None))
     }
 }
 

@@ -117,6 +117,7 @@ pub fn canvas_action(op: &Value) -> Action {
         "type" => Action::new("typing", "typed"),
         "screen_write" => Action::new("writing a screen", "wrote a screen"),
         "screen_get" | "screen" => Action::new("reading a screen", "read a screen"),
+        "checks" => Action::new("checking the design", "checked the design"),
         "pointer" => Action::new("using the pointer", "used the pointer"),
         "command" => {
             let id = op

@@ -4,6 +4,7 @@
 //! design standard ([`guide`]), which the tools that make UI point agents at.
 
 mod args;
+pub(crate) mod design;
 mod dispatch;
 mod files;
 mod guide;
@@ -16,7 +17,7 @@ mod tests;
 use std::path::Path;
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, ContentBlock as Content};
 use rmcp::{tool, tool_router};
 use sawit_board::store;
 use serde_json::{Value, json};
@@ -284,10 +285,17 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Begin a component before you build it, and begin each component that way: its named frame appears on the canvas at once, and while you build the canvas shows a skeleton in it, a row above it with its name and step, your name and a progress badge. Pass the `work` this answers to canvas_add_elements, canvas_update, canvas_add_diagram, canvas_delete and canvas_command: their ops go inside the frame (x and y from its top-left corner) and its undo step. Say each step, and that it is done or failed, with canvas_progress. Answers {work, frame, page}. kind \"screen\" makes a UI screen instead: the frame and its HTML folder (.nyawit/screens/<screen>/) at once; build it with canvas_screen_write. With the app closed the frame is made in the saved file. Designing UI? Read canvas_design_guide first and follow it"
+        description = "Begin a component before you build it, and begin each component that way: its named frame appears on the canvas at once, and while you build the canvas shows a skeleton in it, a row above it with its name and step, your name and a progress badge. Pass the `work` this answers to canvas_add_elements, canvas_update, canvas_add_diagram, canvas_delete and canvas_command: their ops go inside the frame (x and y from its top-left corner) and its undo step. Say each step, and that it is done or failed, with canvas_progress. Answers {work, frame, page}. A UI screen, page or app view is kind \"screen\" (the default for UI): the frame and its HTML folder (.nyawit/screens/<screen>/) at once, built with canvas_screen_write, which previews live, exports to HTML and React and hands off; keep the default kind for components, diagrams, sketches the user asked for and illustrations. The first UI work of a session answers with the design standard's digest, and later ones with the sections their `steps` name (Form, Table, Navigation, States); canvas_progress {status: \"done\"} answers the standard's machine checks of what was built. With the app closed the frame is made in the saved file. Designing UI? Read canvas_design_guide first and follow it"
     )]
     async fn canvas_begin(&self, Parameters(a): Parameters<CanvasBeginArgs>) -> CallToolResult {
         let screen = (a.kind.as_deref()).is_some_and(|k| k.trim().eq_ignore_ascii_case("screen"));
+        let ui = design::is_ui(a.kind.as_deref(), &a.name, &a.frame);
+        let vector_screen = !screen && ui && design::screen_like(&a.name, &a.frame);
+        let words = format!(
+            "{} {}",
+            a.name,
+            a.steps.clone().unwrap_or_default().join(" ")
+        );
         let op = json!({
             "op": "begin", "name": a.name, "frame": a.frame, "steps": a.steps, "kind": a.kind,
         });
@@ -295,14 +303,35 @@ impl Sawit {
             true => self.begin_screen(a.project, a.file, op).await,
             false => self.canvas(a.project, a.file, op).await,
         };
-        match begun {
-            Ok(v) => ok(pretty(&v)),
-            Err(e) => fail(e),
+        let mut v = match begun {
+            Ok(v) => v,
+            Err(e) => return fail(e),
+        };
+        if vector_screen {
+            v["use_screen"] = json!(design::USE_A_SCREEN);
         }
+        // The standard goes with the work: its digest with the session's first UI, then the
+        // sections later works name.
+        let mut sent = vec![Content::text(pretty(&v))];
+        let digest = ui.then(|| self.agent.design.digest()).flatten();
+        match digest {
+            Some(digest) => sent.push(Content::text(digest)),
+            None if a.kind.as_deref() != Some("routes") => {
+                let sections = self.agent.design.sections(&words);
+                sent.extend(
+                    sections
+                        .into_iter()
+                        .filter_map(design::section_text)
+                        .map(Content::text),
+                );
+            }
+            None => {}
+        }
+        CallToolResult::success(sent)
     }
 
     #[tool(
-        description = "Write a UI screen's HTML (begun with canvas_begin {kind: \"screen\"}): the whole page (`html`), or `edits` to it, and its other files (`files`: CSS, scripts, SVG, images as base64). Each write re-renders the screen on the canvas, so the user watches it build: lay it out, then fill in copy, then style it, writing as you go, and say each step with canvas_progress. The page has no network: put fonts, images and scripts in its folder, or use system fonts. Answers the files written. With the app closed the files are written and nothing renders. Designing UI? Read canvas_design_guide first and follow it"
+        description = "Write a UI screen's HTML (begun with canvas_begin {kind: \"screen\"}): the whole page (`html`), or `edits` to it, and its other files (`files`: CSS, scripts, SVG, images as base64). Each write re-renders the screen on the canvas, so the user watches it build: lay it out, then fill in copy, then style it, writing as you go, and say each step with canvas_progress. Each answer has `design_checks`: the design standard's machine checks of the page as written (contrast, target and text sizes, the spacing scale, alt text, labels, focus rings, text that overflows), each failure {rule, selector, fix}, also shown on the frame; fix them before you finish. The page has no network: put fonts, images and scripts in its folder, or use system fonts. Answers the files written. With the app closed the files are written and nothing renders. Designing UI? Read canvas_design_guide first and follow it"
     )]
     async fn canvas_screen_write(
         &self,
@@ -342,20 +371,30 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Say where a component begun with canvas_begin stands: `step`, the step now running, and `status` done or failed (with a `message`, the reason, which stays on the canvas until you retry or the user dismisses it). A work with no op or progress for 60 s shows as stalled. With the app closed nothing shows progress, so it changes nothing and says so"
+        description = "Say where a component begun with canvas_begin stands: `step`, the step now running, and `status` done or failed (with a `message`, the reason, which stays on the canvas until you retry or the user dismisses it). Done answers `design_checks`, the design standard's machine checks of the work's screen or layers, each failure {rule, selector or layer, fix}: fix them and say done again. A work with no op or progress for 60 s shows as stalled. With the app closed nothing shows progress, so it changes nothing and says so"
     )]
     async fn canvas_progress(
         &self,
         Parameters(a): Parameters<CanvasProgressArgs>,
     ) -> CallToolResult {
+        let done = a
+            .status
+            .as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("done"));
+        let (project, file, work) = (a.project.clone(), a.file.clone(), a.work.clone());
         let op = json!({
             "op": "progress", "work": a.work, "step": a.step, "status": a.status,
             "message": a.message,
         });
-        match self.canvas(a.project, a.file, op).await {
-            Ok(v) => ok(pretty(&v)),
-            Err(e) => fail(e),
+        let mut v = match self.canvas(a.project, a.file, op).await {
+            Ok(v) => v,
+            Err(e) => return fail(e),
+        };
+        // A work said done is checked against the standard: its screen, or its layers.
+        if done && let Some(checks) = self.work_checks(project, file, &work).await {
+            v["design_checks"] = checks;
         }
+        ok(pretty(&v))
     }
 
     #[tool(description = concat!(

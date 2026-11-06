@@ -116,6 +116,8 @@ impl BoardView {
             .flatten();
         // What each route frame waits for, over its picture.
         let web_status = self.render_web_status(cx);
+        // The design standard's failures each checked frame has, as a badge on it.
+        let checks = self.render_check_badges(cx);
         let preview = screens::render_preview(self, cx);
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);
@@ -171,6 +173,7 @@ impl BoardView {
                 .size_full(),
             )
             .children(web_status)
+            .children(checks)
             .children(agents)
             .children(screen_bar)
             .children(route_bar)

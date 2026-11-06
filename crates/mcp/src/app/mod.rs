@@ -3,6 +3,7 @@
 //! panel, SSH sessions, database tabs and the canvas.
 
 mod canvas;
+pub(crate) use canvas::design;
 mod launch;
 mod panels;
 mod terminal;

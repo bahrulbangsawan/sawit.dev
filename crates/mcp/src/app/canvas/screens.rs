@@ -109,6 +109,7 @@ impl Sawit {
         if let Err(e) = names_one(&op).and_then(|()| files::Write::from_op(&op).map(drop)) {
             return fail(format!("canvas_screen_write: {e}"));
         }
+        let (project, file) = (a.project.clone(), a.file.clone());
         let written = self.screen_call(a.project, a.file, op, |at, op| {
             let write = files::Write::from_op(&op)?;
             let mut found = at.find(&op)?;
@@ -118,10 +119,17 @@ impl Sawit {
             found["note"] = json!(UNRENDERED);
             Ok(found)
         });
-        match written.await {
-            Ok(v) => ok(pretty(&v)),
-            Err(e) => fail(e),
+        let mut v = match written.await {
+            Ok(v) => v,
+            Err(e) => return fail(e),
+        };
+        // What the standard's machine checks find in the page as written, also shown on its
+        // frame in the app.
+        let shown = v["rendered"] == json!(true);
+        if let Some(checks) = self.screen_checks(project, file, &v, shown).await {
+            v["design_checks"] = checks;
         }
+        ok(pretty(&v))
     }
 
     pub async fn canvas_screen_get_tool(&self, a: super::CanvasScreenGetArgs) -> CallToolResult {

@@ -11,6 +11,10 @@ Each project has a canvas in Sawit (`.nyawit/canvas.sawit`): pages, frames, shap
 
 Before you design, build, restyle or review any UI on the canvas, call `canvas_design_guide` and follow it; `section` (such as Typography) returns one section with the checklist. Run its checklist before you call a design done. The `sawit-canvas-design` skill, where it is installed, is the same text.
 
+## UI is a screen
+
+A screen, page or app view is a screen on the canvas: `canvas_begin {kind: "screen", name, frame, steps}`, then `canvas_screen_write` with its HTML (the whole page, or edits) and files. Each write renders on the canvas, and its answer lists the design standard's machine checks (contrast, target and text sizes, spacing, alt text, labels, focus, overflow), each failure with its rule and the fix: fix them before you finish with `canvas_progress {status: "done"}`. `canvas_screen_get` reads a screen back with a PNG; `canvas_screen_export` writes it as HTML or React. The first UI work of a session answers with the standard's digest; name parts in `steps` (Form, Table, States) to get their sections. Vector frames (`canvas_command`, `canvas_add_elements`) are for components, diagrams, sketches the user asked for and illustrations.
+
 ## Diagrams
 
 - `canvas_add_diagram` draws Mermaid syntax (`source`: flowchart, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, architecture-beta, C4Context, gantt, mindmap and more) as shapes the user can edit; `x` and `y` place it. It lays out offline.
@@ -21,7 +25,7 @@ Before you design, build, restyle or review any UI on the canvas, call `canvas_d
 
 - `canvas_get` lists the layers of the page on show (ids, positions, text). Read it before you change anything.
 - `canvas_add_elements` adds rectangles, ellipses, diamonds, stickies, text, arrows bound to shapes by id, lines and frames.
-- To build a component or screen, `canvas_begin` it first (`name`, `frame`, `steps`): pass the `work` it answers to the tools you build it with, say each `step` with `canvas_progress`, and end with `status` done or failed, so the user watches it being built.
+- To build a component or vector frame, `canvas_begin` it first (`name`, `frame`, `steps`): pass the `work` it answers to the tools you build it with, say each `step` with `canvas_progress`, and end with `status` done or failed, so the user watches it being built.
 - `canvas_update` changes layers by id; `canvas_delete` removes them (the board is kept as a `.del.bak` first).
 - `canvas_command` runs any engine command by id (board.sticky, align.left, node.set, page.list); `canvas_commands` with a `filter` lists the ids and what each takes. Commands that would move the user's view or page (view.*, page.select) are refused: address pages and layers by id. With the app closed each call starts from the saved file: pass ids, or put the steps in one command.batch.
 - `canvas_export` writes the page on show as SVG or PNG.

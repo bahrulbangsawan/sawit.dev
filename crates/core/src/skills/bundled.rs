@@ -16,6 +16,10 @@ type Skill = (&'static str, &'static [File]);
 // `SKILLS: &[Skill]`, made by the build from the repository's skills/ folder.
 include!(concat!(env!("OUT_DIR"), "/bundled_skills.rs"));
 
+/// The digest of the design standard, made by the build from the SKILL.md of
+/// [`super::digest::SKILL`] ([`super::digest::digest`]).
+pub const DESIGN_DIGEST: &str = include_str!(concat!(env!("OUT_DIR"), "/design_digest.md"));
+
 /// The names of the skills Sawit ships.
 pub fn names() -> impl Iterator<Item = &'static str> {
     SKILLS.iter().map(|(name, _)| *name)

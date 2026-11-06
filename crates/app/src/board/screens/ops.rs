@@ -37,6 +37,7 @@ impl BoardView {
                 Ok(Answer::Now(self.begin_screen(op, look, cx)))
             }
             "screen" => Ok(Answer::Now(self.find_screen(&op, cx))),
+            "checks" => Ok(Answer::Now(self.design_checks_op(&op, cx))),
             "routes" => Ok(self.agent_routes_op(op, look, cx)),
             "screen_write" => Ok(Answer::Now(self.write_screen(&op, look, cx))),
             "screen_get" => Ok(self.get_screen(&op, look, cx)),

@@ -3,6 +3,7 @@
 mod built_in;
 mod catalog;
 mod commands;
+mod digest;
 mod live;
 mod packs;
 mod shipped;
