@@ -9,6 +9,7 @@
 
 pub mod claude;
 pub mod collector;
+pub mod login;
 pub mod run;
 pub mod statusline;
 mod store;

@@ -17,7 +17,7 @@ use crate::keymap::OpenKeymapEditor;
 /// only a binding's first keystroke, so its item runs the action without naming it: no "⌘K" that
 /// opens nothing.
 pub(crate) fn pages(menu: PopupMenu) -> PopupMenu {
-    let pages: [(&'static str, Icon, Box<dyn Action>); 7] = [
+    let pages: [(&'static str, Icon, Box<dyn Action>); 8] = [
         ("Canvas", crate::board::ICON.into(), Box::new(OpenCanvas)),
         (
             "Browser",
@@ -31,6 +31,11 @@ pub(crate) fn pages(menu: PopupMenu) -> PopupMenu {
             "Permissions",
             Lucide::ShieldCheck.into(),
             Box::new(OpenPermissions),
+        ),
+        (
+            "Accounts",
+            Lucide::Users.into(),
+            Box::new(crate::accounts::OpenAccounts),
         ),
         (
             "New Project",

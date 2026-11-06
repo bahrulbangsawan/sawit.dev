@@ -154,6 +154,7 @@ impl Workspace {
             Page::Tools => self.show_tools_page(false, window, cx),
             Page::Skills => self.show_skills_page(false, window, cx),
             Page::Permissions => self.show_permissions_page(false, window, cx),
+            Page::Accounts => self.show_accounts_page(window, cx),
             Page::Changelog => {
                 self.show_center(cx);
                 self.open_changelog_page(cx)

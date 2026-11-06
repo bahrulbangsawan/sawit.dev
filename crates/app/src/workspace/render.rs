@@ -146,6 +146,11 @@ impl Render for Workspace {
                 this.open_browser(None, w, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenSkills, w, cx| this.open_skills_page(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::accounts::OpenAccounts, w, cx| {
+                    this.open_accounts_page(w, cx)
+                }),
+            )
             .on_action(cx.listener(
                 |this, _: &crate::sawit_skills::AddSawitSkillsToProject, w, cx| {
                     let (project, window) = (this.root(cx), w.window_handle());
@@ -215,6 +220,7 @@ impl Render for Workspace {
                             .child(div().flex_1())
                             .children(self.render_fill_exit(window, cx))
                             .child(self.render_layout_toggles(cx))
+                            .child(crate::accounts::account_chip(cx))
                             .child(crate::git::account::account_control(
                                 &self.github,
                                 super::pages_menu::pages,

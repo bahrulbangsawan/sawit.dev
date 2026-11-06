@@ -180,6 +180,8 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             // The GitHub sign-in is the app's, not a window's: whether there is one, and whose.
             // Never the token. Agents can't sign in: the user does, in the app.
             let github = crate::git::account::global(cx).read(cx).describe();
+            // Claude Code's accounts: names, active, sign-in and usage; never a secret.
+            let accounts = crate::accounts::global(cx).read(cx).describe();
             // The agents at work on any window's canvas or browser, each surface once.
             let agents: Vec<serde_json::Value> = (windows.iter())
                 .flat_map(|w| w["agents"].as_array().cloned().unwrap_or_default())
@@ -187,6 +189,7 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
             return Ok(Answer::Now(serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "github": github,
+                "agent_accounts": accounts,
                 "windows": windows,
                 "agents": agents,
             })));

@@ -1,3 +1,4 @@
+mod accounts;
 mod agents;
 mod assets;
 mod board;
@@ -183,6 +184,7 @@ fn main() -> std::process::ExitCode {
         cx.set_global(rt::Rt(runtime));
         // The saved GitHub sign-in, before any window shows it. It never starts a sign-in.
         git::account::init(cx);
+        accounts::init(cx);
         highlight::prewarm(cx);
         cli::init(cx);
         sawit_skills::init(cx);

@@ -30,6 +30,8 @@ pub enum Page {
     Mcp,
     Tools,
     Skills,
+    /// Agent Accounts: Claude Code's accounts, their sign-in and usage.
+    Accounts,
     Changelog,
     GitGraph,
     Github,
