@@ -138,20 +138,24 @@ impl AccountsPage {
     }
 
     fn confirm_remove(&mut self, a: Account, window: &mut Window, cx: &mut Context<Self>) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("Remove “{}” from Sawit?", a.name),
-            Some(&format!(
-                "Sawit forgets the account{}. {} and its sign-in stay; Adopt Existing brings it back.",
-                if a.tracking { " and gives its status line back" } else { "" },
-                a.dir.display()
-            )),
-            &["Remove", "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(
+            format!("Remove account {} from Sawit?", a.name),
+            "Remove Account",
+        )
+        .thing(a.name.clone())
+        .detail(format!(
+            "Sawit forgets the account{}. {} and its sign-in stay; Adopt Existing brings it back.",
+            if a.tracking {
+                " and gives its status line back"
+            } else {
+                ""
+            },
+            a.dir.display()
+        ))
+        .ask(window, cx);
         let model = self.model.clone();
         cx.spawn(async move |_, cx| {
-            if answer.await == Ok(0) {
+            if answer.await {
                 model.update(cx, |m, cx| m.remove(&a.id, cx));
             }
         })

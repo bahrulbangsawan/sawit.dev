@@ -157,11 +157,11 @@ impl AccountsPage {
         let n = m.list().len();
         let mut items = Vec::new();
         if let Some(app) = &r.app {
-            items.push(format!("• {} (to the Trash)", app.display()));
+            items.push(format!("{} (to the Trash)", app.display()));
         }
         if !r.links.is_empty() {
             items.push(format!(
-                "• {} (links to that app)",
+                "{} (links to that app)",
                 r.links
                     .iter()
                     .map(|l| l.display().to_string())
@@ -170,23 +170,20 @@ impl AccountsPage {
             ));
         }
         for f in &r.folders {
-            items.push(format!("• {}", f.display()));
+            items.push(f.display().to_string());
         }
         let detail = format!(
-            "Sawit now does everything Claude Pool did, with your {n} accounts. This removes:\n{}\n\nThe folders are backed up first to {}. Claude Pool's launch at login stops with the app; check System Settings › Login Items if it lingers.\n\nYour Claude accounts, their folders and sign-ins are not touched.",
-            items.join("\n"),
+            "Sawit now does everything Claude Pool did, with your {n} accounts. The folders below are backed up first to {}. Claude Pool's launch at login stops with the app; check System Settings › Login Items if it lingers. Your Claude accounts, their folders and sign-ins are not touched.",
             r.archive.display()
         );
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Remove Claude Pool?",
-            Some(&detail),
-            &["Remove Claude Pool", "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new("Remove Claude Pool?", "Remove Claude Pool")
+            .thing("Claude Pool")
+            .detail(detail)
+            .items(items)
+            .ask(window, cx);
         let model = self.model.clone();
         cx.spawn(async move |_, cx| {
-            if answer.await == Ok(0) {
+            if answer.await {
                 model.update(cx, |m, cx| m.do_remove(cx));
             }
         })

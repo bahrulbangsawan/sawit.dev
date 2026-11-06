@@ -359,15 +359,12 @@ impl AccountsPage {
     }
 
     fn confirm_end(&mut self, s: Session, window: &mut Window, cx: &mut Context<Self>) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("End the session in {}?", s.folder()),
-            Some("It stops as if you quit it; its conversation stays and can be resumed."),
-            &["End Session", "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(format!("End the session in {}?", s.folder()), "End Session")
+            .thing(s.folder().to_string())
+            .detail(format!("Claude Code (pid {}) stops as if you quit it; its conversation stays and can be resumed.", s.pid))
+            .ask(window, cx);
         cx.spawn(async move |_, _| {
-            if answer.await == Ok(0) {
+            if answer.await {
                 sessions::end(s.pid);
             }
         })
