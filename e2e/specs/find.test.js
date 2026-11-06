@@ -73,7 +73,7 @@ sawitTest("find: ⌘F in a Markdown preview searches what the preview shows", as
   await ctx.call({ cmd: "open", path: path.join(world.project, "doc.md") });
   await until(async () => (await activeTab(ctx))?.title === "doc.md", { what: "doc.md in a tab" });
   // The preview alone.
-  await win.click({ role: "radiobutton", name: /Preview/ }).catch(() => win.click({ role: "button", name: /Preview/ }));
+  await win.click({ role: "button", name: "Preview" });
   await findAndStep(ctx, "needle", 2);
 });
 
@@ -134,7 +134,7 @@ sawitTest("find: ⌘F in the terminal searches the scrollback and isn't sent to 
   await until(async () => /e2e%\s*$/.test(await terminalText(ctx)), { timeoutMs: 20_000, what: "the prompt" });
   await win.focus({ role: /^text/, name: "Terminal" });
   // Two marks, far apart: the first goes into the scrollback.
-  await win.typeKeys("echo mark-A; seq 1 200; echo mark-B");
+  await win.typeKeys("echo mark-A && seq 1 200 && echo mark-B");
   await win.press("return");
   await until(async () => /^mark-B$/m.test(await terminalText(ctx)), { what: "the output" });
   // "mark-" is twice in the command line too: 4 matches, the newest current first.

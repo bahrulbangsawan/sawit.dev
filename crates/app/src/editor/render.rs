@@ -28,6 +28,7 @@ impl FileEditor {
                     .ghost()
                     .xsmall()
                     .icon(icon)
+                    .accessibility_label(tooltip)
                     .tooltip(tooltip)
                     .selected(current == mode)
             };

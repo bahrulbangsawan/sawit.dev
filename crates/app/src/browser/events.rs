@@ -1,6 +1,9 @@
 //! What the view hears: the page's and the engine's messages ([`FromPage`]), and the side panels'
 //! asks.
 
+/// ⌘F's find bar above the page.
+pub(super) mod find;
+
 use gpui_kit::*;
 use sawit_core::browser::{ConsoleEntry, PageEvent, parse_ipc};
 use serde_json::{Value, json};

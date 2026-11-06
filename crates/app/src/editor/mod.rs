@@ -255,6 +255,8 @@ impl FileEditor {
         let language = self.language.clone();
         let state = cx.new(|cx| {
             let mut state = EditorState::new(window, cx)
+                // ⌘F opens the app's one find bar (`crate::find`), not the input's own panel.
+                .searchable(false)
                 .language(language)
                 .line_number(true)
                 // No fold column: keeps the gutter tight to the numbers.

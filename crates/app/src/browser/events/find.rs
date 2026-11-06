@@ -12,7 +12,7 @@ use gpui_kit::*;
 use sawit_core::find::{FindState, pattern};
 use serde_json::{Value, json};
 
-use super::BrowserView;
+use super::super::BrowserView;
 use crate::find::{FindEvent, Finder, Supports};
 
 /// The page's side of find, run in Sawit's world with `json`: `find` (with `pattern` and `flags`,
@@ -82,16 +82,18 @@ return JSON.stringify({ total: S.ranges.length, index: S.index });
 
 /// The browser's find: its bar, and whether the page had the keyboard when it opened.
 #[derive(Default)]
-pub(super) struct BrowserFind {
-    pub(super) finder: Finder,
+pub(in crate::browser) struct BrowserFind {
+    pub(in crate::browser) finder: Finder,
     page_had_keyboard: bool,
 }
 
 impl BrowserView {
-    /// `el` with the find keys: ⌘F, ⌘G, ⇧⌘G and the bar's Escape. The bar goes above the page,
-    /// not over it: the page is a native view, which GPUI can't draw on.
-    pub(super) fn with_find_keys(el: Div, cx: &mut Context<Self>) -> Div {
-        el.on_action(cx.listener(|this, _: &crate::find::Find, w, cx| this.open_find(w, cx)))
+    /// `el` (the view, its toolbar in) with the find keys (⌘F, ⌘G, ⇧⌘G and the bar's Escape) and
+    /// the bar, under the toolbar: above the page, not over it, as the page is a native view, which
+    /// GPUI can't draw on.
+    pub(in crate::browser) fn with_find(&self, el: Div, cx: &mut Context<Self>) -> Div {
+        el.children(self.find.finder.render())
+            .on_action(cx.listener(|this, _: &crate::find::Find, w, cx| this.open_find(w, cx)))
             .on_action(
                 cx.listener(|this, _: &crate::find::FindNext, _, cx| this.find_step(true, cx)),
             )
@@ -105,7 +107,7 @@ impl BrowserView {
 
     /// ⌘F: the bar above the page, its query the text selected in the page. The page gives the
     /// keyboard to the bar's field while it has it.
-    pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::browser) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(engine) = self.engine.clone() else {
             return;
         };
@@ -151,7 +153,7 @@ impl BrowserView {
     }
 
     /// ⌘G, ⇧⌘G, ↩ and ⇧↩ in the bar, its arrows.
-    pub(super) fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+    pub(in crate::browser) fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
         if !self.find.finder.is_open() {
             cx.propagate();
             return;
@@ -162,7 +164,7 @@ impl BrowserView {
 
     /// Escape in the bar or its ✕: the highlights go, and the keyboard goes back to the page if
     /// it had it, else to where it was.
-    pub(super) fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::browser) fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let focus = self.focus.clone();
         if !self.find.finder.close(&focus, window, cx) {
             cx.propagate();
@@ -178,7 +180,7 @@ impl BrowserView {
     }
 
     /// A page loaded while the bar is open: its matches are found again.
-    pub(super) fn find_after_load(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::browser) fn find_after_load(&mut self, cx: &mut Context<Self>) {
         if self.find.finder.is_open() {
             self.run_find(json!({ "op": "find" }), cx);
         }
