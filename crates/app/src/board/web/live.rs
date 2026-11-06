@@ -71,6 +71,7 @@ impl WebFrames {
         view: &ViewState,
         bounds: Bounds<Pixels>,
         menus: bool,
+        canvas_focused: bool,
         now: Instant,
     ) -> Placed {
         let (lag, scale) = (self.config.live_lag, self.config.live_scale);
@@ -139,7 +140,9 @@ impl WebFrames {
         }
         if live.hidden != hide {
             engine.set_visible(!hide);
-            if !hide {
+            // Back from under a menu or a pan: the page takes the keyboard again only if the user
+            // entered it and still works in the canvas, never for an agent's op or a re-render.
+            if !hide && live.keys && canvas_focused {
                 engine.focus();
             }
             live.hidden = hide;
@@ -150,12 +153,16 @@ impl WebFrames {
 
 impl BoardView {
     /// Makes frame `id` live. A frame whose view isn't built or settled yet becomes live once it
-    /// has its texture. What happened, for the `web` op.
+    /// has its texture. `keys`: the user entered it, and its page takes the keyboard; an agent's
+    /// `web` op passes `false`, and the keyboard stays where the user has it. What happened, for
+    /// the `web` op.
     pub(in crate::board) fn web_enter(
         &mut self,
         id: NodeId,
+        keys: bool,
         cx: &mut Context<Self>,
     ) -> Result<&'static str, String> {
+        let host = self.focus.clone();
         if self
             .web
             .as_ref()
@@ -177,7 +184,10 @@ impl BoardView {
         let state = match (&frame.engine, frame.phase) {
             (Some(engine), Phase::Idle) => {
                 engine.set_visible(true);
-                engine.focus();
+                if keys {
+                    engine.set_keyboard_host(Some(&host));
+                    engine.focus();
+                }
                 frame.used = Instant::now();
                 web.live = Some(Live {
                     id,
@@ -189,18 +199,21 @@ impl BoardView {
                     moved: None,
                     menu_since: None,
                     selection,
+                    keys,
                 });
                 web.want_live = None;
                 "live"
             }
             (Some(_), _) => {
                 web.want_live = Some(id);
+                web.want_keys = keys;
                 "waiting for its snapshot"
             }
             (None, _) => {
                 frame.phase = Phase::Cold;
                 frame.refresh = true;
                 web.want_live = Some(id);
+                web.want_keys = keys;
                 "building its view"
             }
         };
@@ -231,6 +244,7 @@ impl BoardView {
             .and_then(|frame| frame.engine.as_ref())
         {
             engine.focus_parent();
+            engine.set_keyboard_host(None);
         }
         let id = live.id;
         web.note(json!({"event": "exit", "id": id.0, "live_ms": ms(live.since.elapsed())}));
@@ -272,7 +286,7 @@ impl BoardView {
                         _ => None,
                     });
                 match selected.filter(|id| web.frames.contains_key(id)) {
-                    Some(id) => self.web_enter(id, cx).is_ok(),
+                    Some(id) => self.web_enter(id, true, cx).is_ok(),
                     None => false,
                 }
             }
@@ -306,7 +320,7 @@ impl BoardView {
             x >= node.rect[0] && x <= node.rect[2] && y >= node.rect[1] && y <= node.rect[3]
         });
         match hit {
-            Some(node) => self.web_enter(node.id, cx).is_ok(),
+            Some(node) => self.web_enter(node.id, true, cx).is_ok(),
             None => false,
         }
     }

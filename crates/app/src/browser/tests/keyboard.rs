@@ -415,3 +415,27 @@ fn the_workspace_keys_work_once_the_browser_tab_is_hidden(cx: &mut gpui_kit::Tes
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
+
+/// The rules of AppKit's keyboard ([`browser::engine::keyboard::verdict`]): a page keeps it only
+/// while its host has GPUI's keyboard, or after the user's own press in it; hidden, never.
+#[test]
+fn appkits_keyboard_follows_gpuis() {
+    use browser::engine::keyboard::{Responder, Verdict, verdict};
+    let page = |host_focused, pressed, shown| Responder::Page {
+        host_focused,
+        pressed,
+        shown,
+    };
+    // GPUI's own view: nothing to do.
+    assert_eq!(verdict(Responder::Gpui), Verdict::Keep);
+    // The browser tab (or the canvas) has GPUI's keyboard: the page keeps AppKit's.
+    assert_eq!(verdict(page(true, false, true)), Verdict::Keep);
+    // The user's press in the page, before GPUI's keyboard follows it: kept.
+    assert_eq!(verdict(page(false, true, true)), Verdict::Keep);
+    // GPUI's keyboard is in the terminal, and the page took AppKit's by itself (an agent's
+    // `browser_type` focusing a field, an autofocus on load): given back.
+    assert_eq!(verdict(page(false, false, true)), Verdict::GiveBack);
+    // Hidden, settling off the canvas or in no window: never, even for its host or a press.
+    assert_eq!(verdict(page(true, true, false)), Verdict::GiveBack);
+    assert_eq!(verdict(page(false, false, false)), Verdict::GiveBack);
+}

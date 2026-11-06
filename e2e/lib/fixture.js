@@ -60,7 +60,10 @@ export const PROJECT_FILES = {
     '<!doctype html>\n<html><head><meta charset="utf-8"><title>Fixture Site</title></head>\n' +
     '<body><h1 id="title">Hello from the fixture site</h1>\n' +
     '<p id="width"></p>\n' +
-    "<script>document.getElementById('width').textContent = 'width ' + innerWidth;</script>\n" +
+    '<input id="field" aria-label="Field">\n' +
+    "<script>document.getElementById('width').textContent = 'width ' + innerWidth;\n" +
+    // Every key the page receives, for the focus spec: keys meant for a terminal must never land here.
+    "window.__keys = []; addEventListener('keydown', (e) => window.__keys.push(e.key), true);</script>\n" +
     "</body></html>\n",
   ".nyawit/.keep": "",
 };

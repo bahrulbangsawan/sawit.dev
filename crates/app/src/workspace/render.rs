@@ -28,6 +28,9 @@ impl Render for Workspace {
             window,
             cx,
         );
+        // AppKit's keyboard follows GPUI's: a page or canvas frame that has it gives it back once
+        // GPUI's keyboard moved on, or once it hides.
+        crate::browser::engine::keyboard::reconcile(window, cx);
         v_flex()
             .key_context("Workspace")
             .track_focus(&self.focus)
@@ -205,6 +208,8 @@ impl Workspace {
             }
         });
         // The terminal stays alive while hidden; only its view is dropped.
+        let terminal =
+            Self::area_mark(&self.terminal_area, cx).child(cached(self.terminal.clone().into()));
         let main = match (l.center, l.terminal) {
             (true, true) => v_resizable("workspace-v")
                 .child(resizable_panel().child(self.render_center(cx)))
@@ -212,11 +217,11 @@ impl Workspace {
                     resizable_panel()
                         .size(px(240.))
                         .size_range(px(80.)..Pixels::MAX)
-                        .child(cached(self.terminal.clone().into())),
+                        .child(terminal),
                 )
                 .into_any_element(),
             (true, false) => self.render_center(cx).into_any_element(),
-            _ => cached(self.terminal.clone().into()),
+            _ => terminal.into_any_element(),
         };
         if !l.sidebar {
             return main;
@@ -239,10 +244,25 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// An area of the window (the center, the terminal dock) that marks itself with a line along
+    /// its top while it holds the keyboard: GPUI's, and with it AppKit's, which a page or canvas
+    /// frame in it may have ([`crate::browser::engine::keyboard`]). A press on its empty space
+    /// gives it the keyboard; a terminal, editor or page in it takes its own first.
+    fn area_mark(handle: &FocusHandle, cx: &App) -> Div {
+        let ring = cx.theme().ring;
+        div()
+            .size_full()
+            .track_focus(handle)
+            .border_t_2()
+            .border_color(gpui_kit::transparent_black())
+            .in_focus(move |style| style.border_color(ring))
+    }
+
     fn render_center(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let show_tabs = !self.canvas_maximized;
-        v_flex()
-            .size_full()
+        Self::area_mark(&self.center_area, cx)
+            .flex()
+            .flex_col()
             .when(show_tabs, |el| el.child(self.render_tab_bar(cx)))
             .child(div().flex_1().min_h_0().child(self.render_active_item(cx)))
     }

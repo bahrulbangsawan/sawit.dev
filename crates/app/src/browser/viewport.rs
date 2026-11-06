@@ -33,6 +33,8 @@ impl BrowserView {
         if self.engine.is_none() {
             match self.build(bounds, window) {
                 Ok(engine) => {
+                    // The page shares the keyboard with this view only ([`engine::keyboard`]).
+                    engine.set_keyboard_host(Some(&self.focus));
                     self.engine = Some(Rc::new(engine));
                     self.bounds = Some(bounds);
                     self.apply_layout();

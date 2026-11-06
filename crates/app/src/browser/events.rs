@@ -7,11 +7,14 @@ use serde_json::{Value, json};
 
 use super::annotate::AnnotateEvent;
 use super::design::DesignEvent;
-use super::engine::EngineEvent;
+use super::engine::{self, EngineEvent};
 use super::navigation::{NewWindow, new_window_action};
 use super::notes::{intent_of, markers_op};
 use super::picking::{pick_mode, pick_wanted, rearm_ops, theme_op};
 use super::{BrowserEvent, BrowserView, FromPage, Panel, PickMode};
+
+/// How long after a page's message its focus is checked again ([`engine::keyboard::settle`]).
+const SETTLE_AGAIN: std::time::Duration = std::time::Duration::from_millis(150);
 
 impl BrowserView {
     /// Takes a message from the page or the engine, and draws the view again when it may look
@@ -29,6 +32,17 @@ impl BrowserView {
             message,
             FromPage::Event(PageEvent::Console(_) | PageEvent::Network(_) | PageEvent::Hovered(_))
         );
+        if !quiet {
+            // The page may have focused a field on its own (an agent's `type`, an autofocus as it
+            // loads), and WebKit then takes AppKit's keyboard: it goes back unless the user has it
+            // there. Again a moment later, for WebKit's news of the focus, which lags the page's.
+            engine::keyboard::settle();
+            cx.spawn(async move |_, cx| {
+                cx.background_executor().timer(SETTLE_AGAIN).await;
+                engine::keyboard::settle();
+            })
+            .detach();
+        }
         match message {
             FromPage::Event(PageEvent::Console(entry)) => {
                 let error = entry.level == "error";

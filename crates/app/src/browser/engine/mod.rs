@@ -6,6 +6,7 @@
 
 mod capture;
 mod color;
+pub mod keyboard;
 pub(crate) mod web_frame;
 mod world;
 
@@ -140,6 +141,10 @@ impl Engine {
         }
         let webview = builder.build_as_child(window).map_err(|e| e.to_string())?;
         let world = world::World::register(&webview, Box::new(worlds))?;
+        {
+            use wry::WebViewExtMacOS as _;
+            keyboard::register(&webview.webview());
+        }
         Ok(Engine { webview, world })
     }
 
@@ -209,21 +214,18 @@ impl Engine {
         let _ = self.webview.set_bounds(rect(frame));
     }
 
+    /// Shows or hides the view. A view that hides gives AppKit's keyboard back to GPUI's view
+    /// ([`keyboard`]): a hidden page must never take the keys the user types elsewhere.
     pub fn set_visible(&self, visible: bool) {
+        if !visible && self.has_keyboard() {
+            self.focus_parent();
+        }
         let _ = self.webview.set_visible(visible);
     }
 
     /// Page zoom: 1.0 is the page's own size.
     pub fn set_zoom(&self, scale: f64) {
         let _ = self.webview.zoom(scale);
-    }
-
-    pub fn focus(&self) {
-        let _ = self.webview.focus();
-    }
-
-    pub fn focus_parent(&self) {
-        let _ = self.webview.focus_parent();
     }
 
     pub fn open_devtools(&self) {

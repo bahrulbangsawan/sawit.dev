@@ -132,6 +132,8 @@ impl BoardView {
         if let Some(host) = web.host.as_ref() {
             engine.adopt_into(host);
         }
+        // The user opened it: it shares the canvas's keyboard ([`engine::keyboard`]).
+        engine.set_keyboard_host(Some(&self.focus));
         let made = found.data.viewport;
         self.screen_ui.preview = Some(Preview {
             frame,

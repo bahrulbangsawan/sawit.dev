@@ -216,6 +216,8 @@ impl Workspace {
             pending_db: None,
             focus,
             keyboard,
+            center_area: cx.focus_handle(),
+            terminal_area: cx.focus_handle(),
             cli_status,
             updater,
             github,

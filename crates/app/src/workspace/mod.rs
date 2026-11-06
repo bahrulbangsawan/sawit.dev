@@ -277,6 +277,10 @@ pub struct Workspace {
     focus: FocusHandle,
     /// Takes the keyboard from what goes off screen, and gives it back when it is shown again.
     keyboard: KeyboardHome<Shown>,
+    /// The center's and the terminal dock's areas: whichever holds the keyboard shows a line
+    /// along its top, so the user can see where their keys go ([`Self::area_mark`]).
+    center_area: FocusHandle,
+    terminal_area: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 

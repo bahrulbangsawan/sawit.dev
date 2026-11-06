@@ -79,7 +79,7 @@ pub(in crate::board) fn render_route_bar(
         .tooltip("Use the page itself on the canvas")
         .disabled(!local)
         .on_click(cx.listener(move |view, _, _, cx| {
-            let _ = view.web_enter(frame, cx);
+            let _ = view.web_enter(frame, true, cx);
         }));
     let reload = Button::new("route-bar-reload")
         .ghost()

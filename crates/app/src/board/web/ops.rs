@@ -44,7 +44,8 @@ impl BoardView {
             ("config", _) => self.web_config(op),
             ("routes", _) => Ok(self.web_routes_dialog(op, cx)),
             (_, None) => Err("no web frame on this page".to_string()),
-            ("enter", Some(id)) => self.web_enter(id, cx).map(|state| json!(state)),
+            // An agent's: the frame goes live without the user's keyboard.
+            ("enter", Some(id)) => self.web_enter(id, false, cx).map(|state| json!(state)),
             ("snapshot", Some(id)) => self.web_snap_op(op, id, cx),
             ("settle", Some(id)) => self.web_settle_op(op, id, cx),
             ("probe", Some(id)) => self.web_probe(id, op),

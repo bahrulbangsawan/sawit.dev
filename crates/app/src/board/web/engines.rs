@@ -53,6 +53,7 @@ impl BoardView {
         cx: &mut Context<Self>,
     ) -> Painted {
         let menus = self.menus_open();
+        let canvas_focused = self.focus.contains_focused(window, cx);
         let preview = self.screen_ui.preview.is_some();
         let zooming =
             (self.zooming_until).is_some_and(|until| until > cx.background_executor().now());
@@ -86,7 +87,7 @@ impl BoardView {
         let servers = web.servers_due(Instant::now());
         web.build_next(&nodes, &view, window);
         let now = Instant::now();
-        let placed = web.place_live(&nodes, &view, bounds, menus, now);
+        let placed = web.place_live(&nodes, &view, bounds, menus, canvas_focused, now);
         if placed.again {
             window.request_animation_frame();
         }
@@ -317,7 +318,8 @@ impl BoardView {
         if again {
             self.web_snapshot(id, "repeat", cx);
         } else if wanted {
-            let _ = self.web_enter(id, cx);
+            let keys = self.web.as_ref().is_some_and(|web| web.want_keys);
+            let _ = self.web_enter(id, keys, cx);
         } else if owed {
             self.web_refresh(id, "owed", cx);
         }

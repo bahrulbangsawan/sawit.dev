@@ -244,6 +244,10 @@ pub(super) struct Live {
     /// The selection before it went live, which comes back when it leaves.
     pub selection: Vec<NodeId>,
 }
+    /// The user entered it (double-click, Enter, the route bar's Live): the page has the keyboard
+    /// while the canvas has GPUI's. An agent's `web` op enters without it: the user's keys stay
+    /// where they are ([`crate::browser::engine::keyboard`]).
+    pub keys: bool,
 
 /// What the engines' handlers and the page tell the canvas.
 pub(super) enum WebMsg {
@@ -267,6 +271,8 @@ pub(super) struct WebFrames {
     /// A frame to make live once its view is built and has a texture.
     pub want_live: Option<NodeId>,
     /// The frame that left live mode: its view hides once its new texture is in.
+    /// Whether the frame [`Self::want_live`] names gets the keyboard once live ([`Live::keys`]).
+    pub want_keys: bool,
     pub leaving: Option<Live>,
     /// Textures replaced since the last paint, to take out of the sprite atlas.
     pub stale: Vec<Arc<RenderImage>>,
@@ -324,6 +330,7 @@ impl WebFrames {
             live: None,
             want_live: None,
             leaving: None,
+            want_keys: false,
             stale: Vec::new(),
             canvas: Bounds::default(),
             window_width: 0.0,
