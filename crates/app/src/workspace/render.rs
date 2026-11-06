@@ -12,6 +12,7 @@ impl Render for Workspace {
         }
         self.sync_filled();
         self.sync_boards(window, cx);
+        self.keep_canvas_tabs(cx);
         self.sync_browser(cx);
         self.sync_db_projects(cx);
         // After the canvases: one shown again takes its keyboard back itself, later in the frame.
@@ -19,6 +20,7 @@ impl Render for Workspace {
             .browsers
             .iter()
             .filter_map(|b| b.upgrade())
+            .flat_map(|b| b.read(cx).views())
             .map(|b| b.read(cx).focus_handle(cx))
             .collect();
         let shown = self.shown();

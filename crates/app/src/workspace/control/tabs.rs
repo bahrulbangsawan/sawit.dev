@@ -137,6 +137,104 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    /// `canvas_tabs`: lists the canvases of the project at `root` (open in a tab or not), opens one
+    /// (by name, made new when there is none; behind the tab on show unless `show`), closes one,
+    /// shows one or renames one. Deleting a canvas is the user's, after being asked.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn agent_canvas_tabs(
+        &mut self,
+        root: Option<PathBuf>,
+        action: &str,
+        tab: Option<String>,
+        name: Option<String>,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        let _ = window;
+        let root = root.ok_or("Canvas tabs are a project's: open a project folder first.")?;
+        let named = || -> Result<PathBuf, String> {
+            let tab = tab
+                .as_deref()
+                .ok_or("Name the canvas: canvas, or another's name.")?;
+            sawit_core::canvases::canvas_file(&root, tab)
+        };
+        let reach = if show {
+            super::super::canvas::Reach::Show
+        } else {
+            super::super::canvas::Reach::Quietly
+        };
+        let answer = match action {
+            "list" => json!({}),
+            "open" | "activate" => {
+                let file = named()?;
+                if action == "activate" && !file.is_file() && self.board_tab(&file, cx).is_none() {
+                    return Err(format!(
+                        "No canvas is “{}”. canvas_tabs list shows them.",
+                        tab.unwrap_or_default()
+                    ));
+                }
+                self.open_canvas_file(file.clone(), reach, cx)
+                    .ok_or("The canvas didn't open.")?;
+                if action == "activate"
+                    && let Some((ix, _)) = self.board_tab(&file, cx)
+                {
+                    self.show_tab(ix, cx);
+                }
+                json!({ "canvas": sawit_core::canvases::canvas_name(&file) })
+            }
+            "close" => {
+                let file = named()?;
+                let (ix, _) = self
+                    .board_tab(&file, cx)
+                    .ok_or("That canvas isn't open in a tab.")?;
+                self.remove_tabs(&[ix], cx);
+                json!({ "closed": sawit_core::canvases::canvas_name(&file) })
+            }
+            "rename" => {
+                let file = named()?;
+                let to = name.as_deref().ok_or("Give the canvas's new name.")?;
+                let to = self.rename_canvas(&file, to, cx)?;
+                json!({ "renamed": sawit_core::canvases::canvas_name(&to) })
+            }
+            other => {
+                return Err(format!(
+                    "Unknown action “{other}”: use list, open, close, activate or rename."
+                ));
+            }
+        };
+        let mut answer = answer;
+        answer["canvases"] = self.describe_canvases(&root, cx);
+        Ok(answer)
+    }
+
+    /// The canvases of `root` as `canvas_tabs` and `app_state` list them.
+    pub(super) fn describe_canvases(&self, root: &Path, cx: &App) -> Value {
+        let open = self.open_canvases(root, cx);
+        let active = self
+            .board_at(self.active)
+            .map(|b| b.read(cx).path().to_path_buf());
+        let mut files = sawit_core::canvases::canvases(root);
+        for file in &open {
+            if !files.contains(file) {
+                files.push(file.clone());
+            }
+        }
+        json!(
+            files
+                .iter()
+                .map(|f| json!({
+                    "name": sawit_core::canvases::canvas_name(f),
+                    "file": f,
+                    "open": open.contains(f),
+                    "active": active.as_ref() == Some(f),
+                }))
+                .collect::<Vec<_>>()
+        )
+    }
+}
+
 fn no_tab(name: &str) -> String {
     format!("No browser tab is “{name}”. browser_tabs lists them by id, title and address.")
 }

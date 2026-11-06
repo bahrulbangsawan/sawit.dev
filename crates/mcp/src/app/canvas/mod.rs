@@ -12,6 +12,7 @@ mod handoff;
 mod routes;
 mod screens;
 mod stored;
+mod tab;
 #[cfg(test)]
 mod tests;
 
@@ -31,6 +32,7 @@ pub use args::{
 };
 use dispatch::{command_list, in_work};
 use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
+use tab::CanvasTab as _;
 
 use super::{base64_decode, pretty};
 use crate::{Sawit, blocking, fail, ok, tri};
@@ -84,7 +86,8 @@ impl Sawit {
     #[tool(
         description = "List the top-level layers of the canvas's page on show: id, type, position, size, text, color and what a connector joins. For the other pages and nested layers use canvas_command: page.list lists the pages, and node.get {id} reads a page's or a layer's own layers, without showing them: the page and the view on show are the user's, so page.select and view.* are refused. Works from the saved file when the app isn't running; the page on show is then the one last saved"
     )]
-    async fn canvas_get(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
+    async fn canvas_get(&self, Parameters(mut a): Parameters<CanvasTargetArgs>) -> CallToolResult {
+        tri!(a.tab_into_file());
         self.canvas_get_tool(a).await
     }
 
@@ -99,8 +102,9 @@ impl Sawit {
     ))]
     async fn canvas_add_elements(
         &self,
-        Parameters(a): Parameters<CanvasElementsArgs>,
+        Parameters(mut a): Parameters<CanvasElementsArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         let op = in_work(json!({ "op": "add", "elements": a.elements }), a.work);
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
@@ -111,8 +115,9 @@ impl Sawit {
     #[tool(description = canvas_add_diagram_says!())]
     async fn canvas_add_diagram(
         &self,
-        Parameters(a): Parameters<CanvasMermaidArgs>,
+        Parameters(mut a): Parameters<CanvasMermaidArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         self.canvas_add_diagram_tool(a).await
     }
 
@@ -123,8 +128,9 @@ impl Sawit {
     ))]
     async fn canvas_add_mermaid(
         &self,
-        Parameters(a): Parameters<CanvasMermaidArgs>,
+        Parameters(mut a): Parameters<CanvasMermaidArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         self.canvas_add_diagram_tool(a).await
     }
 
@@ -134,7 +140,11 @@ impl Sawit {
          canvas. ",
         design_guide_first!()
     ))]
-    async fn canvas_update(&self, Parameters(a): Parameters<CanvasUpdateArgs>) -> CallToolResult {
+    async fn canvas_update(
+        &self,
+        Parameters(mut a): Parameters<CanvasUpdateArgs>,
+    ) -> CallToolResult {
+        tri!(a.tab_into_file());
         let op = in_work(json!({ "op": "update", "elements": a.elements }), a.work);
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
@@ -145,7 +155,11 @@ impl Sawit {
     #[tool(
         description = "Delete canvas elements by id, on any page (a connector's label goes with it). The board they were on is first kept beside the canvas file as <file>.del.bak (canvas.sawit.del.bak for the project's canvas, home.sawit.del.bak for home.sawit), the 4 kept before it moving to .del.bak.1 to .del.bak.4 (the oldest goes). Deletions keep these apart from the .bak files canvas_clear and canvas_load keep, so they never push those out; a deletion that leaves the canvas empty keeps a .bak, as a clear does. canvas_load brings any of them back; in the app the user can also undo it"
     )]
-    async fn canvas_delete(&self, Parameters(a): Parameters<CanvasDeleteArgs>) -> CallToolResult {
+    async fn canvas_delete(
+        &self,
+        Parameters(mut a): Parameters<CanvasDeleteArgs>,
+    ) -> CallToolResult {
+        tri!(a.tab_into_file());
         let op = in_work(json!({ "op": "delete", "ids": a.ids }), a.work);
         match self.canvas(a.project, a.file, op).await {
             Ok(v) => ok(pretty(&v)),
@@ -156,7 +170,11 @@ impl Sawit {
     #[tool(
         description = "Delete every layer of the canvas's page on show; other pages keep theirs. The board it held is kept beside the canvas file as <file>.bak (canvas.sawit.bak for the project's canvas, home.sawit.bak for home.sawit), the 4 kept before it moving to .bak.1 to .bak.4 (the oldest goes); only a clear, a load or a save that empties the canvas moves them along, never a deletion that leaves layers on the canvas. canvas_load brings it back; in the app the user can also undo it"
     )]
-    async fn canvas_clear(&self, Parameters(a): Parameters<CanvasTargetArgs>) -> CallToolResult {
+    async fn canvas_clear(
+        &self,
+        Parameters(mut a): Parameters<CanvasTargetArgs>,
+    ) -> CallToolResult {
+        tri!(a.tab_into_file());
         match self
             .canvas(a.project, a.file, json!({ "op": "clear" }))
             .await
@@ -169,7 +187,8 @@ impl Sawit {
     #[tool(
         description = "Replace the canvas with a .sawit file, or import an .excalidraw file or scene JSON in its place. The board it replaces is kept beside the canvas file as <file>.bak (canvas.sawit.bak for the project's canvas, home.sawit.bak for home.sawit), as canvas_clear keeps one"
     )]
-    async fn canvas_load(&self, Parameters(a): Parameters<CanvasLoadArgs>) -> CallToolResult {
+    async fn canvas_load(&self, Parameters(mut a): Parameters<CanvasLoadArgs>) -> CallToolResult {
+        tri!(a.tab_into_file());
         let op = match (a.scene, a.path) {
             (Some(scene), _) => json!({ "op": "replace", "scene": scene }),
             // A canvas file is loaded by the canvas itself, from where it is, which refuses a
@@ -207,7 +226,11 @@ impl Sawit {
     #[tool(
         description = "Export the canvas's page on show as one SVG or PNG file, at 1×. For other pages, chosen layers, another format (pdf, jpg, webp) or scale, use canvas_command file.export {ids, format, scale, path}"
     )]
-    async fn canvas_export(&self, Parameters(a): Parameters<CanvasExportArgs>) -> CallToolResult {
+    async fn canvas_export(
+        &self,
+        Parameters(mut a): Parameters<CanvasExportArgs>,
+    ) -> CallToolResult {
+        tri!(a.tab_into_file());
         let format = a.format.as_deref().map(str::trim).unwrap_or_default();
         let png = match format.to_lowercase().as_str() {
             "svg" | "" => false,
@@ -281,14 +304,19 @@ impl Sawit {
          they were on beside the canvas file as <file>.del.bak first, as canvas_delete does. ",
         design_guide_first!()
     ))]
-    async fn canvas_command(&self, Parameters(a): Parameters<CanvasCommandArgs>) -> CallToolResult {
+    async fn canvas_command(
+        &self,
+        Parameters(mut a): Parameters<CanvasCommandArgs>,
+    ) -> CallToolResult {
+        tri!(a.tab_into_file());
         self.canvas_command_tool(a).await
     }
 
     #[tool(
         description = "Begin a component before you build it, and begin each component that way: its named frame appears on the canvas at once, and while you build the canvas shows a skeleton in it, a row above it with its name and step, your name and a progress badge. Pass the `work` this answers to canvas_add_elements, canvas_update, canvas_add_diagram, canvas_delete and canvas_command: their ops go inside the frame (x and y from its top-left corner) and its undo step. Say each step, and that it is done or failed, with canvas_progress. Answers {work, frame, page}. A UI screen, page or app view is kind \"screen\" (the default for UI): the frame and its HTML folder (.nyawit/screens/<screen>/) at once, built with canvas_screen_write, which previews live, exports to HTML and React and hands off; keep the default kind for components, diagrams, sketches the user asked for and illustrations. The first UI work of a session answers with the design standard's digest, and later ones with the sections their `steps` name (Form, Table, Navigation, States); canvas_progress {status: \"done\"} answers the standard's machine checks of what was built. With the app closed the frame is made in the saved file. Designing UI? Read canvas_design_guide first and follow it"
     )]
-    async fn canvas_begin(&self, Parameters(a): Parameters<CanvasBeginArgs>) -> CallToolResult {
+    async fn canvas_begin(&self, Parameters(mut a): Parameters<CanvasBeginArgs>) -> CallToolResult {
+        tri!(a.tab_into_file());
         let screen = (a.kind.as_deref()).is_some_and(|k| k.trim().eq_ignore_ascii_case("screen"));
         let ui = design::is_ui(a.kind.as_deref(), &a.name, &a.frame);
         let vector_screen = !screen && ui && design::screen_like(&a.name, &a.frame);
@@ -336,8 +364,9 @@ impl Sawit {
     )]
     async fn canvas_screen_write(
         &self,
-        Parameters(a): Parameters<CanvasScreenWriteArgs>,
+        Parameters(mut a): Parameters<CanvasScreenWriteArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         self.canvas_screen_write_tool(a).await
     }
 
@@ -346,8 +375,9 @@ impl Sawit {
     )]
     async fn canvas_screen_get(
         &self,
-        Parameters(a): Parameters<CanvasScreenGetArgs>,
+        Parameters(mut a): Parameters<CanvasScreenGetArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         self.canvas_screen_get_tool(a).await
     }
 
@@ -356,8 +386,9 @@ impl Sawit {
     )]
     async fn canvas_screen_export(
         &self,
-        Parameters(a): Parameters<CanvasScreenExportArgs>,
+        Parameters(mut a): Parameters<CanvasScreenExportArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         self.canvas_screen_export_tool(a).await
     }
 
@@ -373,8 +404,9 @@ impl Sawit {
     )]
     async fn canvas_add_routes(
         &self,
-        Parameters(a): Parameters<CanvasAddRoutesArgs>,
+        Parameters(mut a): Parameters<CanvasAddRoutesArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         self.canvas_add_routes_tool(a).await
     }
 
@@ -383,8 +415,9 @@ impl Sawit {
     )]
     async fn canvas_progress(
         &self,
-        Parameters(a): Parameters<CanvasProgressArgs>,
+        Parameters(mut a): Parameters<CanvasProgressArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         let done = a
             .status
             .as_deref()
@@ -413,8 +446,9 @@ impl Sawit {
     ))]
     async fn canvas_commands(
         &self,
-        Parameters(a): Parameters<CanvasCommandsArgs>,
+        Parameters(mut a): Parameters<CanvasCommandsArgs>,
     ) -> CallToolResult {
+        tri!(a.tab_into_file());
         match self
             .canvas(a.project, a.file, json!({ "op": "commands" }))
             .await

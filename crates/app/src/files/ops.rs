@@ -93,7 +93,7 @@ impl Op {
 }
 
 /// Moves `path` to the Trash (Finder's Put Back works); returns where it went.
-fn trash(path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn trash(path: &Path) -> Result<PathBuf, String> {
     let url = NSURL::from_file_path(path).ok_or("Not a file path.")?;
     let mut resulting = None;
     NSFileManager::defaultManager()

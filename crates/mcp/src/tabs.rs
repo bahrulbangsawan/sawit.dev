@@ -1,5 +1,5 @@
-//! `browser_tabs`: the tabs of the project's browser, for an agent to list, open, close and show;
-//! the `browser_*` tools act on one by `tab`.
+//! `browser_tabs` and `canvas_tabs`: the tabs of the project's browser and its canvases, for an
+//! agent to list, open, close and show; the `browser_*` and `canvas_*` tools act on one by `tab`.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -29,6 +29,24 @@ pub struct BrowserTabsArgs {
     pub project: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasTabsArgs {
+    #[schemars(description = "list (default), open, close, activate or rename")]
+    pub action: Option<String>,
+    #[schemars(
+        description = "The canvas: canvas (the project's own) or another's name, a .sawit file in the project's .nyawit/. open makes a new one when there is none by that name"
+    )]
+    pub tab: Option<String>,
+    #[schemars(description = "For rename: the canvas's new name")]
+    pub name: Option<String>,
+    #[schemars(
+        description = "Show the canvas (open, activate). Default false: it opens behind the user's tab on show"
+    )]
+    #[serde(default)]
+    pub show: bool,
+    pub project: Option<String>,
+}
+
 #[tool_router(router = tabs_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
@@ -39,6 +57,20 @@ impl Sawit {
             action: a.action.unwrap_or_else(|| "list".into()),
             tab: a.tab,
             url: a.url,
+            show: a.show,
+        };
+        let v = tri!(self.app_call(a.project, command).await);
+        ok(pretty(&v))
+    }
+
+    #[tool(
+        description = "The project's canvases, each a .sawit file in .nyawit/ with its own tab (canvas.sawit, the project's canvas, first): list them (name, file, open, active), open one by name (a new one when there is none), close, activate or rename one. The canvas_* tools act on one with their file argument (the path list gives). Deleting a canvas is the user's, from its tab's menu"
+    )]
+    async fn canvas_tabs(&self, Parameters(a): Parameters<CanvasTabsArgs>) -> CallToolResult {
+        let command = Command::CanvasTabs {
+            action: a.action.unwrap_or_else(|| "list".into()),
+            tab: a.tab,
+            name: a.name,
             show: a.show,
         };
         let v = tri!(self.app_call(a.project, command).await);

@@ -63,6 +63,7 @@ use sawit_core::update::Version;
 mod areas;
 mod browser;
 mod canvas;
+mod canvas_tabs;
 mod close;
 mod control;
 mod dock;
@@ -289,6 +290,8 @@ pub struct Workspace {
     /// layout put back has them as they were.
     split_h: Entity<gpui_kit::component::resizable::ResizableState>,
     split_v: Entity<gpui_kit::component::resizable::ResizableState>,
+    /// A project's several canvases ([`canvas_tabs`]).
+    canvas_tabs: canvas_tabs::CanvasTabs,
     /// The browser tabs' views (owned by their tabs): one per project at most, and one for
     /// no project.
     browsers: Vec<WeakEntity<BrowserTabs>>,

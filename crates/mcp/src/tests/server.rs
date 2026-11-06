@@ -161,6 +161,7 @@ fn every_tool_is_routed() {
         "canvas_screen_get",
         "canvas_screen_export",
         "canvas_handoff",
+        "canvas_tabs",
         // browser
         "browser_navigate",
         "browser_snapshot",
@@ -181,6 +182,7 @@ fn every_tool_is_routed() {
         "browser_inspect",
         "browser_design",
         "browser_export_design",
+        "browser_tabs",
         // keymap
         "keymap_list",
         "keymap_bind",

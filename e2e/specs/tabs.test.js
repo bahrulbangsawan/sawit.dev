@@ -1,6 +1,6 @@
-// Tabs in the browser (backlog item 10): three browser tabs opened, switched, closed and back after
-// a restart; an agent working on a browser tab that isn't on show while the user's tab and keyboard
-// stay where they are; and the memory 1, 3 and 6 tabs take.
+// Tabs in the browser and the canvas (backlog item 10): three browser tabs opened, switched, closed
+// and back after a restart; two canvases opened, switched, closed and back; and an agent working
+// on a browser tab that isn't on show while the user's tab and keyboard stay where they are.
 
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
@@ -118,6 +118,36 @@ sawitTest("tabs: an agent works on a browser tab not on show; the user's tab and
   // The agent closes its tab.
   await ctx.call({ cmd: "browser_tabs", action: "close", tab: id });
   await until(async () => (await tabs(ctx)).length === 1, { what: "the agent's tab to close" });
+});
+
+sawitTest("tabs: two canvases open, switch, close and come back with the project's canvas", { timeout: 300_000 }, async (ctx) => {
+  const dir = await shotsDir();
+  const canvases = async () => (await windowState(ctx)).canvases ?? [];
+  await ctx.call({ cmd: "open_page", page: "canvas" });
+  await until(async () => (await canvases()).some((c) => c.name === "canvas" && c.open), { what: "the project's canvas" });
+
+  // A second canvas, as the user makes one: New Canvas on the canvas tab's menu is the same op.
+  await ctx.call({ cmd: "canvas_tabs", action: "open", tab: "flows", show: true });
+  await until(async () => (await canvases()).find((c) => c.name === "flows")?.active, { what: "the flows canvas on show" });
+  // Something on it, so its file is written.
+  await ctx.call({ cmd: "canvas", op: { op: "add", elements: [{ type: "rectangle", x: 0, y: 0, width: 120, height: 80 }] }, file: `${ctx.world.project}/.nyawit/flows.sawit` });
+  await ctx.win.screenshot(path.join(dir, "two-canvases.png")).catch(() => {});
+
+  // Switched by a click on its tab.
+  await ctx.win.click({ role: "radiobutton", name: "Canvas" }).catch(() => ctx.win.click({ name: "Canvas" }));
+  await until(async () => (await canvases()).find((c) => c.name === "canvas")?.active, { what: "the project's canvas on show" });
+
+  // Closed and back: the list of open canvases comes back with the project's canvas.
+  await new Promise((r) => setTimeout(r, 1_000));
+  await restart(ctx);
+  await ctx.call({ cmd: "open_page", page: "canvas" });
+  const back = await until(async () => {
+    const c = await canvases();
+    return c.find((x) => x.name === "flows")?.open ? c : null;
+  }, { timeoutMs: 20_000, what: "the flows canvas to open again" });
+  assert.ok(back.find((c) => c.name === "canvas").open);
+  await ctx.call({ cmd: "canvas_tabs", action: "close", tab: "flows" });
+  await until(async () => !(await canvases()).find((c) => c.name === "flows")?.open, { what: "the flows canvas to close" });
 });
 
 /** The WebKit content processes running now: pid → RSS in KB. */

@@ -78,6 +78,7 @@ async fn a_running_app_answers_every_canvas_tool() {
     // the app is the one that has the canvas.
     let got = server
         .canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: None,
             project: project_arg(&project),
         })
@@ -88,6 +89,7 @@ async fn a_running_app_answers_every_canvas_tool() {
     // An op the app answers with `{ok: false, error}` is the tool's error, in the engine's words.
     let failed = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![json!({"type": "rectangle"})],
             file: None,
             project: project_arg(&project),
@@ -100,6 +102,7 @@ async fn a_running_app_answers_every_canvas_tool() {
 
     let ran = server
         .canvas_command_tool(CanvasCommandArgs {
+            tab: None,
             command: "board.sticky".into(),
             params: Some(json!({"x": 0, "y": 0})),
             file: None,
@@ -113,6 +116,7 @@ async fn a_running_app_answers_every_canvas_tool() {
 
     let listed = server
         .canvas_commands(Parameters(CanvasCommandsArgs {
+            tab: None,
             filter: None,
             file: None,
             project: project_arg(&project),
@@ -139,6 +143,7 @@ async fn canvas_command_sends_the_files_it_names_as_the_agent_means_them() {
     let here = std::env::current_dir().unwrap();
     let sent = |command: &str, params: Value| {
         let run = server.canvas_command_tool(CanvasCommandArgs {
+            tab: None,
             command: command.into(),
             params: Some(params),
             file: None,
@@ -248,6 +253,7 @@ async fn a_canvas_tool_takes_one_connection_to_the_app() {
 
     let got = server
         .canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: None,
             project: project_arg(&project),
         })
@@ -256,6 +262,7 @@ async fn a_canvas_tool_takes_one_connection_to_the_app() {
     assert_eq!(taken.load(Ordering::SeqCst), 1);
     let added = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![json!({"type": "sticky", "x": 0, "y": 0, "text": "a"})],
             file: None,
             project: project_arg(&project),
@@ -313,6 +320,7 @@ fn a_canvas_tool_connects_only_when_its_request_is_ready() {
         });
         let got = server
             .canvas_get_tool(CanvasTargetArgs {
+                tab: None,
                 file: None,
                 project: project_arg(&project),
             })

@@ -18,6 +18,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
     // The canvas_command path: the guard is the op's own, so it holds with no app running.
     let refused = server
         .canvas_command_tool(CanvasCommandArgs {
+            tab: None,
             command: "file.exportSvg".into(),
             params: Some(json!({"path": file})),
             file: None,
@@ -43,6 +44,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
             let target = file.with_file_name(name);
             let refused = server
                 .canvas_export(Parameters(CanvasExportArgs {
+                    tab: None,
                     format: Some(format.into()),
                     output_path: Some(target.display().to_string()),
                     file: None,
@@ -59,6 +61,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
     // The canvas is still there, with its sticky.
     let got = server
         .canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: None,
             project: project_arg(&project),
         })
@@ -70,6 +73,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
         let out = dir.path().join(name);
         let done = server
             .canvas_export(Parameters(CanvasExportArgs {
+                tab: None,
                 format: Some(format.into()),
                 output_path: Some(out.display().to_string()),
                 file: None,
@@ -91,6 +95,7 @@ async fn canvas_export_reads_its_path_and_format_as_every_tool_does() {
     let project = dir.path().join("project");
     write_board(&board_file(&project), 1);
     let export = |format: &str, output_path: &str| CanvasExportArgs {
+        tab: None,
         format: Some(format.into()),
         output_path: Some(output_path.into()),
         file: None,
@@ -143,6 +148,7 @@ async fn exported_sticky(text: &str) -> String {
     let out = dir.path().join("page.svg");
     let done = server
         .canvas_export(Parameters(CanvasExportArgs {
+            tab: None,
             format: Some("svg".into()),
             output_path: Some(out.display().to_string()),
             file: None,
@@ -192,6 +198,7 @@ async fn an_export_path_is_read_as_every_tool_reads_one() {
     let out = dir.path().join("page.svg");
     let done = server
         .canvas_export(Parameters(CanvasExportArgs {
+            tab: None,
             format: Some("svg".into()),
             output_path: Some(format!("{}  ", out.display())),
             file: None,

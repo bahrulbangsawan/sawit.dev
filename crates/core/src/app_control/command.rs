@@ -260,6 +260,18 @@ pub enum Command {
         #[serde(default)]
         show: bool,
     },
+    /// The project's canvases, each a `.sawit` file in `.nyawit/` with a tab of its own: `list`,
+    /// `open` (the one named `tab`, made new when there is none), `close` or `activate` it, or
+    /// `rename` it to `name`. The project's `canvas.sawit` is the first.
+    CanvasTabs {
+        action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default)]
+        show: bool,
+    },
     Reload {
         store: Store,
     },

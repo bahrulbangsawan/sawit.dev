@@ -27,6 +27,7 @@ async fn an_offline_load_keeps_the_canvas_it_replaces() {
     let other = dir.path().join("other.sawit");
     write_board(&other, 1);
     let load = |path: &Path| CanvasLoadArgs {
+        tab: None,
         path: Some(path.display().to_string()),
         scene: None,
         file: None,
@@ -57,6 +58,7 @@ async fn starting_over_twice_with_sawit_closed_keeps_the_users_board() {
     let project = project_in(dir.path());
     let file = board_file(&project);
     let window = || CanvasTargetArgs {
+        tab: None,
         file: None,
         project: project_arg(&project),
     };
@@ -68,6 +70,7 @@ async fn starting_over_twice_with_sawit_closed_keeps_the_users_board() {
     assert_ne!(cleared.is_error, Some(true), "{}", said(&cleared));
     let drawn = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![json!({"type": "rectangle", "x": 0, "y": 0})],
             file: None,
             project: project_arg(&project),
@@ -92,6 +95,7 @@ async fn starting_over_twice_with_sawit_closed_keeps_the_users_board() {
     for other in [&one, &two] {
         let loaded = server
             .canvas_load(Parameters(CanvasLoadArgs {
+                tab: None,
                 path: Some(other.display().to_string()),
                 scene: None,
                 file: None,
@@ -127,6 +131,7 @@ async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
     };
     let command = |command: &str, params: Value| {
         let run = server.canvas_command_tool(CanvasCommandArgs {
+            tab: None,
             command: command.into(),
             params: Some(params),
             file: None,
@@ -146,6 +151,7 @@ async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
 
     let deleted = server
         .canvas_delete(Parameters(CanvasDeleteArgs {
+            tab: None,
             ids: vec![id_of("note 0")],
             file: None,
             project: project_arg(&project),
@@ -171,6 +177,7 @@ async fn every_deletion_with_sawit_closed_keeps_the_board_it_took_layers_off() {
     // A clear of the first page, while the others keep their stickies: a clear's backup.
     let cleared = server
         .canvas_clear(Parameters(CanvasTargetArgs {
+            tab: None,
             file: None,
             project: project_arg(&project),
         }))
@@ -214,6 +221,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
 
     let cleared = server
         .canvas_clear(Parameters(CanvasTargetArgs {
+            tab: None,
             file: None,
             project: project_arg(&project),
         }))
@@ -224,6 +232,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
         .collect();
     let drawn = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: stickies,
             file: None,
             project: project_arg(&project),
@@ -238,6 +247,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
         let id = layer.unwrap()["id"].as_str().unwrap().to_string();
         let deleted = server
             .canvas_delete(Parameters(CanvasDeleteArgs {
+                tab: None,
                 ids: vec![id],
                 file: None,
                 project: project_arg(&project),
@@ -260,6 +270,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
 
     let loaded = server
         .canvas_load(Parameters(CanvasLoadArgs {
+            tab: None,
             path: Some(file.with_extension("sawit.bak").display().to_string()),
             scene: None,
             file: None,
@@ -277,6 +288,7 @@ async fn deletions_after_a_clear_never_push_out_the_board_it_cleared() {
     // A deletion's backup loads too: the board before the last deletion.
     let loaded = server
         .canvas_load(Parameters(CanvasLoadArgs {
+            tab: None,
             path: Some(file.with_extension("sawit.del.bak").display().to_string()),
             scene: None,
             file: None,
@@ -335,6 +347,7 @@ async fn an_offline_load_never_writes_through_a_link_at_the_backup() {
 
     let loaded = server
         .canvas_load(Parameters(CanvasLoadArgs {
+            tab: None,
             path: Some(other.display().to_string()),
             scene: None,
             file: None,

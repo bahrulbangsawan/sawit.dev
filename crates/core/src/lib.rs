@@ -7,6 +7,7 @@ pub mod annotations;
 pub mod app_control;
 pub mod binaries;
 pub mod browser;
+pub mod canvases;
 pub mod cli;
 pub mod cloudflare;
 mod cmd;

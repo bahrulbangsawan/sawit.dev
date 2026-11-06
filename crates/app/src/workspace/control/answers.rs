@@ -53,6 +53,7 @@ impl Workspace {
             "tabs": tabs,
             "terminals": self.terminal.read(cx).describe(cx),
             "canvas_open": self.boards.iter().any(|b| b.upgrade().is_some()),
+            "canvases": self.root(cx).map(|root| self.describe_canvases(&root, cx)),
             "browser": self.browser_tabs_of(self.root(cx).as_deref()).map(|(_, tabs)| {
                 let tabs = tabs.read(cx);
                 let mut state = tabs.active_view().read(cx).describe();

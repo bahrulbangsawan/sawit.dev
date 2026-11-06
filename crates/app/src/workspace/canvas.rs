@@ -93,6 +93,7 @@ impl Workspace {
         self.watch_board(&view, cx);
         self.boards.retain(|b| b.upgrade().is_some());
         self.boards.push(view.downgrade());
+        let restore = root.clone();
         self.add_tab(
             reach,
             PaneItem::Other {
@@ -106,6 +107,10 @@ impl Workspace {
             root,
             cx,
         );
+        // The project's other canvases that were open with it open again, behind it.
+        if let Some(root) = restore {
+            self.restore_canvas_tabs(&root, cx);
+        }
         cx.notify();
         Some(view)
     }
@@ -222,7 +227,7 @@ impl Workspace {
     /// The tab of the canvas bound to the canvas file `file` ([`BoardView::path`]), and the
     /// canvas, whatever opened it: a project's canvas tab, or a canvas file's. Named through a
     /// link or as written, it is one file ([`same_canvas_file`]).
-    fn board_tab(&self, file: &Path, cx: &App) -> Option<(usize, Entity<BoardView>)> {
+    pub(super) fn board_tab(&self, file: &Path, cx: &App) -> Option<(usize, Entity<BoardView>)> {
         self.tabs.iter().enumerate().find_map(|(ix, tab)| {
             let PaneItem::Other { view, .. } = &tab.item else {
                 return None;

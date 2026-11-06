@@ -14,6 +14,7 @@ use crate::app::tests::{answer, native, said};
 
 fn write(project: &Path, screen: &str) -> CanvasScreenWriteArgs {
     CanvasScreenWriteArgs {
+        tab: None,
         work: None,
         screen: Some(screen.into()),
         html: None,
@@ -26,6 +27,7 @@ fn write(project: &Path, screen: &str) -> CanvasScreenWriteArgs {
 
 fn get(project: &Path, screen: Option<&str>) -> CanvasScreenGetArgs {
     CanvasScreenGetArgs {
+        tab: None,
         work: None,
         screen: screen.map(Into::into),
         file: None,
@@ -109,6 +111,7 @@ async fn with_sawit_closed_screens_are_files_and_frames() {
     assert_eq!(listed["screens"][0]["screen"], "sign-in");
 
     let unknown = server.canvas_screen_write(Parameters(CanvasScreenWriteArgs {
+        tab: None,
         html: Some("<p>x</p>".into()),
         ..write(&project, "login")
     }));
@@ -139,6 +142,7 @@ async fn screens_export_as_html_and_react() {
     answer(&server.canvas_screen_write(Parameters(page)).await);
     let out = dir.path().join("out");
     let export = |format: &str, path: PathBuf| CanvasScreenExportArgs {
+        tab: None,
         work: None,
         screen: Some("sign-in".into()),
         id: None,

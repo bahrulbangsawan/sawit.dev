@@ -7,7 +7,8 @@ use crate::{INSTRUCTIONS, Sawit};
 /// The canvas tools that work on a canvas: every one but canvas_design_guide, which reads Sawit's
 /// design standard and no canvas.
 fn on_a_canvas(name: &str) -> bool {
-    name.starts_with("canvas_") && name != "canvas_design_guide"
+    // canvas_design_guide reads no canvas; canvas_tabs lists the project's canvases.
+    name.starts_with("canvas_") && name != "canvas_design_guide" && name != "canvas_tabs"
 }
 
 /// The canvas tools that make UI end by pointing at Sawit's design standard, and the guide says

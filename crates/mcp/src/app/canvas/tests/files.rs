@@ -43,6 +43,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
 
     let added = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![
                 json!({"type": "frame", "x": 0, "y": 0, "width": 400, "height": 300}),
                 json!({"type": "text", "id": "hero", "x": 20, "y": 20, "text": "Hero"}),
@@ -55,6 +56,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
     assert_eq!(answer(&added)["added"], json!(2), "{}", said(&added));
     let got = server
         .canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: file(),
             project: project_arg(&project),
         })
@@ -74,6 +76,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
     // An export with no path goes to the project's exports, named after the file.
     let exported = server
         .canvas_export(Parameters(CanvasExportArgs {
+            tab: None,
             format: None,
             output_path: None,
             file: file(),
@@ -90,6 +93,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
     // A deletion keeps the design file's board beside it.
     let deleted = server
         .canvas_delete(Parameters(CanvasDeleteArgs {
+            tab: None,
             ids: vec!["hero".into()],
             file: file(),
             project: project_arg(&project),
@@ -120,6 +124,7 @@ async fn an_excalidraw_file_named_by_file_is_imported_once_into_the_sawit_file_b
     std::fs::write(&scene, OLD_BOARD).unwrap();
     let get = || {
         server.canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: Some(scene.display().to_string()),
             project: project_arg(&project),
         })
@@ -131,6 +136,7 @@ async fn an_excalidraw_file_named_by_file_is_imported_once_into_the_sawit_file_b
 
     let added = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![json!({"type": "sticky", "x": 900, "y": 0, "text": "added"})],
             file: Some(scene.display().to_string()),
             project: project_arg(&project),
@@ -186,6 +192,7 @@ async fn a_running_app_is_sent_the_canvas_file_an_agent_names() {
 
     let got = server
         .canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: Some(link.join("home.sawit").display().to_string()),
             project: None,
         })
@@ -197,6 +204,7 @@ async fn a_running_app_is_sent_the_canvas_file_an_agent_names() {
     assert_eq!(sent(&asked), (json!({"op": "get"}), Some(real)));
     let cleared = server
         .canvas_clear(Parameters(CanvasTargetArgs {
+            tab: None,
             file: Some("  ".into()),
             project: project_arg(&project),
         }))
@@ -206,6 +214,7 @@ async fn a_running_app_is_sent_the_canvas_file_an_agent_names() {
 
     let refused = server
         .canvas_clear(Parameters(CanvasTargetArgs {
+            tab: None,
             file: Some(project.join("notes.md").display().to_string()),
             project: project_arg(&project),
         }))
@@ -233,6 +242,7 @@ async fn an_app_too_old_to_know_a_canvas_file_is_never_sent_an_op_on_one() {
     let state = json!({"version": "0.0.6", "windows": []});
     let asked = fake_app_answering(&server.paths, vec![state, json!({"ok": true})]);
     let clear = |file: Option<String>| CanvasTargetArgs {
+        tab: None,
         file,
         project: project_arg(&project),
     };
@@ -274,6 +284,7 @@ async fn the_running_apps_version_is_asked_once_per_app() {
     let got = json!({"ok": true, "elements": []});
     let get = || {
         server.canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: Some(design.display().to_string()),
             project: None,
         })

@@ -3,6 +3,8 @@
 use rmcp::schemars;
 use serde_json::Value;
 
+/// What a canvas tool's `tab` names: one of the project's canvases, by name.
+const CANVAS_TAB: &str = "One of the project's canvases by name (canvas_tabs lists them): canvas, the project's own, or another, a .sawit file in its .nyawit/. Instead of file; with neither, the project's canvas";
 /// What a canvas tool's `file` names: a canvas file to work on instead of the project's canvas
 /// ([`canvas_file`](super::files::canvas_file)).
 const CANVAS_FILE: &str = "A canvas file to work on instead of the project's canvas: an absolute path (or ~/…) to a .sawit file (a design file or a board; one not there yet, in a folder that is, starts as a new board) or to an .excalidraw file, imported once into the .sawit file of its name beside it (flow.sawit for flow.excalidraw) and left as it is. With the app running the op runs on that file's canvas tab, opened if need be without taking the user's keyboard; with it closed, on the file itself. Its backups go beside it (home.sawit.bak and home.sawit.del.bak for home.sawit): in a repository they show in git status, and staging everything would commit them";
@@ -21,6 +23,8 @@ const CANVAS_WORK_TAG: &str = "The work this belongs to, as canvas_begin answere
 pub struct CanvasTargetArgs {
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -35,6 +39,8 @@ pub struct CanvasElementsArgs {
     pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -53,6 +59,8 @@ pub struct CanvasMermaidArgs {
     pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -67,6 +75,8 @@ pub struct CanvasUpdateArgs {
     pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -79,6 +89,8 @@ pub struct CanvasDeleteArgs {
     pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -93,6 +105,8 @@ pub struct CanvasLoadArgs {
     pub scene: Option<Value>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -111,6 +125,8 @@ pub struct CanvasCommandArgs {
     pub work: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -123,6 +139,8 @@ pub struct CanvasCommandsArgs {
     pub filter: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -146,6 +164,8 @@ pub struct CanvasExportArgs {
     pub output_path: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -171,6 +191,8 @@ pub struct CanvasBeginArgs {
     pub kind: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -192,6 +214,8 @@ pub struct CanvasProgressArgs {
     pub message: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -221,6 +245,8 @@ pub struct CanvasScreenWriteArgs {
     pub files: Option<Vec<Value>>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -236,6 +262,8 @@ pub struct CanvasScreenGetArgs {
     pub screen: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -261,6 +289,8 @@ pub struct CanvasScreenExportArgs {
     pub path: Option<String>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
@@ -303,6 +333,8 @@ pub struct CanvasAddRoutesArgs {
     pub viewports: Option<Vec<Value>>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }

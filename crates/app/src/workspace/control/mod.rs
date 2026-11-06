@@ -347,6 +347,16 @@ impl Workspace {
                 self.agent_browser_tabs(root, &action, tab, url, show, window, cx)
                     .map(Answer::Now)
             }
+            Command::CanvasTabs {
+                action,
+                tab,
+                name,
+                show,
+            } => {
+                let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
+                self.agent_canvas_tabs(root, &action, tab, name, show, window, cx)
+                    .map(Answer::Now)
+            }
             // ⌘D or ⇧⌘D for an agent: the new pane shows as terminal_run's terminal does, and the
             // keyboard stays where the user has it. The dock shows first, as for terminal_run: one
             // never on screen can't tell how much room its panes have, and the split asked again

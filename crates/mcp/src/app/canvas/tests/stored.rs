@@ -41,6 +41,7 @@ async fn a_file_by_the_engines_own_name_is_no_canvas() {
 
     let got = server
         .canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: None,
             project: project_arg(&project),
         })
@@ -48,6 +49,7 @@ async fn a_file_by_the_engines_own_name_is_no_canvas() {
     assert_eq!(answer(&got)["elements"], json!([]));
     let added = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![json!({"type": "sticky", "x": 0, "y": 0, "text": "new"})],
             file: None,
             project: project_arg(&project),
@@ -59,6 +61,7 @@ async fn a_file_by_the_engines_own_name_is_no_canvas() {
 
     let refused = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![json!({"type": "sticky", "x": 0, "y": 300, "text": "no"})],
             file: Some(old.display().to_string()),
             project: None,
@@ -91,6 +94,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
     // Two boxes and an arrow between them, with the agent's own ids.
     let added = server
             .canvas_add_elements(Parameters(CanvasElementsArgs {
+                tab: None,
                 elements: vec![
                     json!({"type": "rectangle", "id": "api", "x": 0, "y": 0, "width": 160, "height": 60, "label": {"text": "API"}}),
                     json!({"type": "rectangle", "id": "db", "x": 300, "y": 0, "width": 160, "height": 60, "label": {"text": "DB"}}),
@@ -107,6 +111,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
     // The ids come back in the next call, which opens the file again.
     let updated = server
         .canvas_update(Parameters(CanvasUpdateArgs {
+            tab: None,
             elements: vec![json!({"id": "db", "text": "Database"})],
             file: None,
             project: project_arg(&project),
@@ -132,6 +137,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
     // A diagram from Mermaid is drawn as shapes the next call can edit.
     let drawn = server
         .canvas_add_diagram(Parameters(CanvasMermaidArgs {
+            tab: None,
             source: "graph TD; A-->B".into(),
             x: Some(0.0),
             y: Some(400.0),
@@ -151,6 +157,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
     // A command without parameters.
     let zoomed = server
         .canvas_command_tool(CanvasCommandArgs {
+            tab: None,
             command: "select.all".into(),
             params: None,
             file: None,
@@ -162,6 +169,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
 
     let deleted = server
         .canvas_delete(Parameters(CanvasDeleteArgs {
+            tab: None,
             ids: vec!["calls".into(), "nope".into()],
             file: None,
             project: project_arg(&project),
@@ -176,6 +184,7 @@ async fn the_other_canvas_tools_edit_the_stored_canvas_while_the_app_is_closed()
     // Clearing the canvas keeps what it held, in the `.bak` beside it.
     let cleared = server
         .canvas_clear(Parameters(CanvasTargetArgs {
+            tab: None,
             file: None,
             project: project_arg(&project),
         }))
@@ -200,6 +209,7 @@ async fn parallel_calls_each_land_in_the_stored_canvas() {
     // An agent's parallel tool calls: each opens the file, adds its box and saves.
     let calls = (0..8).map(|n| {
             server.canvas_add_elements(Parameters(CanvasElementsArgs {
+                tab: None,
                 elements: vec![json!({"type": "rectangle", "id": format!("box-{n}"), "x": n * 200, "y": 0, "width": 100, "height": 60})],
                 file: None,
                 project: project_arg(&project),
@@ -220,6 +230,7 @@ async fn canvas_commands_lists_every_command_and_filters_with_their_parameters()
     let project = project_in(dir.path());
     let list = |filter: Option<&str>| {
         server.canvas_commands(Parameters(CanvasCommandsArgs {
+            tab: None,
             filter: filter.map(str::to_string),
             file: None,
             project: project_arg(&project),
@@ -304,6 +315,7 @@ fn an_agent_in_a_subfolder_draws_on_its_projects_canvas() {
         let add = async move {
             let elements = vec![sticky];
             let args = CanvasElementsArgs {
+                tab: None,
                 elements,
                 file: None,
                 project: None,
@@ -367,6 +379,7 @@ async fn the_page_tools_act_on_the_page_on_show_and_reach_the_others_by_command(
     write_board(&board_file(&project), 2);
     let command = |command: &str, params: Value| {
         let run = server.canvas_command_tool(CanvasCommandArgs {
+            tab: None,
             command: command.into(),
             params: Some(params),
             file: None,
@@ -380,6 +393,7 @@ async fn the_page_tools_act_on_the_page_on_show_and_reach_the_others_by_command(
     };
     add_pages(&board_file(&project), &[("Two", "on two")]);
     let window = || CanvasTargetArgs {
+        tab: None,
         file: None,
         project: project_arg(&project),
     };

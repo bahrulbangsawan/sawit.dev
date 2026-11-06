@@ -150,6 +150,7 @@ const DESTRUCTIVE: &[&str] = &[
     "keymap_bind",
     "keymap_unbind",
     "browser_tabs",
+    "canvas_tabs",
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on

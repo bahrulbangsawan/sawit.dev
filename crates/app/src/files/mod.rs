@@ -4,6 +4,7 @@ mod changes;
 mod commands;
 mod naming;
 pub(crate) mod ops;
+pub(crate) use ops::trash;
 mod render;
 pub mod search;
 mod tree;

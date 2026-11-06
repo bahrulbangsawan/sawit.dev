@@ -9,6 +9,7 @@ use crate::app::tests::{answer, native, said};
 
 fn add(project: &Path, url: &str, routes: &[&str]) -> CanvasAddRoutesArgs {
     CanvasAddRoutesArgs {
+        tab: None,
         url: Some(url.into()),
         routes: Some(routes.iter().map(|r| r.to_string()).collect()),
         viewports: None,

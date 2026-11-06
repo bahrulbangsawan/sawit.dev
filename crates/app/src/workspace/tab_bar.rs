@@ -102,6 +102,16 @@ impl Workspace {
                         .and_then(|board| board.read(cx).agents_at_work(cx)),
                     _ => None,
                 };
+                // A canvas of a project's: its tab's menu offers New, Rename and Delete Canvas, and
+                // its title is a field while it is renamed.
+                let canvas = self
+                    .board_at(ix)
+                    .map(|b| b.read(cx).path().to_path_buf())
+                    .and_then(|file| Some((self.canvas_root(&file, cx)?, file)));
+                let renaming = canvas.as_ref().and_then(|(_, file)| {
+                    let rename = self.canvas_tabs.rename.as_ref()?;
+                    (rename.file == *file).then(|| rename.input.clone())
+                });
                 let label: SharedString = match agents {
                     Some(_) => format!("{title}, agents at work").into(),
                     None => title.clone().into(),
@@ -130,7 +140,16 @@ impl Workspace {
                         el.bg(cx.theme().tab).text_color(cx.theme().tab_foreground)
                     })
                     .child(icon)
-                    .child(title)
+                    .map(|el| match renaming {
+                        Some(input) => el.child(
+                            div().w(px(140.)).child(
+                                gpui_kit::component::input::Input::new(&input)
+                                    .xsmall()
+                                    .appearance(false),
+                            ),
+                        ),
+                        None => el.child(title),
+                    })
                     .when(read_only == Some(true), |el| {
                         el.child(
                             Icon::new(Lucide::Lock)
@@ -178,6 +197,7 @@ impl Workspace {
                     .when_some(color, |el, color| el.child(group_stripe(color, active)))
                     .on_click(cx.listener(move |this, _, _, cx| this.show_tab(ix, cx)))
                     .context_menu(move |menu, window, cx| {
+                        let menu = Self::canvas_menu(weak.clone(), canvas.clone(), menu);
                         Self::tab_menu(
                             weak.clone(),
                             ix,
@@ -297,6 +317,41 @@ impl Workspace {
                     },
                 ),
             )
+    }
+
+    /// New, Rename and Delete Canvas, for a project canvas tab's menu (`canvas`: its project
+    /// and file). The project's own canvas is neither renamed nor deleted.
+    fn canvas_menu(
+        this: WeakEntity<Self>,
+        canvas: Option<(PathBuf, PathBuf)>,
+        menu: PopupMenu,
+    ) -> PopupMenu {
+        let Some((root, file)) = canvas else {
+            return menu;
+        };
+        let own = file == sawit_core::nyawit::board_file(&root);
+        let (new, rename, delete) = (this.clone(), this.clone(), this);
+        let (rename_file, delete_file) = (file.clone(), file);
+        menu.item(PopupMenuItem::new("New Canvas").on_click(move |_, _, cx| {
+            let _ = new.update(cx, |ws, cx| ws.new_canvas(root.clone(), cx));
+        }))
+        .when(!own, |menu| {
+            menu.item(
+                PopupMenuItem::new("Rename Canvas…").on_click(move |_, window, cx| {
+                    let _ = rename.update(cx, |ws, cx| {
+                        ws.begin_canvas_rename(rename_file.clone(), window, cx)
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new("Delete Canvas…").on_click(move |_, window, cx| {
+                    let _ = delete.update(cx, |ws, cx| {
+                        ws.delete_canvas(delete_file.clone(), window, cx)
+                    });
+                }),
+            )
+        })
+        .separator()
     }
 
     /// "Move to Project" and "Remove from Group", for a tab's menu.

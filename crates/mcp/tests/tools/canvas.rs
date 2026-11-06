@@ -112,6 +112,7 @@ async fn get(server: &Sawit, project: &Path) -> CallToolResult {
     let project = project_arg(project);
     server
         .canvas_get_tool(CanvasTargetArgs {
+            tab: None,
             file: None,
             project,
         })
@@ -120,6 +121,7 @@ async fn get(server: &Sawit, project: &Path) -> CallToolResult {
 
 async fn command(server: &Sawit, project: &Path, id: &str, params: Value) -> CallToolResult {
     let args = CanvasCommandArgs {
+        tab: None,
         command: id.into(),
         params: Some(params),
         file: None,

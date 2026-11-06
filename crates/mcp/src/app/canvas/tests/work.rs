@@ -13,6 +13,7 @@ use crate::app::tests::{answer, native, said};
 
 pub(super) fn begin(project: &Path, name: &str, frame: Value) -> CanvasBeginArgs {
     CanvasBeginArgs {
+        tab: None,
         name: name.into(),
         frame,
         steps: Some(vec!["Laying out".into(), "Writing copy".into()]),
@@ -24,6 +25,7 @@ pub(super) fn begin(project: &Path, name: &str, frame: Value) -> CanvasBeginArgs
 
 fn progress(project: &Path, work: &str, status: Option<&str>) -> CanvasProgressArgs {
     CanvasProgressArgs {
+        tab: None,
         work: work.into(),
         step: Some("Writing copy".into()),
         status: status.map(Into::into),
@@ -66,6 +68,7 @@ async fn with_sawit_closed_a_work_is_built_in_the_saved_file() {
     let text = json!({"type": "text", "id": "price", "x": 16, "y": 16, "text": "$24"});
     let added = server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![text],
             file: None,
             project: project_arg(&project),
@@ -79,6 +82,7 @@ async fn with_sawit_closed_a_work_is_built_in_the_saved_file() {
     assert_eq!(parent.as_deref(), Some(frame));
     let grown = server
         .canvas_update(Parameters(CanvasUpdateArgs {
+            tab: None,
             elements: vec![json!({"id": "price", "append": " per month"})],
             file: None,
             project: project_arg(&project),
@@ -142,6 +146,7 @@ async fn view_commands_are_refused() {
     ] {
         let ran = server
             .canvas_command_tool(CanvasCommandArgs {
+                tab: None,
                 command: command.into(),
                 params: Some(params),
                 file: None,
@@ -187,6 +192,7 @@ async fn with_sawit_running_work_ops_go_to_the_app() {
     );
     server
         .canvas_add_elements(Parameters(CanvasElementsArgs {
+            tab: None,
             elements: vec![json!({"type": "text", "text": "Hi"})],
             file: None,
             project: project_arg(&project),
@@ -196,6 +202,7 @@ async fn with_sawit_running_work_ops_go_to_the_app() {
     assert_eq!(next(&asked)["work"], "w_1");
     let zoom = server
         .canvas_command_tool(CanvasCommandArgs {
+            tab: None,
             command: "view.zoomIn".into(),
             params: None,
             file: None,

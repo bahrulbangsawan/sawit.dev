@@ -222,6 +222,7 @@ impl Workspace {
             _fill_hint_reset: Task::ready(()),
             split_h: cx.new(|_| Default::default()),
             split_v: cx.new(|_| Default::default()),
+            canvas_tabs: Default::default(),
             browsers: Vec::new(),
             welcome: Some(welcome),
             tab_scroll: ScrollHandle::new(),

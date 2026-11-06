@@ -19,6 +19,7 @@ async fn canvas_load_takes_a_sawit_file_where_it_is() {
     write_board(&other, 3);
     let other_bytes = std::fs::read(&other).unwrap();
     let load = |path: &Path| CanvasLoadArgs {
+        tab: None,
         path: Some(path.display().to_string()),
         scene: None,
         file: None,
@@ -48,6 +49,7 @@ async fn canvas_load_takes_a_sawit_file_where_it_is() {
     // Neither is no load at all.
     let nothing = server
         .canvas_load(Parameters(CanvasLoadArgs {
+            tab: None,
             path: None,
             scene: None,
             file: None,
@@ -76,6 +78,7 @@ fn canvas_load_of_a_pipe_or_a_device_is_refused_at_once() {
                 let (server, project) = (server.clone(), project_arg(&project));
                 let path = path.display().to_string();
                 let load = CanvasLoadArgs {
+                    tab: None,
                     path: Some(path.clone()),
                     scene: None,
                     file: None,
@@ -122,6 +125,7 @@ async fn canvas_load_brings_back_the_board_a_clear_kept() {
 
     let cleared = server
         .canvas_clear(Parameters(CanvasTargetArgs {
+            tab: None,
             file: None,
             project: project_arg(&project),
         }))
@@ -132,6 +136,7 @@ async fn canvas_load_brings_back_the_board_a_clear_kept() {
     let backup = file.with_extension("sawit.bak");
     let loaded = server
         .canvas_load(Parameters(CanvasLoadArgs {
+            tab: None,
             path: Some(backup.display().to_string()),
             scene: None,
             file: None,
@@ -157,6 +162,7 @@ async fn canvas_load_reads_an_import_path_as_it_reads_a_sawit_path() {
     let old = dir.path().join("old.excalidraw");
     std::fs::write(&old, OLD_BOARD).unwrap();
     let load = |path: String| CanvasLoadArgs {
+        tab: None,
         path: Some(path),
         scene: None,
         file: None,
