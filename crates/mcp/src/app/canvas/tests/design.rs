@@ -114,6 +114,7 @@ body { margin: 0; padding: 16px; color: #111827; background: #fff; }
         edits: None,
         files: None,
         file: None,
+        tab: None,
         project: project_arg(&project),
     };
     let wrote = answer(&server.canvas_screen_write(Parameters(write)).await);
@@ -140,6 +141,7 @@ body { margin: 0; padding: 16px; color: #111827; background: #fff; }
         status: Some("done".into()),
         message: None,
         file: None,
+        tab: None,
         project: project_arg(&project),
     };
     let said = answer(&server.canvas_progress(Parameters(done)).await);

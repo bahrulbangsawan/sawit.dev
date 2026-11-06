@@ -14,6 +14,7 @@ fn export(project: &Path, id: &str, format: &str) -> CanvasScreenExportArgs {
         format: Some(format.into()),
         path: None,
         file: None,
+        tab: None,
         project: project_arg(project),
     }
 }

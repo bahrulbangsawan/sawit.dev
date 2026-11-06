@@ -50,7 +50,7 @@ impl Workspace {
             FillPanel::Terminal
         } else if self.canvas_active() {
             FillPanel::Canvas
-        } else if self.active_browser().is_some() {
+        } else if self.active_browser_tabs().is_some() {
             FillPanel::Browser
         } else {
             FillPanel::Terminal
