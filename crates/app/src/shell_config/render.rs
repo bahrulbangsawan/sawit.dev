@@ -199,6 +199,10 @@ fn config_menu(menu: PopupMenu, focus: FocusHandle, writable: bool) -> PopupMenu
 
 impl Render for ShellConfigPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Signed in, the footer looks for the repository once (and again per sign-in).
+        if matches!(self.sync.remote, super::sync::Remote::Idle) {
+            self.check_sync(false, cx);
+        }
         let query = self.filter.read(cx).value().trim().to_lowercase();
         let filtering = !query.is_empty();
         let groups = self.groups();

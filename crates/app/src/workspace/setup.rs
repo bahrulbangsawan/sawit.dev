@@ -139,6 +139,13 @@ impl Workspace {
                     ShellConfigEvent::OpenTerminal(dir) => {
                         this.open_terminal_in(dir.clone(), window, cx)
                     }
+                    ShellConfigEvent::SourceInTerminals(files) => {
+                        let (told, busy) = this
+                            .terminal
+                            .update(cx, |t, cx| t.source_in_idle_shells(files, cx));
+                        let panel = this.shell_config_panel.clone();
+                        panel.update(cx, |p, cx| p.sourced(told, busy, cx));
+                    }
                 },
             ),
             // Server tabs follow renames and close when deleted.

@@ -249,3 +249,87 @@ fn backspace_asks_before_moving_a_config_file_to_the_trash(cx: &mut TestAppConte
     cx.run_until_parked();
     cx.update(|cx| assert_eq!(panel.read(cx).error, None));
 }
+
+/// Item 20: the footer shows one way on, by the sign-in and the repository: Sign In to GitHub
+/// alone while signed out, Save Shell Files to GitHub alone before the repository exists, the
+/// sync once it does, and a Keychain error's reason (with Try Again) rather than a sign-in.
+#[gpui_kit::test]
+fn the_footer_shows_one_way_on_per_state(cx: &mut TestAppContext) {
+    use super::footer::FooterState;
+    use super::sync::Remote;
+    use sawit_core::github::{FileState, OwnRepo, RemoteTree};
+    use sawit_core::shell_config::{Backup, FileSync, SyncStatus};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        super::init(cx);
+    });
+    let (_, panel) = cx.update(|cx| {
+        gpui_kit::open_window(Default::default(), cx, |window, cx| {
+            cx.new(|cx| ShellConfigPanel::new(window, cx))
+        })
+        .unwrap()
+    });
+    let state = |cx: &mut TestAppContext| cx.update(|cx| panel.read(cx).footer_state(cx));
+    assert_eq!(state(cx), FooterState::SignedOut);
+
+    let account = cx.update(crate::git::account::global);
+    account.update(cx, |a, cx| a.signed_in("gho_1".into(), me(), None, cx));
+    assert_eq!(state(cx), FooterState::LookingForRepo);
+
+    let status = |backup: Option<Backup>, files: Vec<FileSync>| SyncStatus {
+        login: "me".into(),
+        backup,
+        files,
+        synced_at: None,
+    };
+    panel.update(cx, |p, _| {
+        p.sync.remote = Remote::Ready(status(None, Vec::new()))
+    });
+    assert_eq!(state(cx), FooterState::NoRepo);
+
+    let backup = Backup {
+        login: "me".into(),
+        repo: OwnRepo {
+            private: true,
+            default_branch: "main".into(),
+            html_url: "https://github.com/me/sawit-shell-config".into(),
+        },
+        tree: RemoteTree::default(),
+    };
+    let file = |rel: &str, state: FileState| FileSync {
+        rel: rel.into(),
+        path: std::path::PathBuf::from(format!("/nowhere/{rel}")),
+        state,
+        remote: Some("abc".into()),
+    };
+    let files = vec![
+        file(".bashrc", FileState::ChangedHere),
+        file(".zprofile", FileState::ChangedOnGitHub),
+        file(".zshrc", FileState::ChangedOnBoth),
+        file(".profile", FileState::Same),
+    ];
+    panel.update(cx, |p, cx| {
+        p.sync_ready(status(Some(backup), files), Vec::new());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(state(cx), FooterState::Sync);
+    cx.update(|cx| {
+        let p = panel.read(cx);
+        // A conflict is never ticked: only Keep Local or Keep GitHub's moves it.
+        assert_eq!(
+            p.sync.chosen.iter().map(String::as_str).collect::<Vec<_>>(),
+            [".bashrc", ".zprofile"]
+        );
+        assert_eq!((p.upload_count(), p.download_count()), (1, 1));
+    });
+
+    account.update(cx, |a, cx| {
+        a.set_session(crate::git::account::Session::Loading, cx);
+        a.loaded(Err(CoreError::Config("Keychain: locked".into())), cx);
+    });
+    // The Keychain unreadable: the reason with Try Again, never the sign-in button.
+    assert!(matches!(state(cx), FooterState::Problem(why) if why.contains("Keychain: locked")));
+    account.update(cx, |a, cx| a.sign_out(cx));
+    assert_eq!(state(cx), FooterState::SignedOut);
+}

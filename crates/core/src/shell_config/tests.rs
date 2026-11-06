@@ -137,3 +137,138 @@ fn read_only_file_is_not_writable() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
     assert!(!writable(&path));
 }
+
+// ---------------------------------------------------------------- sync
+
+/// The tree GitHub answers for a `sawit-shell-config` repository: `.zshrc` and `.zprofile`
+/// changed there, `.bashrc` as here, a README and a path outside the home folder the sync
+/// must never write.
+const TREE: &str = include_str!("fixtures/tree.json");
+
+fn sync_home() -> (tempfile::TempDir, Vec<(String, PathBuf)>) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let known = known_files(&home, &home.join(".config"));
+    (dir, known)
+}
+
+fn tree() -> crate::github::RemoteTree {
+    let v: serde_json::Value = serde_json::from_str(TREE).unwrap();
+    crate::github::RemoteTree {
+        commit: "c0ffee".into(),
+        files: crate::github::parse_tree(&v),
+    }
+}
+
+#[test]
+fn the_sync_writes_only_the_shell_files_it_knows() {
+    let (dir, known) = sync_home();
+    let rels: Vec<&str> = known.iter().map(|(r, _)| r.as_str()).collect();
+    assert!(rels.contains(&".zshrc") && rels.contains(&".config/fish/config.fish"));
+    assert!(
+        known
+            .iter()
+            .all(|(_, p)| p.starts_with(dir.path().join("home")))
+    );
+    // An XDG folder outside the home folder isn't synced.
+    let outside = known_files(&dir.path().join("home"), Path::new("/elsewhere"));
+    assert!(outside.iter().all(|(r, _)| !r.contains("fish")));
+}
+
+/// Each file's state from the fixture tree, the files here and the last sync: the README and
+/// the path outside the home folder are left out.
+#[test]
+fn files_are_planned_against_the_fixture_tree() {
+    use crate::github::{FileState, SyncBase, blob_sha};
+    let (_dir, known) = sync_home();
+    let path = |rel: &str| known.iter().find(|(r, _)| r == rel).unwrap().1.clone();
+    std::fs::write(path(".zshrc"), "export A=1\n").unwrap();
+    std::fs::write(path(".bashrc"), "export A=1\n").unwrap();
+    std::fs::write(path(".profile"), "export A=1\n").unwrap();
+    let local = local_hashes(&known);
+    assert_eq!(local[".zshrc"], blob_sha(b"export A=1\n"));
+    let mut base = SyncBase::default();
+    // Synced before with .zshrc as it is here: GitHub changed it since.
+    base.files
+        .insert(".zshrc".into(), blob_sha(b"export A=1\n"));
+    let plan = plan_files(&known, &local, &tree(), &base);
+    let states: Vec<(&str, FileState)> = plan.iter().map(|f| (f.rel.as_str(), f.state)).collect();
+    assert_eq!(
+        states,
+        [
+            (".bashrc", FileState::Same),
+            (".config/fish/config.fish", FileState::OnlyOnGitHub),
+            (".profile", FileState::OnlyHere),
+            (".zprofile", FileState::OnlyOnGitHub),
+            (".zshrc", FileState::ChangedOnGitHub),
+        ]
+    );
+    assert_eq!(
+        plan[4].remote.as_deref(),
+        Some("d9c8f705450d043515699a285086e6915fda4a77")
+    );
+}
+
+/// A download backs each file up beside itself first, keeps its permissions (600 here, 600 for
+/// a new one), records the sync, and Undo puts everything back; a file the sync doesn't know is
+/// refused before anything is written.
+#[test]
+fn a_download_backs_up_keeps_permissions_and_undoes() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (dir, known) = sync_home();
+    let state = dir.path().join("shell-files-sync.json");
+    let path = |rel: &str| known.iter().find(|(r, _)| r == rel).unwrap().1.clone();
+    let zshrc = path(".zshrc");
+    std::fs::write(&zshrc, "export A=1\n").unwrap();
+    std::fs::set_permissions(&zshrc, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let refused = apply_download(
+        &known,
+        &[
+            (".zshrc".into(), b"export A=2\n".to_vec()),
+            ("../.ssh/config".into(), b"Host *\n".to_vec()),
+        ],
+        &state,
+        "c0ffee",
+        1_793_961_302,
+    );
+    assert!(refused.is_err());
+    assert_eq!(
+        std::fs::read_to_string(&zshrc).unwrap(),
+        "export A=1\n",
+        "written before refusing"
+    );
+
+    let files = [
+        (".zshrc".to_string(), b"export A=2\n".to_vec()),
+        (".zprofile".to_string(), b"alias g=git\n".to_vec()),
+    ];
+    let done = apply_download(&known, &files, &state, "c0ffee", 1_793_961_302).unwrap();
+    assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), "export A=2\n");
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&zshrc), 0o600);
+    assert_eq!(mode(&path(".zprofile")), 0o600);
+    let backup = done.replaced[0].backup.clone().unwrap();
+    assert_eq!(
+        backup,
+        zshrc.with_file_name(".zshrc.sawit-backup-20261106-103502")
+    );
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), "export A=1\n");
+    assert_eq!(done.replaced[1].backup, None, "nothing to back up");
+    let base = crate::github::SyncBase::load(&state);
+    assert_eq!(base.commit.as_deref(), Some("c0ffee"));
+    assert_eq!(
+        base.files[".zshrc"],
+        crate::github::blob_sha(b"export A=2\n")
+    );
+
+    undo_download(&done, &state).unwrap();
+    assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), "export A=1\n");
+    assert!(!backup.exists());
+    assert!(!path(".zprofile").exists());
+    assert_eq!(
+        crate::github::SyncBase::load(&state),
+        crate::github::SyncBase::default()
+    );
+}

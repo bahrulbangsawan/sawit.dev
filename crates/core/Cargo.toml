@@ -38,6 +38,8 @@ ring = "0.17"
 [target.'cfg(unix)'.dependencies]
 # Asks the PTY which process group is in the foreground.
 libc = "0.2"
+# Git blob hashes for the GitHub syncs; already in the app through figcraft-format.
+sha1 = "0.11"
 
 [dev-dependencies]
 # Same version GPUI rasterizes SVG with: proves rendered diagrams parse.

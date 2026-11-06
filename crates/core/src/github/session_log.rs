@@ -34,7 +34,7 @@ pub fn note_session(path: &Path, why: &str) {
 }
 
 /// `2026-11-06T10:35:02Z` for Unix seconds.
-pub(super) fn stamp(secs: i64) -> String {
+pub fn stamp(secs: i64) -> String {
     let days = secs.div_euclid(86400);
     let rem = secs.rem_euclid(86400);
     // Civil from days (Howard Hinnant).

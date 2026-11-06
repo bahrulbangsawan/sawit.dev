@@ -282,3 +282,77 @@ fn the_session_log_keeps_why_a_sign_in_ended() {
     assert_eq!(text.lines().count(), 200);
     assert!(text.lines().last().unwrap().ends_with("line 249"));
 }
+
+/// How a file stands is judged against the last sync: a side that still has the synced hash is
+/// the one that didn't change. Without a sync from here, files that differ are a conflict.
+#[test]
+fn sync_states_follow_the_last_sync() {
+    use std::collections::BTreeMap;
+    let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let local = map(&[
+        ("same", "1"),
+        ("here", "2"),
+        ("there", "1"),
+        ("both", "2"),
+        ("new", "1"),
+        ("never", "1"),
+    ]);
+    let remote = map(&[
+        ("same", "1"),
+        ("here", "1"),
+        ("there", "2"),
+        ("both", "3"),
+        ("gone", "1"),
+        ("never", "2"),
+    ]);
+    let mut base = SyncBase::default();
+    base.files = map(&[("here", "1"), ("there", "1"), ("both", "1")]);
+    let plan: BTreeMap<String, FileState> = plan_sync(&local, &remote, &base).into_iter().collect();
+    assert_eq!(plan["same"], FileState::Same);
+    assert_eq!(plan["here"], FileState::ChangedHere);
+    assert_eq!(plan["there"], FileState::ChangedOnGitHub);
+    assert_eq!(plan["both"], FileState::ChangedOnBoth);
+    assert_eq!(plan["new"], FileState::OnlyHere);
+    assert_eq!(plan["gone"], FileState::OnlyOnGitHub);
+    assert_eq!(plan["never"], FileState::ChangedOnBoth);
+    assert!(FileState::ChangedHere.uploads() && !FileState::ChangedOnBoth.uploads());
+    assert!(FileState::OnlyOnGitHub.downloads() && !FileState::ChangedOnBoth.downloads());
+    assert_eq!(
+        serde_json::to_value(FileState::ChangedOnGitHub).unwrap(),
+        "changed_on_github"
+    );
+}
+
+/// Git's blob hash, as GitHub's tree lists it (`git hash-object`), and base64 both ways as
+/// GitHub sends a blob (wrapped in lines).
+#[test]
+fn blob_hashes_and_base64_match_git() {
+    assert_eq!(
+        blob_sha(b"hello\n"),
+        "ce013625030ba8dba906f756967f9e9ca394464a"
+    );
+    assert_eq!(
+        blob_sha(b"export A=2\n"),
+        "d9c8f705450d043515699a285086e6915fda4a77"
+    );
+    for bytes in [
+        &b""[..],
+        b"f",
+        b"fo",
+        b"foo",
+        b"export A=1\n",
+        &[0u8, 255, 128, 7],
+    ] {
+        assert_eq!(super::backup::base64_decode(&base64(bytes)).unwrap(), bytes);
+    }
+    assert_eq!(
+        super::backup::base64_decode("ZXhw\nb3J0\nIEE9MQo=\n").unwrap(),
+        b"export A=1\n"
+    );
+    assert!(super::backup::base64_decode("Z$==").is_none());
+}

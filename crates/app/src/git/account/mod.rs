@@ -166,6 +166,13 @@ impl GitHubAccount {
         &self.session
     }
 
+    /// Puts the account in `session`, for other views' tests.
+    #[cfg(test)]
+    pub(crate) fn set_session(&mut self, session: Session, cx: &mut Context<Self>) {
+        self.session = session;
+        cx.notify();
+    }
+
     /// The token every GitHub control works with: a confirmed sign-in, or a saved one GitHub
     /// couldn't be asked about.
     pub fn token(&self) -> Option<&str> {

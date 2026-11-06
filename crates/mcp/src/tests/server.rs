@@ -105,6 +105,7 @@ fn every_tool_is_routed() {
         "install_sawit_skills",
         // config files
         "list_config_files",
+        "shell_files_sync",
         // new project
         "stack_options",
         "stack_check",

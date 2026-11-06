@@ -103,16 +103,10 @@ pub async fn save_backup(token: &str, plan: &BackupPlan) -> Result<Saved> {
             true,
         ),
     };
-    let host = std::process::Command::new("/usr/sbin/scutil")
-        .args(["--get", "ComputerName"])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "this Mac".into());
+    let host = computer_name();
     let names: Vec<&str> = files.iter().map(|(rel, _)| rel.as_str()).collect();
     let message = format!("Save shell config from {host}\n\n{}", names.join("\n"));
-    let changed = github::commit_files(
+    let committed = github::commit_files(
         token,
         &plan.login,
         BACKUP_REPO,
@@ -125,6 +119,17 @@ pub async fn save_backup(token: &str, plan: &BackupPlan) -> Result<Saved> {
         url: repo.html_url,
         files: files.len(),
         created,
-        changed,
+        changed: committed.changed,
     })
+}
+
+/// This Mac's name, as commit messages say where files came from.
+pub fn computer_name() -> String {
+    std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "this Mac".into())
 }

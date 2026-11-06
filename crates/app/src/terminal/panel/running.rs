@@ -25,6 +25,41 @@ impl TerminalPanel {
         running
     }
 
+    /// Has every local shell waiting at its prompt read `files` again (`source`), after the user
+    /// asked: a shell running a command, an SSH session or an ended one is left alone. Returns
+    /// how many shells were told, and the names of those left alone.
+    pub fn source_in_idle_shells(
+        &mut self,
+        files: &[std::path::PathBuf],
+        cx: &mut Context<Self>,
+    ) -> (usize, Vec<String>) {
+        let line: String = files
+            .iter()
+            .map(|f| format!("source {}", sawit_core::terminal::shell_quote(f)))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let (mut told, mut busy) = (0, Vec::new());
+        for tab in self.tabs.clone() {
+            let t = tab.read(cx);
+            let panes: Vec<_> = t.views().map(|(p, v)| (p, v.clone())).collect();
+            for (pane, view) in panes {
+                let t = tab.read(cx);
+                let v = view.read(cx);
+                if v.exited {
+                    continue;
+                }
+                if let Some(name) = running_in(t, pane, v) {
+                    busy.push(name);
+                    continue;
+                }
+                view.update(cx, |view, _| view.write(format!("{line}\r").into_bytes()));
+                told += 1;
+            }
+        }
+        cx.notify();
+        (told, busy)
+    }
+
     /// Every coding agent running in the terminals, in the tab strip's order and then each
     /// tab's reading order, background tabs too. One pane is `focused`: the one with the
     /// keyboard, else the one that had it last (the active tab's focused pane, when no pane

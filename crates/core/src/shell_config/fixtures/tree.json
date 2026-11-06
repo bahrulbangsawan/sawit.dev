@@ -1,0 +1,13 @@
+{
+  "sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+  "truncated": false,
+  "tree": [
+    { "path": ".zshrc", "mode": "100644", "type": "blob", "sha": "d9c8f705450d043515699a285086e6915fda4a77", "size": 11 },
+    { "path": ".zprofile", "mode": "100644", "type": "blob", "sha": "c35eff7f70119f4c5a71326f737ed50f5d3e955c", "size": 12 },
+    { "path": ".bashrc", "mode": "100644", "type": "blob", "sha": "c7301616ca148d34a307363b6acc798f73fc8bc2", "size": 11 },
+    { "path": "README.md", "mode": "100644", "type": "blob", "sha": "ce013625030ba8dba906f756967f9e9ca394464a", "size": 6 },
+    { "path": ".config", "mode": "040000", "type": "tree", "sha": "0000000000000000000000000000000000000001" },
+    { "path": ".config/fish/config.fish", "mode": "100644", "type": "blob", "sha": "c7301616ca148d34a307363b6acc798f73fc8bc2", "size": 11 },
+    { "path": "../.ssh/config", "mode": "100644", "type": "blob", "sha": "c7301616ca148d34a307363b6acc798f73fc8bc2", "size": 11 }
+  ]
+}

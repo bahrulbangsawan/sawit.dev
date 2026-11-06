@@ -51,9 +51,17 @@ pub async fn create_private_repo(token: &str, name: &str, description: &str) -> 
     Ok(parse_own_repo(&v))
 }
 
+/// What [`commit_files`] did: the branch's head after it, and whether it made a commit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Committed {
+    pub commit: String,
+    /// `false` when GitHub already had these exact files: nothing was committed.
+    pub changed: bool,
+}
+
 /// Commits `files` (`path in the repository`, contents) on top of `branch`
-/// in one commit. Files already there that aren't listed stay. Returns
-/// `false` when nothing changed, and then commits nothing.
+/// in one commit. Files already there that aren't listed stay. When nothing
+/// changed it commits nothing, and says so.
 pub async fn commit_files(
     token: &str,
     owner: &str,
@@ -61,7 +69,7 @@ pub async fn commit_files(
     branch: &str,
     files: &[(String, Vec<u8>)],
     message: &str,
-) -> Result<bool> {
+) -> Result<Committed> {
     let repo = format!("/repos/{owner}/{name}");
     // A repository created a moment ago may not have its branch yet.
     let mut head = None;
@@ -95,7 +103,7 @@ pub async fn commit_files(
             "POST",
             &format!("{repo}/git/blobs"),
             token,
-            Some(json!({ "content": base64(bytes), "encoding": "base64" })),
+            Some(super::sync::blob_body(bytes)),
         )
         .await?;
         let sha = blob["sha"].as_str().unwrap_or_default();
@@ -110,7 +118,10 @@ pub async fn commit_files(
     .await?;
     let tree = tree["sha"].as_str().unwrap_or_default().to_string();
     if tree == base_tree {
-        return Ok(false);
+        return Ok(Committed {
+            commit: head,
+            changed: false,
+        });
     }
     let new = api(
         "POST",
@@ -119,7 +130,7 @@ pub async fn commit_files(
         Some(json!({ "message": message, "tree": tree, "parents": [head] })),
     )
     .await?;
-    let sha = new["sha"].as_str().unwrap_or_default();
+    let sha = new["sha"].as_str().unwrap_or_default().to_string();
     api(
         "PATCH",
         &format!("{repo}/git/refs/heads/{branch}"),
@@ -127,7 +138,10 @@ pub async fn commit_files(
         Some(json!({ "sha": sha })),
     )
     .await?;
-    Ok(true)
+    Ok(Committed {
+        commit: sha,
+        changed: true,
+    })
 }
 
 /// Standard base64 with padding.
@@ -147,4 +161,41 @@ pub(super) fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Standard base64 back to bytes; GitHub wraps it in lines. `None` when it isn't base64.
+pub(super) fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let clean: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let body = clean
+        .strip_suffix(b"==")
+        .or_else(|| clean.strip_suffix(b"="))
+        .unwrap_or(&clean);
+    let mut out = Vec::with_capacity(body.len() * 3 / 4);
+    for chunk in body.chunks(4) {
+        if chunk.len() == 1 {
+            return None;
+        }
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= value(c)? << (18 - 6 * i);
+        }
+        out.push((n >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    Some(out)
 }

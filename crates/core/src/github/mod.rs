@@ -9,19 +9,23 @@ mod http;
 mod issues;
 mod session_log;
 mod sign_in;
+mod sync;
 mod time;
 mod timeline;
 mod token;
 
 pub use account::{Account, Repo, account, avatar, parse_account, parse_repos, repos};
-pub use backup::{OwnRepo, commit_files, create_private_repo, own_repo};
+pub use backup::{Committed, OwnRepo, commit_files, create_private_repo, own_repo};
 pub use http::{REVOKED, is_revoked};
 pub use issues::{
     Comment, Item, PullState, add_comment, comments, create_issue, create_pull, default_branch,
     items, merge_pull, parse_comments, parse_items, pull_diff, pull_state, set_open,
 };
-pub use session_log::{FILE as SESSION_LOG, note_session};
+pub use session_log::{FILE as SESSION_LOG, note_session, stamp};
 pub use sign_in::{DeviceCode, Poll, parse_device_code, parse_poll, start_sign_in, wait_for_token};
+pub use sync::{
+    FileState, RemoteTree, SyncBase, blob_sha, fetch_blob, fetch_tree, parse_tree, plan_sync,
+};
 pub use time::{ago, now, parse_time};
 pub use timeline::{
     ActionKind, Entry, Event, ReviewComment, ReviewState, TIMELINE_PAGE, attach_review_comments,

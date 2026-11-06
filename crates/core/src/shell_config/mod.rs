@@ -5,9 +5,17 @@
 
 mod backup;
 mod secrets;
+mod sync;
 
-pub use backup::{BACKUP_REPO, BackupPlan, Saved, backup_files, plan_backup, save_backup};
+pub use backup::{
+    BACKUP_REPO, BackupPlan, Saved, backup_files, computer_name, plan_backup, save_backup,
+};
 pub use secrets::find_secrets;
+pub use sync::{
+    Backup, Downloaded, FileSync, Replaced, SYNC_STATE, SyncStatus, apply_download, backup_path,
+    fetch_backup, fetch_remote, known_files, known_files_here, local_hashes, plan_files,
+    sync_status, undo_download, upload,
+};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

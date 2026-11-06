@@ -8,8 +8,10 @@
 //! app's one GitHub sign-in, and is off until there is one.
 
 mod commands;
+mod footer;
 mod github;
 mod render;
+mod sync;
 
 use std::path::{Path, PathBuf};
 
@@ -50,6 +52,8 @@ pub fn init(cx: &mut App) {
 pub enum ShellConfigEvent {
     OpenFile(PathBuf),
     OpenTerminal(PathBuf),
+    /// Have the window's shells at their prompt read these files again, after a download.
+    SourceInTerminals(Vec<PathBuf>),
 }
 
 impl EventEmitter<ShellConfigEvent> for ShellConfigPanel {}
@@ -110,6 +114,8 @@ pub struct ShellConfigPanel {
     saved: Option<(String, Option<String>)>,
     /// The app's GitHub sign-in, which saving needs.
     account: Entity<GitHubAccount>,
+    /// The two-way sync with the repository, once it is found.
+    sync: sync::SyncUi,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -124,8 +130,11 @@ impl ShellConfigPanel {
                     cx.notify();
                 }
             }),
-            // Save turns on and off with the one sign-in.
-            cx.observe(&account, |_, _, cx| cx.notify()),
+            // The footer follows the one sign-in, and looks for the repository once signed in.
+            cx.observe(&account, |this, _, cx| {
+                this.check_sync(false, cx);
+                cx.notify()
+            }),
         ];
         Self {
             configs: shell_config::detect(),
@@ -139,6 +148,7 @@ impl ShellConfigPanel {
             saving: false,
             saved: None,
             account,
+            sync: sync::SyncUi::default(),
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         }

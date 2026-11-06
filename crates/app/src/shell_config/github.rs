@@ -2,13 +2,9 @@
 //! the app's one GitHub sign-in, asking first when lines look like secrets, and the footer that
 //! offers it.
 
-use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::button::*;
-use gpui_kit::component::*;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::CoreError;
-use sawit_core::shell_config::{self, BACKUP_REPO, Saved, Scope};
+use sawit_core::shell_config::{self, BACKUP_REPO, Saved};
 
 use super::ShellConfigPanel;
 use crate::git::account;
@@ -16,7 +12,7 @@ use crate::rt;
 
 /// Saving the user's files to GitHub.
 impl ShellConfigPanel {
-    fn save_to_github(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn save_to_github(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.saving {
             return;
         }
@@ -80,7 +76,11 @@ impl ShellConfigPanel {
             let _ = this.update(cx, |this, cx| {
                 this.saving = false;
                 match outcome {
-                    Ok(Ok(saved)) => this.saved = Some((saved_message(&saved), Some(saved.url))),
+                    Ok(Ok(saved)) => {
+                        this.saved = Some((saved_message(&saved), Some(saved.url)));
+                        // The repository is there now: the sync takes over.
+                        this.check_sync(true, cx);
+                    }
                     Ok(Err(e)) => this.github_failed(e, &used, cx),
                     Err(_) => {}
                 }
@@ -100,67 +100,11 @@ impl ShellConfigPanel {
     }
 
     /// Why Save Shell Files to GitHub is off, or `None` when it's on.
+    #[cfg(test)]
     pub(crate) fn save_blocked(&self, cx: &App) -> Option<SharedString> {
         self.account
             .read(cx)
             .blocked("save your shell files to a private repository")
-    }
-
-    pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let user_files = self
-            .configs
-            .iter()
-            .filter(|c| c.scope == Scope::User)
-            .count();
-        let blocked = self.save_blocked(cx).is_some();
-        v_flex()
-            .p_2()
-            .gap_1()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .child(account::gate(
-                Button::new("shell-config-save-github")
-                    .outline()
-                    .small()
-                    .w_full()
-                    .icon(Lucide::Github)
-                    .label(if self.saving {
-                        "Saving to GitHub…"
-                    } else {
-                        "Save Shell Files to GitHub"
-                    })
-                    .loading(self.saving)
-                    .disabled(self.saving || user_files == 0)
-                    .tooltip(format!(
-                        "Commit Your {user_files} Shell Files to the Private Repository {BACKUP_REPO}"
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| this.save_to_github(window, cx))),
-                self.account.read(cx),
-                "save your shell files to a private repository",
-                cx,
-            ))
-            .when(blocked, |el| {
-                el.child(account::sign_in_link("shell-config-sign-in").w_full())
-            })
-            .when_some(self.saved.clone(), |el, (message, url)| {
-                el.child(
-                    h_flex()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(div().flex_1().min_w_0().whitespace_normal().child(message))
-                        .when_some(url, |el, url| {
-                            el.child(
-                                Button::new("shell-config-open-repo")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(Lucide::ExternalLink)
-                                    .tooltip("Open the Repository on GitHub")
-                                    .on_click(move |_, _, cx| cx.open_url(&url)),
-                            )
-                        }),
-                )
-            })
     }
 }
 
