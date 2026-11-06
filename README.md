@@ -301,7 +301,7 @@ explained. A conflict on the same address can't be forced.
 <img src="docs/media/tools.png" alt="Dev Tools page: package managers such as Homebrew, nvm, pnpm, npm and uv, and runtimes such as Node.js, Bun and Deno, each with its install status, version and install command" width="100%">
 
 - Open **Dev Tools** (**Pages** menu) for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
-  (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps
+  (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, Herdr, …) and terminal apps
   (Zed, Starship, the Fly.io CLI, Cloudflare's `cf`, the GitHub CLI, MinIO, PureMac, …).
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
   An app's version comes from its `Info.plist`.
@@ -320,6 +320,10 @@ explained. A conflict on the same address can't be forced.
 - **MinIO** and the **MinIO Client** install from MinIO's tap (`brew install minio/stable/minio`,
   `minio/stable/mc`); a copy from Homebrew's core (`minio`, `minio-mc`) upgrades with the formula it came from. An
   `mc` counts only when `mc --version` names MinIO: Homebrew's `mc` is Midnight Commander.
+- **Herdr** (the app, Apple silicon only: an Intel Mac shows "Needs an Apple Silicon Mac") and **Herdr TUI** are two
+  tools. The app's version comes from its bundle; uninstalling it closes it and stops `herdr-core`, whose agents stop,
+  as the confirmation says. Neither uninstall deletes your settings (`~/.config/herdr-app`, `~/.config/herdr`):
+  **Delete Settings…** under the row is its own choice, confirmed separately.
 - An install that needs tools you don't have and didn't pick (FFmpeg for HyperFrames) asks first, naming them.
 - The tools npm installs for every project (Gemini CLI, Cloudflare's `cf`) have a package manager menu beside their
   command: **npm** (`npm install -g cf`), **pnpm** (`pnpm add -g cf`), **bun** (`bun add -g cf`) or **yarn**

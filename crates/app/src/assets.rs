@@ -234,6 +234,7 @@ tool_logos!(
     "factory-color",
     "flyio",
     "github",
+    "herdr-color",
     "homebrew-color",
     "minio-color",
     "nodejs-color",

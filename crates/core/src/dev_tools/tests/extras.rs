@@ -1,6 +1,7 @@
-//! The extras some rows show: the GitHub CLI's sign-in.
+//! The extras some rows show: the GitHub CLI's sign-in, Herdr's release manifest.
 
 use crate::dev_tools::extras::{GhAuth, parse_gh_auth};
+use crate::dev_tools::versions::manifest_version;
 
 /// `gh auth status` exits 0 when signed in, with the login in its new and old wording, and 1
 /// when not.
@@ -23,4 +24,13 @@ fn the_github_clis_sign_in_is_read_from_gh_auth_status() {
     let out = "You are not logged into any GitHub hosts. To log in, run: gh auth login\n";
     assert_eq!(parse_gh_auth(Some(1), out), GhAuth::SignedOut);
     assert_eq!(parse_gh_auth(None, new), GhAuth::SignedOut);
+}
+
+/// Herdr's release manifest gives the app's latest at its top level.
+#[test]
+fn herdr_apps_latest_comes_from_its_manifest() {
+    let json = r#"{"version": "0.1.13", "core_min": "0.1.11", "targets": {"macos-aarch64": {"url": "x"}}}"#;
+    assert_eq!(manifest_version(json).as_deref(), Some("0.1.13"));
+    assert_eq!(manifest_version(r#"{"targets": {}}"#), None);
+    assert_eq!(manifest_version("<html>"), None);
 }

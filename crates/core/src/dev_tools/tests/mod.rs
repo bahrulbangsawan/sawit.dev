@@ -6,6 +6,7 @@ mod brew;
 mod catalog;
 mod detect;
 mod extras;
+mod herdr;
 mod programs;
 mod removal;
 mod script;

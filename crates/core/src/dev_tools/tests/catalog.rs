@@ -66,7 +66,8 @@ fn puremac_is_the_app_from_its_homebrew_cask() {
 }
 
 /// Every app of the catalog (an app bundle among its places) is one whose copy the rule of
-/// `installed_outside` works out: Cap, Zed and PureMac, each with an uninstaller, which that rule is built on.
+/// `installed_outside` works out: Cap, Zed, PureMac and Herdr, each with
+/// an uninstaller, which that rule is built on.
 #[test]
 fn the_catalogs_apps_have_uninstallers() {
     let apps: Vec<&str> = TOOLS
@@ -74,7 +75,7 @@ fn the_catalogs_apps_have_uninstallers() {
         .filter(|t| is_app_tool(t))
         .map(|t| t.id)
         .collect();
-    assert_eq!(apps, ["cap", "zed", "puremac"]);
+    assert_eq!(apps, ["cap", "zed", "puremac", "herdr-app"]);
     for id in apps {
         assert!(find(id).unwrap().uninstall.is_some(), "{id}");
     }

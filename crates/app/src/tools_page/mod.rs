@@ -212,6 +212,7 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
         "puremac" => ("tool_logos/puremac.png", true),
         "gh" => ("tool_logos/github.svg", false),
         "minio" | "mc" => ("tool_logos/minio-color.svg", true),
+        "herdr-app" | "herdr" => ("tool_logos/herdr-color.svg", true),
         "bun" | "deno" | "rust" | "flyio" => {
             return svg()
                 .path(SharedString::from(format!("tool_logos/{id}.svg")))

@@ -7,6 +7,8 @@ trademarks belong to their owners).
 - cap-color.svg: https://cap.so/logos/logo-solo.svg
 - omp-color.svg: https://omp.sh/favicon.svg
 - factory-color.svg: https://factory.ai/favicon.svg
+- herdr-color.svg (Herdr and Herdr TUI): the Herdr app's icon, Apache-2.0 —
+  https://github.com/herdrdev/herdr-app/blob/main/assets/icons/herdr-ui-icon-clean.svg
 - puremac.png: the app's icon (PureMac publishes no vector logo), 64 × 64, MIT —
   https://github.com/momenbasel/PureMac/blob/main/PureMac/Assets.xcassets/AppIcon.appiconset/icon_32@2x.png
 
