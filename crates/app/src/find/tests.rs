@@ -5,9 +5,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::{
-    AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, px,
-    size,
+    Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Styled as _, TestAppContext, VisualTestContext, Window, div, px, size,
 };
 use sawit_core::find::FindState;
 
