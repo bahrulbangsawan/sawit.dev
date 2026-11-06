@@ -33,7 +33,8 @@ fn run_in(home: &Path, lines: &[String]) {
     );
 }
 
-/// The agents of a throwaway home: Claude Code, Codex's shared folder and Factory Droid's.
+/// The agents of a throwaway home: Claude Code, the shared folder (Codex, Droid) and Factory
+/// Droid's own.
 fn agents(home: &Path) -> (Target, Target, Target) {
     let claude_dir = home.join(".claude");
     let main = Target {
@@ -50,7 +51,7 @@ fn agents(home: &Path) -> (Target, Target, Target) {
     };
     let droid = Target {
         dir: home.join(".factory/skills"),
-        ..folder(".factory/skills", Some("droid"))
+        ..folder(".factory/skills", None)
     };
     for t in [&main, &shared, &droid] {
         std::fs::create_dir_all(&t.dir).unwrap();

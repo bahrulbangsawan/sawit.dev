@@ -126,12 +126,13 @@ fn design_to_code_lands_only_its_skill_folder() {
     let none = Installed::default();
     let main = claude(None);
     let codex = folder(".agents/skills", Some("codex"));
-    let droid = folder(".factory/skills", Some("droid"));
+    // Droid's own folder: the skills CLI installs Droid into the shared one.
+    let droid = folder(".factory/skills", None);
     let places = [(&main, &none), (&codex, &none), (&droid, &none)];
     assert_eq!(
-        lines(pack, pack.methods[0], Action::Install, &places),
+        lines(pack, pack.methods[0], Action::Install, &places[..2]),
         [
-            "npx -y skills add Atharvsinh-codez/skills --skill design-to-code -g -a claude-code -a codex -a droid -y"
+            "npx -y skills add Atharvsinh-codez/skills --skill design-to-code -g -a claude-code -a codex -y"
         ]
     );
     let copy = lines(pack, pack.methods[1], Action::Install, &places);

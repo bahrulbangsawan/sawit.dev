@@ -110,6 +110,93 @@ fn what_a_folder_has_is_read_from_disk() {
     assert_eq!(status("cloudflare"), Status::Partial { have: 1, of: 19 });
 }
 
+/// Factory Droid shares ~/.agents/skills, where the skills CLI installs it (`-a droid` with
+/// `-g`); its own ~/.factory/skills, which it reads too, is a target of its own only when it
+/// exists, so skills there (copies, older installs) are still found and removed.
+#[test]
+fn factory_droid_shares_the_agents_folder_and_keeps_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = dir.path();
+    let clients = || {
+        vec![
+            client(Client::ClaudeCode, None),
+            client(Client::FactoryDroid, None),
+            client(Client::Codex, None),
+        ]
+    };
+    let targets = targets_for(h, clients());
+    let labels: Vec<&str> = targets.iter().map(|t| t.label.as_str()).collect();
+    assert_eq!(labels, ["Claude Code", "Codex, Factory Droid"]);
+    assert_eq!(targets[1].dir, h.join(".agents/skills"));
+    // The CLI writes the shared folder for either name.
+    assert_eq!(targets[1].cli_agent, Some("codex"));
+    // Droid alone: the shared folder with Droid's own name for the CLI.
+    let alone = targets_for(h, vec![client(Client::FactoryDroid, None)]);
+    assert_eq!(
+        (alone[0].label.as_str(), alone[0].cli_agent),
+        ("Factory Droid", Some("droid"))
+    );
+    // Its own folder, once there.
+    let skill = h.join(".factory/skills/design-to-code");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "---\nname: design-to-code\n---\n").unwrap();
+    let targets = targets_for(h, clients());
+    let own = targets.last().unwrap();
+    assert_eq!(own.label, "Factory Droid (own folder)");
+    assert_eq!(
+        (own.dir.clone(), own.cli_agent),
+        (h.join(".factory/skills"), None)
+    );
+    let installed = read_installed(own);
+    let pack = get("design-to-code").unwrap();
+    assert_eq!(
+        status(pack, &installed),
+        Status::Installed { plugin: false }
+    );
+    // Removing takes it out of that folder; installing there copies (the CLI can't).
+    let env = Env {
+        home: h.to_path_buf(),
+        ..env()
+    };
+    assert_eq!(
+        script(
+            pack,
+            pack.methods[0],
+            Action::Remove,
+            &[(own, &installed)],
+            crate::package_manager::PackageManager::Npm,
+            &env
+        )
+        .unwrap(),
+        ["rm -rf \"$HOME/.factory/skills/design-to-code\""]
+    );
+    assert!(
+        script(
+            pack,
+            pack.methods[0],
+            Action::Install,
+            &[(own, &Installed::default())],
+            crate::package_manager::PackageManager::Npm,
+            &env
+        )
+        .is_err()
+    );
+    assert!(
+        script(
+            pack,
+            pack.methods[1],
+            Action::Install,
+            &[(own, &Installed::default())],
+            crate::package_manager::PackageManager::Npm,
+            &env
+        )
+        .is_ok()
+    );
+    // Without Droid, the folder isn't offered.
+    let without = targets_for(h, vec![client(Client::ClaudeCode, None)]);
+    assert!(without.iter().all(|t| t.dir != h.join(".factory/skills")));
+}
+
 #[test]
 fn agents_are_found_by_label_agent_or_folder() {
     let mut work = claude(Some("/Users/me/.claude-work"));

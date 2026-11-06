@@ -46,7 +46,11 @@ fn skills_folder(client: Client) -> Option<(&'static str, &'static str)> {
         }
         Client::OpenCode => (".config/opencode/skills", "opencode"),
         Client::Amp => (".config/agents/skills", "amp"),
-        Client::FactoryDroid => (".factory/skills", "droid"),
+        // The skills CLI's global install for Droid is the shared ~/.agents/skills (Droid is one of
+        // its "universal" agents: its `globalSkillsDir` ~/.factory/skills is never used), which
+        // Droid reads as its personal compatibility folder (docs.factory.ai/cli/configuration/
+        // skills). Its own ~/.factory/skills is a target of its own when it exists.
+        Client::FactoryDroid => (".agents/skills", "droid"),
         Client::Kiro => (".kiro/skills", "kiro-cli"),
         Client::Goose => (".config/goose/skills", "goose"),
         Client::Windsurf => (".codeium/windsurf/skills", "windsurf"),
@@ -138,11 +142,23 @@ pub fn targets_for(home: &Path, clients: Vec<mcp_clients::Target>) -> Vec<Target
     if home.join(".codex/skills").is_dir() {
         add(None, ".codex/skills", None);
     }
+    // Droid's own folder, which Droid reads too, and where copies (and installs before the
+    // skills CLI moved Droid to the shared folder) live: found, removed from, copied into; the
+    // skills CLI doesn't write it.
+    let droid = clients
+        .iter()
+        .any(|t| t.client == Client::FactoryDroid && t.profile_dir.is_none());
+    if droid && home.join(".factory/skills").is_dir() {
+        add(None, ".factory/skills", None);
+    }
     for t in out.iter_mut().filter(|t| t.label.is_empty()) {
         let names: Vec<&str> = t.clients.iter().map(|c| c.name()).collect();
         t.label = if names.is_empty() {
             match t.dir.strip_prefix(home) {
                 Ok(rest) if rest == Path::new(".codex/skills") => "Codex (older folder)".into(),
+                Ok(rest) if rest == Path::new(".factory/skills") => {
+                    "Factory Droid (own folder)".into()
+                }
                 _ => "Shared agents folder".into(),
             }
         } else {
