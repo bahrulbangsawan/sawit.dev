@@ -1,6 +1,6 @@
 //! The bar over a selected screen, in the context bar's place: Preview, Export HTML, Export
 //! React, and Send to Agent…, a menu of the coding agents on this Mac that Sawit can start with a
-//! prompt, and Copy Prompt. The downloads ask where to save, starting in the project's folder.
+//! prompt, Copy Prompt and Reveal Handoff Folder. The downloads ask where to save, starting in the project's folder.
 
 use figcraft_doc::NodeId;
 use gpui_kit::component::button::*;
@@ -12,6 +12,7 @@ use sawit_board::frame_code;
 use sawit_board::screens::{self, export};
 use sawit_core::terminal::AgentKind;
 
+use super::handoff::SendTo;
 use crate::board::BoardView;
 use crate::board::toolbar::{self, divider};
 
@@ -68,7 +69,9 @@ pub(in crate::board) fn render_screen_bar(
         .small()
         .label("Send to Agent…")
         .dropdown_caret(true)
-        .dropdown_menu(move |menu: PopupMenu, _, _| agents_menu(menu, frame, &agents, &to_agent));
+        .dropdown_menu(move |menu: PopupMenu, _, _| {
+            agents_menu(menu, &[frame], &agents, &to_agent)
+        });
     Some(
         h_flex()
             .id("screen-bar")
@@ -125,13 +128,22 @@ pub(in crate::board) fn export_button(
         })
 }
 
-/// Send to Agent's menu: each coding agent found, then Copy Prompt.
-fn agents_menu(
+/// Send to Agent's menu for `frames` (one, or a flow): each coding agent found, then Copy Prompt
+/// and Reveal Handoff Folder.
+pub(in crate::board) fn agents_menu(
     mut menu: PopupMenu,
-    frame: NodeId,
+    frames: &[NodeId],
     agents: &Option<Vec<AgentKind>>,
     view: &WeakEntity<BoardView>,
 ) -> PopupMenu {
+    let send = |to: SendTo| {
+        let (frames, view) = (frames.to_vec(), view.clone());
+        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            let _ = view.update(cx, |view, cx| {
+                view.send_frames(frames.clone(), to, window, cx)
+            });
+        }
+    };
     match agents {
         None => menu = menu.item(PopupMenuItem::new(LOOKING).disabled(true)),
         Some(agents) if agents.is_empty() => {
@@ -140,27 +152,23 @@ fn agents_menu(
         Some(agents) => {
             menu = menu.label("Build it in this project with");
             for kind in agents {
-                let (kind, view) = (*kind, view.clone());
-                let item = PopupMenuItem::new(kind.name()).on_click(move |_, window, cx| {
-                    let _ = view.update(cx, |view, cx| {
-                        view.send_screen(frame, Some(kind), window, cx)
-                    });
-                });
+                let item = PopupMenuItem::new(kind.name()).on_click(send(SendTo::Agent(*kind)));
                 menu = menu.item(item);
             }
         }
     }
-    let view = view.clone();
-    menu.separator().item(
-        PopupMenuItem::new("Copy Prompt").on_click(move |_, window, cx| {
-            let _ = view.update(cx, |view, cx| view.send_screen(frame, None, window, cx));
-        }),
-    )
+    menu.separator()
+        .item(PopupMenuItem::new("Copy Prompt").on_click(send(SendTo::CopyPrompt)))
+        .item(PopupMenuItem::new("Reveal Handoff Folder").on_click(send(SendTo::Reveal)))
 }
 
 impl BoardView {
     /// Looks for the coding agents on this Mac once, off the UI thread.
     pub(in crate::board) fn find_agents(&mut self, cx: &mut Context<Self>) {
+        // Without the runtime (a canvas in a test) there is nothing to look with.
+        if !cx.has_global::<crate::rt::Rt>() {
+            return;
+        }
         let ui = &mut self.screen_ui;
         if ui.agents.is_some() || std::mem::replace(&mut ui.finding_agents, true) {
             return;

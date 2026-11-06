@@ -127,8 +127,8 @@ fn context_menu_labels_follow_the_selection() {
     assert_eq!(labels(&board).1, "Unlock");
 }
 
-/// A frame selected alone exports as code: Export HTML… and Export React… after Copy as, and File
-/// ▸ Export as HTML… named for it. A sticky doesn't.
+/// A frame selected alone exports as code: Export HTML… and Export React… after Copy as, then
+/// Send to Agent, and File ▸ Export as HTML… named for it. A sticky has none of them.
 #[test]
 fn a_frame_exports_as_code() {
     let mut board = crate::BoardDoc::new_board("Canvas").unwrap();
@@ -142,10 +142,27 @@ fn a_frame_exports_as_code() {
     board.session.set_selection(vec![id]);
     let menu = context_menu(&board.session);
     let shown = ids(&menu);
+    let at = shown
+        .iter()
+        .position(|id| *id == "sawit.exportHtml")
+        .expect("Export HTML…");
     assert_eq!(
-        shown[shown.len() - 2..],
-        ["sawit.exportHtml", "sawit.exportReact"],
+        shown[at..at + 3],
+        [
+            "sawit.exportHtml",
+            "sawit.exportReact",
+            "sawit.sendTo.claude-code"
+        ],
         "{shown:?}"
+    );
+    assert!(
+        shown.ends_with(&["sawit.copyHandoffPrompt", "sawit.revealHandoff"]),
+        "{shown:?}"
+    );
+    assert_eq!(
+        children_of(&menu, "Send to Agent").len(),
+        7,
+        "four agents, a line, two more"
     );
     assert_eq!(label_of(&menu, "sawit.exportHtml"), "Export HTML…");
     let main = main_menu(&board.session);

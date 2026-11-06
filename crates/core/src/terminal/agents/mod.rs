@@ -8,11 +8,13 @@
 mod command;
 mod known;
 mod process;
+mod prompted;
 
 pub use command::command_name;
 use command::{by_command, by_install_path, by_package, is_launcher, launched};
 use known::{KNOWN, Known};
 pub use process::{ProcessArgs, parse_procargs, process_args, process_name};
+pub use prompted::{prompt_args, start_with_prompt};
 
 /// A coding agent a terminal can run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -69,6 +69,7 @@ mod elements;
 mod export;
 mod files;
 mod gesture;
+mod handoff;
 mod input_ops;
 mod refusal;
 mod replace;
@@ -89,7 +90,7 @@ use replace::replace;
 pub use diagram::{PreparedDiagram, prepare_diagram, run_prepared};
 pub use files::{engine_name, is_canvas_file, is_sawit_file};
 pub use routes::{STEPS as ROUTE_STEPS, viewports as route_viewports};
-pub use screen::{SCREEN_SIZE, export_with_pictures};
+pub use screen::{SCREEN_SIZE, export_with_pictures, with_pictures};
 pub use work::{PROGRESS_UNSHOWN, WORK_SIZE, agent_refusal, work_frame, work_of, work_steps};
 
 // The document's side of the commands Sawit carries out itself (spec, "Menu policy": UI-handled
@@ -197,6 +198,9 @@ const BATCH: &str = "command.batch";
 /// - `frame_code` (`{id, format?, component?, css_file?}`) answers an artboard (a frame of
 ///   layers, by id or name) as HTML or as a React component and its CSS module, and changes
 ///   nothing ([`code`], [`crate::frame_code`]).
+/// - `handoff` (`{ids? | work? | screen?, dir, pictures?}`) writes Send to Agent's folder for
+///   screens and artboards (one, or a flow) and answers its files and prompt ([`handoff`],
+///   [`crate::handoff`]).
 /// - `checks` (`{work?, frame?, findings?}`) answers the design standard's machine checks of a
 ///   frame, `{ok, frame, findings}`, or the `findings` given (a screen's), and changes nothing
 ///   ([`checks`], [`crate::checks`]).
@@ -236,6 +240,7 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         Some("screen") => screen::screen(board, op),
         Some("checks") => checks::checks(board, op),
         Some("frame_code") => code::frame_code(board, op),
+        Some("handoff") => handoff::handoff(board, op),
         Some("routes") => routes::routes(board, op),
         _ => work::in_work(board, op, run_named),
     }

@@ -30,7 +30,10 @@ use figcraft_engine::catalog::{MENU, SEP};
 use figcraft_engine::cmd::view::checked;
 use figcraft_engine::keymap::{self, Platform};
 
-use crate::policy::{EXPORT_HTML, EXPORT_REACT, SAWIT_COMMANDS, is_hidden};
+use crate::policy::{
+    COPY_HANDOFF_PROMPT, EXPORT_HTML, EXPORT_REACT, REVEAL_HANDOFF, SAWIT_COMMANDS, SEND_TO,
+    is_hidden,
+};
 use crate::shortcuts::owned_by_sawit;
 
 mod enabled;
@@ -187,7 +190,7 @@ pub fn context_menu(s: &Session) -> Vec<MenuNode> {
         }],
         commands(s, &[("select.all", "Select all")]),
     ];
-    let groups = groups.into_iter().chain(exports(s));
+    let groups = groups.into_iter().chain(exports(s)).chain(send_to(s));
     let mut menu = Vec::new();
     for group in groups {
         if !menu.is_empty() {
@@ -279,6 +282,44 @@ fn exports(s: &Session) -> Option<Vec<MenuNode>> {
             ],
         )
     })
+}
+
+/// The context menu's Send to Agent submenu, for screens and artboards selected (one, or a flow):
+/// each coding agent, Copy Prompt and Reveal Handoff Folder. The app leaves out the agents it
+/// doesn't find on this Mac.
+fn send_to(s: &Session) -> Option<Vec<MenuNode>> {
+    let ds = s.ds().ok()?;
+    if !enabled::handoff_ready(&ds.doc, &ds.selection) {
+        return None;
+    }
+    let named: Vec<(&'static str, &'static str)> = SEND_TO
+        .iter()
+        .filter_map(|(id, kind)| Some((*id, agents_name(kind)?)))
+        .collect();
+    let mut children = commands(s, &named);
+    children.push(MenuNode::Separator);
+    children.extend(commands(
+        s,
+        &[
+            (COPY_HANDOFF_PROMPT, "Copy Prompt"),
+            (REVEAL_HANDOFF, "Reveal Handoff Folder"),
+        ],
+    ));
+    let label = match ds.selection.len() {
+        1 => "Send to Agent",
+        _ => "Send Flow to Agent",
+    };
+    Some(vec![MenuNode::Submenu {
+        label: label.into(),
+        children,
+    }])
+}
+
+/// The name of the coding agent whose id is `kind` (Claude Code for `claude-code`).
+fn agents_name(kind: &str) -> Option<&'static str> {
+    sawit_core::terminal::AgentKind::all()
+        .find(|k| k.id() == kind)
+        .map(|k| k.name())
 }
 
 /// File ▸ Export as HTML… and as React… with the selection's name: Export “Settings” as HTML….

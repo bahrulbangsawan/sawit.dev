@@ -1,5 +1,7 @@
 //! The bar over a selected artboard (a frame of layers right on its page), in the screen bar's
-//! place and style: Export HTML and Export React.
+//! place and style: Export HTML, Export React and Send to Agent…. Over several frames selected
+//! (screens or artboards) it holds Send Flow to Agent…, which hands them off as one flow, in
+//! canvas order.
 
 use figcraft_doc::NodeId;
 use gpui_kit::component::*;
@@ -7,13 +9,17 @@ use gpui_kit::*;
 use sawit_board::context_bar as model;
 use sawit_board::{frame_code, screens};
 
-use super::bar::export_button;
-use crate::board::BoardView;
-use crate::board::toolbar;
+use gpui_kit::component::button::*;
+use gpui_kit::component::menu::DropdownMenu as _;
 
-/// The bar's height and width, and the room above the frame.
+use super::bar::{agents_menu, export_button};
+use crate::board::BoardView;
+use crate::board::toolbar::{self, divider};
+
+/// The bar's height and widths (one frame, a flow), and the room above the frames.
 const HEIGHT: f64 = 40.;
-const WIDTH: f64 = 220.;
+const WIDTH: f64 = 360.;
+const FLOW_WIDTH: f64 = 220.;
 const ABOVE: f64 = 34.;
 
 impl BoardView {
@@ -37,7 +43,8 @@ impl BoardView {
         match selection.as_slice() {
             [one] if screens::screen_of(doc.node(*one)?).is_some() || web(one) => None,
             [_] => Some(selection),
-            _ => None,
+            _ if selection.iter().any(web) => None,
+            _ => Some(selection),
         }
     }
 }
@@ -69,15 +76,33 @@ pub(in crate::board) fn render_frame_bar(
     let (x1, _) = ds.view.page_to_screen(bx1, by0);
     let under = f64::from(toolbar::BOTTOM + toolbar::HEIGHT);
     let canvas = (ds.view.vw, ds.view.vh - under);
-    let width = WIDTH.min(canvas.0 - 2.0 * model::MARGIN).max(0.0);
+    let flow = frames.len() > 1;
+    let width = if flow { FLOW_WIDTH } else { WIDTH }
+        .min(canvas.0 - 2.0 * model::MARGIN)
+        .max(0.0);
     let (x, y) = model::clamp_anchor(
         ((x0 + x1) / 2.0, y0 - ABOVE - HEIGHT),
         (width, HEIGHT),
         canvas,
     );
+    view.find_agents(cx);
+    let agents = view.screen_ui.agents.clone();
     let this = cx.entity().downgrade();
     let theme = cx.theme();
-    let bar = h_flex()
+    let line = theme.border;
+    let label = if flow {
+        "Send Flow to Agent…"
+    } else {
+        "Send to Agent…"
+    };
+    let (to_agent, targets) = (this.clone(), frames.clone());
+    let send = Button::new("frame-bar-send")
+        .ghost()
+        .small()
+        .label(label)
+        .dropdown_caret(true)
+        .dropdown_menu(move |menu, _, _| agents_menu(menu, &targets, &agents, &to_agent));
+    let mut bar = h_flex()
         .id("frame-bar")
         .debug_selector(|| "frame-bar".into())
         .occlude()
@@ -95,9 +120,11 @@ pub(in crate::board) fn render_frame_bar(
         .text_color(theme.popover_foreground)
         .shadow_md()
         .overflow_x_scroll();
-    let frame = frames[0];
-    Some(
-        bar.child(export_button(this.clone(), "frame-bar-html", frame, false))
-            .child(export_button(this, "frame-bar-react", frame, true)),
-    )
+    if let [frame] = frames.as_slice() {
+        bar = bar
+            .child(export_button(this.clone(), "frame-bar-html", *frame, false))
+            .child(export_button(this, "frame-bar-react", *frame, true))
+            .child(divider(line));
+    }
+    Some(bar.child(send))
 }

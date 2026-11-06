@@ -158,6 +158,7 @@ fn every_tool_is_routed() {
         "canvas_screen_write",
         "canvas_screen_get",
         "canvas_screen_export",
+        "canvas_handoff",
         // browser
         "browser_navigate",
         "browser_snapshot",

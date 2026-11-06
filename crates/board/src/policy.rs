@@ -119,6 +119,24 @@ pub const SAWIT_COMMANDS: &[(&str, &str, &str, &str)] = &[
 /// which the app carries out; its keys are the workspace's (⌃⌘3).
 pub const MAXIMIZE: &str = "sawit.maximize";
 
+/// Send to Agent… for the screens and artboards selected (several hand off as one flow): one
+/// command for each coding agent Sawit can start with a prompt (the agent's id after the dot),
+/// Copy Prompt and Reveal Handoff Folder. Sawit's own, which the app carries out
+/// (`crate::handoff`).
+pub const SEND_TO: &[(&str, &str)] = &[
+    ("sawit.sendTo.claude-code", "claude-code"),
+    ("sawit.sendTo.codex", "codex"),
+    ("sawit.sendTo.gemini", "gemini"),
+    ("sawit.sendTo.opencode", "opencode"),
+];
+pub const COPY_HANDOFF_PROMPT: &str = "sawit.copyHandoffPrompt";
+pub const REVEAL_HANDOFF: &str = "sawit.revealHandoff";
+
+/// Whether `id` is one of the handoff's commands ([`SEND_TO`], Copy Prompt, Reveal).
+pub fn is_handoff(id: &str) -> bool {
+    SEND_TO.iter().any(|(own, _)| *own == id) || id == COPY_HANDOFF_PROMPT || id == REVEAL_HANDOFF
+}
+
 /// Export HTML and Export React of the screen or the artboard selected alone: Sawit's own, which
 /// the app carries out (`crate::frame_code`, `crate::screens::export`).
 pub const EXPORT_HTML: &str = "sawit.exportHtml";
@@ -163,7 +181,7 @@ pub fn is_hidden(id: &str) -> bool {
 /// Whether Sawit carries out command `id` itself instead of running it in the engine: one of
 /// [`UI_COMMANDS`], or of Sawit's own ([`SAWIT_COMMANDS`]).
 pub fn is_ui(id: &str) -> bool {
-    UI_COMMANDS.contains(&id) || SAWIT_COMMANDS.iter().any(|(own, ..)| *own == id)
+    UI_COMMANDS.contains(&id) || SAWIT_COMMANDS.iter().any(|(own, ..)| *own == id) || is_handoff(id)
 }
 
 /// Whether command `id` copies or pastes, which Sawit carries out around the engine

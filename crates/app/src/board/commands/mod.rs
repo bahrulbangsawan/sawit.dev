@@ -16,6 +16,8 @@
 //!   live frames (`super::routes`).
 //! - **Export as HTML…** and **Export as React…**, Sawit's own, write the screen or the artboard
 //!   selected alone as code, where the user says (`BoardView::export_code`).
+//! - **Send to Agent** (one agent each), **Copy Prompt** and **Reveal Handoff Folder**, Sawit's
+//!   own, hand the screens and artboards selected off to a coding agent (`super::screens`).
 //!
 //! A dialog that is cancelled changes nothing and says nothing. Whatever fails says why in a
 //! toast. Save, Save as and Copy as say so when they go through; an export shows its first file
@@ -71,6 +73,27 @@ pub(super) fn run_ui(
         }
         sawit_board::policy::ADD_ROUTES => view.open_routes_dialog(cx),
         sawit_board::policy::MAXIMIZE => cx.emit(super::ToggleCanvasMaximize),
+        _ if sawit_board::policy::is_handoff(id) => {
+            use super::screens::SendTo;
+            let frames = view
+                .board()
+                .and_then(|b| b.session.ds().ok())
+                .map(|ds| ds.selection.clone());
+            let agent = sawit_board::policy::SEND_TO
+                .iter()
+                .find(|(own, _)| *own == id);
+            let agent = agent.and_then(|(_, kind)| {
+                sawit_core::terminal::AgentKind::all().find(|k| k.id() == *kind)
+            });
+            let to = match (agent, id) {
+                (Some(kind), _) => SendTo::Agent(kind),
+                (None, sawit_board::policy::REVEAL_HANDOFF) => SendTo::Reveal,
+                (None, _) => SendTo::CopyPrompt,
+            };
+            if let Some(frames) = frames.filter(|f| !f.is_empty()) {
+                view.send_frames(frames, to, window, cx);
+            }
+        }
         sawit_board::policy::EXPORT_HTML | sawit_board::policy::EXPORT_REACT => {
             let selected = view
                 .board()

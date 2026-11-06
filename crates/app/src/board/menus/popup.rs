@@ -28,6 +28,9 @@ impl BoardView {
                     self.menus.context_menu_at = None;
                     return None;
                 }
+                // Send to Agent lists the coding agents found on this Mac.
+                self.find_agents(cx);
+                let nodes = only_agents_found(nodes, self.screen_ui.agents.as_deref());
                 let menu = to_popup(&nodes, cx.entity().downgrade(), window, cx);
                 let closed =
                     cx.subscribe_in(&menu, window, |view, menu, _: &DismissEvent, _, cx| {
@@ -174,4 +177,32 @@ fn menu_item(
     item.on_click(move |_, window, cx| {
         let _ = view.update(cx, |view, cx| view.run_menu(id, window, cx));
     })
+}
+
+/// `nodes` without the Send to Agent items of agents not in `found` (all of them until the
+/// agents have been looked for).
+fn only_agents_found(
+    nodes: Vec<MenuNode>,
+    found: Option<&[sawit_core::terminal::AgentKind]>,
+) -> Vec<MenuNode> {
+    let Some(found) = found else {
+        return nodes;
+    };
+    let kept = |id: &str| {
+        let sends = sawit_board::policy::SEND_TO
+            .iter()
+            .find(|(own, _)| *own == id);
+        sends.is_none_or(|(_, kind)| found.iter().any(|k| k.id() == *kind))
+    };
+    nodes
+        .into_iter()
+        .filter_map(|node| match node {
+            MenuNode::Item { id, .. } if !kept(id) => None,
+            MenuNode::Submenu { label, children } => Some(MenuNode::Submenu {
+                label,
+                children: only_agents_found(children, Some(found)),
+            }),
+            other => Some(other),
+        })
+        .collect()
 }

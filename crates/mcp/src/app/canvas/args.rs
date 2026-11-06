@@ -265,6 +265,27 @@ pub struct CanvasScreenExportArgs {
     pub project: Option<String>,
 }
 
+/// `canvas_handoff`'s arguments: what to hand off, and to which agent.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasHandoffArgs {
+    #[schemars(
+        description = "The frames to hand off, by id or name: one (\"Settings / Mobile\"), or several as a flow ([\"Cart\", \"Checkout\"], handed off in canvas order). Screens and artboards both"
+    )]
+    pub id: Option<Value>,
+    #[schemars(description = "Or the work canvas_begin answered: the frame it made")]
+    pub work: Option<String>,
+    #[schemars(description = "Or a screen by its name (\"pricing-page\" or \"Pricing page\")")]
+    pub screen: Option<String>,
+    #[schemars(
+        description = "A coding agent to start with the prompt, in a new terminal tab in the project (the app must be running): claude-code, codex, gemini or opencode. Without it, only the folder is written and the prompt answered"
+    )]
+    pub agent: Option<String>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
 /// `canvas_add_routes`'s arguments: which dev server, which of its routes, at which viewports.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasAddRoutesArgs {

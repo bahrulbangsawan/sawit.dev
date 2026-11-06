@@ -159,6 +159,9 @@ pub fn applies(s: &Session, id: &str) -> bool {
         "edit.undo" => undo > 0 || editing_text,
         "edit.redo" => redo > 0,
         "vector.deleteHeal" => ds.is_some_and(|ds| ds.vector_edit.is_some()),
+        _ if crate::policy::is_handoff(id) => {
+            ds.is_some_and(|ds| handoff_ready(&ds.doc, &ds.selection))
+        }
         crate::policy::EXPORT_HTML | crate::policy::EXPORT_REACT => {
             ds.is_some_and(|ds| exportable(&ds.doc, &ds.selection))
         }
@@ -175,4 +178,12 @@ pub fn exportable(doc: &figcraft_doc::Document, selection: &[figcraft_doc::NodeI
         [one] => crate::frame_code::is_artboard(doc, *one),
         _ => false,
     }
+}
+
+/// Whether `selection` hands off: screens and artboards only, one or more (a flow).
+pub fn handoff_ready(doc: &figcraft_doc::Document, selection: &[figcraft_doc::NodeId]) -> bool {
+    !selection.is_empty()
+        && selection
+            .iter()
+            .all(|id| crate::frame_code::is_artboard(doc, *id))
 }

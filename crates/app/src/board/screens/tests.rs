@@ -1,4 +1,4 @@
-//! Send to Agent's prompt and command, Preview's sizes, a texture's PNG, and which screens a
+//! Send to Agent's command (its folder and prompt: `sawit_board::handoff`'s tests), Preview's sizes, a texture's PNG, and which screens a
 //! change on disk touches.
 
 use std::path::{Path, PathBuf};
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::RenderImage;
 use sawit_core::terminal::AgentKind;
 
-use super::handoff::{Attached, STANDARD, agent_command, prompt, write_handoff};
+use super::handoff::agent_command;
 use super::pictures::png_of;
 use super::preview::{BAR, Preview, Size};
 use crate::board::web::screens_of;
@@ -30,65 +30,6 @@ fn send_to_agent_runs_the_agents_cli_with_the_prompt() {
         format!("gemini -i {read}")
     );
     assert_eq!(agent_command(AgentKind::Amp, file), None);
-}
-
-/// The prompt asks for the screen in the project's own stack, names each file it has, and the
-/// design standard.
-#[test]
-fn the_prompt_names_the_screen_its_files_and_the_standard() {
-    let files = Attached {
-        html: Some(PathBuf::from("/h/sign-in.html")),
-        tsx: Some(PathBuf::from("/h/SignIn.tsx")),
-        css: Some(PathBuf::from("/h/SignIn.css")),
-        png: Some(PathBuf::from("/h/sign-in.png")),
-        folder: PathBuf::from("/p/.nyawit/screens/sign-in"),
-    };
-    let text = prompt("Sign in", "sign-in", &files);
-    for part in [
-        "Build the screen \"Sign in\" in this project, in its own stack",
-        "/h/sign-in.html",
-        "/h/SignIn.tsx with /h/SignIn.css",
-        "/h/sign-in.png",
-        "/p/.nyawit/screens/sign-in",
-        STANDARD,
-        "sawit-canvas-design",
-    ] {
-        assert!(text.contains(part), "{part} in:\n{text}");
-    }
-    let bare = prompt("Sign in", "sign-in", &Attached::default());
-    assert!(!bare.contains("React component") && !bare.contains("A picture"));
-}
-
-/// The handoff writes the page in one file, the React version and the prompt beside them.
-#[test]
-fn the_handoff_writes_the_screens_files_and_prompt() {
-    let dir = tempfile::tempdir().unwrap();
-    let folder = dir.path().join("screens/sign-in");
-    std::fs::create_dir_all(folder.join("css")).unwrap();
-    std::fs::write(
-        folder.join("index.html"),
-        "<html><head><link rel=\"stylesheet\" href=\"css/a.css\"></head>\
-         <body><h1 class=\"t\">Hi</h1></body></html>",
-    )
-    .unwrap();
-    std::fs::write(folder.join("css/a.css"), ".t{color:red}").unwrap();
-    let out = dir.path().join("handoff/sign-in");
-    let handoff = write_handoff(&folder, "sign-in", "Sign in", &out, Some(vec![1, 2, 3])).unwrap();
-    assert_eq!(handoff.prompt_file, out.join("prompt.md"));
-    for file in [
-        "sign-in.html",
-        "SignIn.tsx",
-        "SignIn.css",
-        "sign-in.png",
-        "prompt.md",
-    ] {
-        assert!(out.join(file).is_file(), "{file}");
-    }
-    assert!(
-        handoff
-            .prompt
-            .contains(&out.join("SignIn.tsx").display().to_string())
-    );
 }
 
 fn preview(size: Size, rotated: bool) -> Preview {

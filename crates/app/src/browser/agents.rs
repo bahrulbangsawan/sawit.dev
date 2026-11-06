@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::*;
-use sawit_core::terminal::{AgentKind, PaneId, shell_quote};
+use sawit_core::terminal::{AgentKind, PaneId};
 
 use crate::terminal::RunningAgent;
 
@@ -19,23 +19,10 @@ pub type AgentSource = Rc<dyn Fn(&App) -> Vec<RunningAgent>>;
 /// and the user can answer its questions and go on in the same chat.
 pub const PRINT_MODE: bool = false;
 
-/// The arguments before the prompt that start the CLI `id` with a first message, in print mode
-/// or not; `None` for a CLI whose way of taking one isn't known. Each CLI's `--help` and
-/// reference say so: Claude Code's prompt argument starts an interactive session (`-p` prints);
-/// so does Codex's (`codex exec` runs without one); Gemini CLI's `-i` runs the prompt and stays
-/// interactive (`-p` doesn't); OpenCode's TUI takes `--prompt` (`opencode run` doesn't stay).
+/// The arguments before the prompt that start the CLI `id` with a first message
+/// ([`sawit_core::terminal::prompt_args`]).
 fn prompt_args(id: &str, print: bool) -> Option<&'static [&'static str]> {
-    Some(match (id, print) {
-        ("claude-code", false) => &[],
-        ("claude-code", true) => &["-p"],
-        ("codex", false) => &[],
-        ("codex", true) => &["exec"],
-        ("gemini", false) => &["-i"],
-        ("gemini", true) => &["-p"],
-        ("opencode", false) => &["--prompt"],
-        ("opencode", true) => &["run"],
-        _ => return None,
-    })
+    sawit_core::terminal::prompt_args(id, print)
 }
 
 /// Whether Open agent knows how to start `kind` with the notes.
@@ -53,10 +40,7 @@ pub fn open_command(kind: AgentKind, file: &Path) -> Option<String> {
 }
 
 fn open_command_with(kind: AgentKind, file: &Path, print: bool) -> Option<String> {
-    let mut words = vec![kind.executable().to_string()];
-    words.extend(prompt_args(kind.id(), print)?.iter().map(|a| a.to_string()));
-    words.push(format!("\"$(cat -- {})\"", shell_quote(file)));
-    Some(words.join(" "))
+    sawit_core::terminal::start_with_prompt(kind, file, print)
 }
 
 /// The agent CLIs on this Mac that Open agent can start, found where the Dev Tools page finds

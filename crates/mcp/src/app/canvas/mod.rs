@@ -8,6 +8,7 @@ pub(crate) mod design;
 mod dispatch;
 mod files;
 mod guide;
+mod handoff;
 mod routes;
 mod screens;
 mod stored;
@@ -24,9 +25,9 @@ use serde_json::{Value, json};
 
 pub use args::{
     CanvasAddRoutesArgs, CanvasBeginArgs, CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs,
-    CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasLoadArgs, CanvasMermaidArgs,
-    CanvasProgressArgs, CanvasScreenExportArgs, CanvasScreenGetArgs, CanvasScreenWriteArgs,
-    CanvasTargetArgs, CanvasUpdateArgs,
+    CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasHandoffArgs, CanvasLoadArgs,
+    CanvasMermaidArgs, CanvasProgressArgs, CanvasScreenExportArgs, CanvasScreenGetArgs,
+    CanvasScreenWriteArgs, CanvasTargetArgs, CanvasUpdateArgs,
 };
 use dispatch::{command_list, in_work};
 use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
@@ -358,6 +359,13 @@ impl Sawit {
         Parameters(a): Parameters<CanvasScreenExportArgs>,
     ) -> CallToolResult {
         self.canvas_screen_export_tool(a).await
+    }
+
+    #[tool(
+        description = "Hand a design off to a coding agent, as Send to Agent… does in the app: a screen, an artboard (a frame of layers) or several as a flow, by `id`, `work` or `screen`. Writes a folder named for it in .nyawit/handoff/: design.png (the frames at 2×), each frame's HTML and React, spec.md (sizes and breakpoints, layer tree, tokens, components and variants, copy, states drawn, prototype links) and prompt.md, which asks the agent to build it in the project's own stack and components, following Sawit's design standard, and to check it against design.png in Sawit's browser. Answers the folder, the files and the prompt. With `agent` and the app running, that agent's CLI opens in a new terminal tab in the project with the prompt as its first message (`command` is the line it ran). Works with the app closed too (no screen pictures then)"
+    )]
+    async fn canvas_handoff(&self, Parameters(a): Parameters<CanvasHandoffArgs>) -> CallToolResult {
+        self.canvas_handoff_tool(a).await
     }
 
     #[tool(

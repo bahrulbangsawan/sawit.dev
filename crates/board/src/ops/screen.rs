@@ -140,19 +140,25 @@ fn describe(doc: &Document, found: &Found) -> Value {
 /// frame of `pictures` is filled with its picture (a PNG): the screens' latest snapshots, in
 /// place of their empty frames. `board` itself, its undo history and its selection don't change.
 pub fn export_with_pictures(board: &BoardDoc, op: &Value, pictures: &[(NodeId, Vec<u8>)]) -> Value {
+    match with_pictures(board, pictures) {
+        Ok(mut copy) => super::run(&mut copy, op),
+        Err(error) => failure(error),
+    }
+}
+
+/// A copy of `board` (its page on show the same) in which each frame of `pictures` is filled with
+/// its picture (a PNG): what exports paint for screens. `board` itself doesn't change.
+pub fn with_pictures(
+    board: &BoardDoc,
+    pictures: &[(NodeId, Vec<u8>)],
+) -> Result<BoardDoc, crate::BoardError> {
     use base64::Engine as _;
-    let copy = (|| {
-        let ds = board.session.ds()?;
-        let mut copy = figcraft_engine::DocState::new((*board.document_itself()?).clone(), None);
-        copy.page = ds.page;
-        let mut session = figcraft_engine::Session::empty();
-        session.docs.push(copy);
-        Ok::<_, crate::BoardError>(BoardDoc { session })
-    })();
-    let mut copy = match copy {
-        Ok(copy) => copy,
-        Err(error) => return failure(error),
-    };
+    let ds = board.session.ds()?;
+    let mut copy = figcraft_engine::DocState::new((*board.document_itself()?).clone(), None);
+    copy.page = ds.page;
+    let mut session = figcraft_engine::Session::empty();
+    session.docs.push(copy);
+    let mut copy = BoardDoc { session };
     for (frame, png) in pictures {
         let data = base64::engine::general_purpose::STANDARD.encode(png);
         let fill = json!({"data": data, "target": frame.0, "mode": "fill"});
@@ -160,5 +166,5 @@ pub fn export_with_pictures(board: &BoardDoc, op: &Value, pictures: &[(NodeId, V
             log::warn!("a screen's picture couldn't go on frame {frame}: {error}");
         }
     }
-    super::run(&mut copy, op)
+    Ok(copy)
 }
