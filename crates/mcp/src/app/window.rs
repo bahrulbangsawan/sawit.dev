@@ -156,7 +156,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Open a page as a tab: canvas (whiteboard and design canvas), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), skills (agent skills installer), changelog, git_graph, github (pull requests, issues and your repositories; while the user isn't signed in to GitHub it shows them the sign-in card, and the reply says to sign in to GitHub in Sawit first), instance (selected PostgreSQL instance), keymap (keymap editor), new_project (stack builder that creates a TypeScript project; stack_create creates one)"
+        description = "Open a page as a tab: canvas (whiteboard and design canvas), browser (web browser agents can drive), mcp (install page), tools (dev tools installer), skills (agent skills installer), changelog, git_graph, github (pull requests, issues and your repositories; while the user isn't signed in to GitHub it shows them the sign-in card, and the reply says to sign in to GitHub in Sawit first), instance (selected PostgreSQL instance), keymap (keymap editor), new_project (stack builder that creates a TypeScript project; stack_create creates one), permissions (what agents may do: Claude Code's rules, Sawit's confirm tools, macOS permissions; list_permissions and edit_permission work without the app), accounts (Agent Accounts: the coding agents' sign-ins)"
     )]
     async fn app_open_page(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
         match variant::<Page>(&a.page, PAGES) {

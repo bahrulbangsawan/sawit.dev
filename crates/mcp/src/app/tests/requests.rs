@@ -23,6 +23,9 @@ fn panel_and_page_names() {
     assert_eq!(variant::<Page>("git_graph", PAGES), Ok(Page::GitGraph));
     assert_eq!(variant::<Page>("keymap", PAGES), Ok(Page::Keymap));
     assert_eq!(variant::<Page>("Skills", PAGES), Ok(Page::Skills));
+    assert_eq!(variant::<Page>("permissions", PAGES), Ok(Page::Permissions));
+    assert_eq!(variant::<Page>("Accounts", PAGES), Ok(Page::Accounts));
+    assert!(PAGES.contains("permissions") && PAGES.contains("accounts"));
     assert_eq!(variant::<Page>("new_project", PAGES), Ok(Page::NewProject));
     assert_eq!(
         variant::<InstanceAction>("Restart", INSTANCE_ACTIONS),

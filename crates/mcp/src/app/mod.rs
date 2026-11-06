@@ -50,7 +50,7 @@ fn variant<T: serde::de::DeserializeOwned>(name: &str, choices: &str) -> Result<
 }
 
 const PANELS: &str = "instances, files, git, database, run, ports, network, prompts, ssh, shell_config (Config Files)";
-const PAGES: &str = "canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap, new_project, permissions";
+const PAGES: &str = "canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap, new_project, permissions, accounts";
 const FILL_PANELS: &str = "terminal, browser, canvas";
 const INSTANCE_ACTIONS: &str = "select, start, stop, restart";
 const SPLIT_DIRECTIONS: &str = "right, down";
