@@ -37,11 +37,13 @@ pub(in crate::board) enum Mark {
         phase: Option<f32>,
         failed: bool,
     },
-    /// An agent's pointer.
+    /// An agent's pointer: which one, its hot spot, and its size (a click's dip).
     Cursor {
         tip: (f64, f64),
         color: Hsla,
         alpha: f32,
+        tool: super::pointer::Tool,
+        scale: f32,
     },
     /// A free pointer's name, beside its tip.
     Pill {
@@ -155,13 +157,28 @@ impl Presence {
             let tip = fanned((x + TIP_FROM_CORNER.0, y + TIP_FROM_CORNER.1), &tips);
             tips.push(tip);
             let color = agent.look.color;
-            marks.push(Mark::Cursor { tip, color, alpha });
+            let since = agent.pressed.map(|p| now.saturating_duration_since(p));
+            let scale = since
+                .filter(|_| !reduce)
+                .map_or(1.0, super::pointer::press_scale);
+            marks.push(Mark::Cursor {
+                tip,
+                color,
+                alpha,
+                tool: agent.tool,
+                scale,
+            });
             let on_row = (agent.work.as_deref())
                 .and_then(|id| self.work(id))
                 .is_some_and(|work| work.page == page && names_agent(work, now));
             let hovered = self.hovered.as_ref() == Some(&agent.look.id);
             if !on_row && (agent.named(now) || hovered) {
-                let label = agent.look.label.clone();
+                // While it works, the pill says what it does: "Header agent · typing".
+                let verb = agent.tool.verb().filter(|_| model::shows_action(idle));
+                let label = match verb {
+                    Some(verb) => format!("{} · {verb}", agent.look.label).into(),
+                    None => agent.look.label.clone(),
+                };
                 marks.push(Mark::Pill {
                     tip,
                     color,

@@ -199,7 +199,9 @@ impl BoardView {
             true => action.doing.clone(),
             false => format!("couldn't finish {}", action.doing),
         };
-        self.agents.saw(look, &doing, now);
+        let agent = self.agents.saw(look, &doing, now);
+        agent.tool = super::pointer::Tool::for_op(op);
+        agent.pressed = ok.then_some(now);
         let page = (self.board()).and_then(|b| b.session.ds().ok().map(|ds| ds.page));
         let changed = match (before, after) {
             (Some(before), Some(after)) if !Arc::ptr_eq(&before, &after) => Some((before, after)),

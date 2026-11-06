@@ -968,9 +968,11 @@ their own cursor.
   client is told apart by its project ("Codex · shop") or numbered ("Claude Code 2"). The name is always there to
   read, so colour is never the only way to tell agents apart. Ops from an older `sawit-mcp`, which doesn't say who
   it is, show as "Agent".
-- **Canvas.** The pointer is small (10 × 14 px) and rests just outside the top-right corner of what the agent works
-  on, so it never covers it: the component it builds, or what an op added or changed. It glides there; the most
-  recent agent is drawn on top. A free pointer's name shows in a pill while the agent works, for 2 s after and when
+- **Canvas.** Each agent's pointer is Sawit's own vector art, the same screen size at every zoom: an arrow, a
+  crosshair for boxes, an I-beam for text, a pen for lines, an arrow with a + for copies, a hand for moves. It rests
+  just outside the top-right corner of what the agent works on, so it never covers it, travels there on a gently
+  curved, eased path (120–450 ms, longer for farther) and dips when it clicks; the most recent agent is drawn on
+  top. It is only painted: never your cursor, never in the way of your clicks. A free pointer's name shows in a pill (with what it does: "Header agent · typing") while the agent works, for 2 s after and when
   you point at it, and is left out where it would cover another.
 - **Components built live.** An agent that begins a component (`canvas_begin`) gets its frame on the canvas at once,
   with a skeleton that gives way as content lands, and a row above it: the component's name and step ("Pricing

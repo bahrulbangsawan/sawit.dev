@@ -1,11 +1,14 @@
 //! Agents on the canvas, as a multiplayer canvas shows its other people, and the components they
 //! build there.
 //!
-//! - **The pointer**: 10 × 14 px in the agent's colour with a 1.5 px white edge, the same size at
-//!   every zoom ([`POINTER`]). It rests just outside the top-right corner of what the agent works
-//!   on: its component's frame, or for an op outside a component, what the op added, changed or
-//!   took off ([`target`](target::target)). It glides there for [`GLIDE`], eased out, and jumps
-//!   under reduced motion. The most recent agent draws on top.
+//! - **The pointer**: Sawit's own set ([`pointer::Tool`]: arrow, crosshair, I-beam, pen, ⌥-copy,
+//!   hand), vectors in the agent's colour with a 1.5 px white edge and a soft shadow, the same size
+//!   at every zoom. It rests just outside the top-right corner of what the agent works on: its
+//!   component's frame, or for an op outside a component, what the op added, changed or took off
+//!   ([`target`](target::target)). It travels there on a gently curved, eased path that takes
+//!   longer the farther it goes (120–450 ms, [`pointer::travel`]), dips when it clicks, and jumps
+//!   under reduced motion. The most recent agent draws on top. They are painted marks only: never
+//!   the system cursor, never hit-tested, never the user's selection, view or keyboard.
 //! - **The name**: the agent's name only. On a component it is on the component's row; a free
 //!   pointer's is a pill beside it ([`labels`]), while the agent is at work and for
 //!   [`NAME_AFTER`] after, and while the user's pointer rests on it. A pill that would cover
@@ -32,6 +35,7 @@ mod labels;
 mod marks;
 mod ops;
 mod paint;
+pub(super) mod pointer;
 mod reveal;
 mod roster;
 mod rows;
@@ -58,8 +62,9 @@ pub(super) use work::Work;
 
 use crate::agents::Look;
 
-/// How long a pointer glides to its new place.
-pub(super) const GLIDE: Duration = Duration::from_millis(180);
+/// How long a pointer glides to its new place at most (a short trip takes less,
+/// [`pointer::trip_time`]).
+pub(super) const GLIDE: Duration = Duration::from_millis(450);
 /// How long the layers a free op touched stay outlined, fading out over the last half.
 const TOUCHED_TIME: Duration = Duration::from_millis(1200);
 /// How long a slow op's placeholder shows before the op runs.
@@ -81,16 +86,6 @@ const EDGE_INSET: f64 = 12.0;
 /// How long after announcing what an agent did outside a component the canvas waits before
 /// announcing that agent's next op.
 const ANNOUNCE_GAP: Duration = Duration::from_secs(2);
-/// The pointer's outline, from its tip (px): 7 × 11, which its 1.5 px white edge makes 10 × 14.
-const POINTER: [(f32, f32); 7] = [
-    (0.0, 0.0),
-    (0.0, 9.6),
-    (2.4, 7.2),
-    (4.1, 11.0),
-    (5.5, 10.3),
-    (3.9, 6.6),
-    (7.0, 6.5),
-];
 /// Where the pointer's tip goes from the corner it rests at (px): just outside it.
 const TIP_FROM_CORNER: (f64, f64) = (3.0, 1.0);
 
@@ -115,6 +110,12 @@ pub(super) struct Agent {
     /// The work its pointer rests on, when its last op was one of a work's: its name is on that
     /// work's row, not on a pill.
     pub work: Option<String>,
+    /// How long its trip to `at` takes, and to which side the path bows.
+    trip: Duration,
+    side: f64,
+    /// The pointer it shows, and when it last clicked (its dip).
+    pub tool: pointer::Tool,
+    pub pressed: Option<Instant>,
     /// The layers a free op of it touched last, as page rectangles on `touched_page`, outlined
     /// until [`TOUCHED_TIME`] after `touched_at`.
     touched: Vec<[f64; 4]>,
@@ -123,14 +124,23 @@ pub(super) struct Agent {
 }
 
 impl Agent {
-    /// Where its pointer is at `now`: on its way from where it was, eased out, or there.
+    /// Where its pointer is at `now`: on its curved way from where it was, or there.
     fn point(&self, now: Instant, reduce: bool) -> Option<(f64, f64)> {
         let to = self.at?.point;
         let Some(from) = self.from.filter(|_| !reduce) else {
             return Some(to);
         };
-        let t = model::glide(now.saturating_duration_since(self.moved), GLIDE);
-        Some((from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t))
+        let elapsed = now.saturating_duration_since(self.moved);
+        if self.trip.is_zero() || elapsed >= self.trip {
+            return Some(to);
+        }
+        let t = elapsed.as_secs_f64() / self.trip.as_secs_f64();
+        Some(pointer::travel(from, to, t, self.side))
+    }
+
+    /// Whether its pointer is still on its way at `now`.
+    fn travelling(&self, now: Instant) -> bool {
+        self.from.is_some() && now.saturating_duration_since(self.moved) < self.trip
     }
 
     /// Whether it did something in the last [`NAME_AFTER`]: its name shows.
@@ -210,6 +220,14 @@ impl Presence {
                     doing: String::new(),
                     seen: now,
                     work: None,
+                    trip: Duration::ZERO,
+                    side: if self.agents.len() % 2 == 0 {
+                        1.0
+                    } else {
+                        -1.0
+                    },
+                    tool: pointer::Tool::Arrow,
+                    pressed: None,
                     touched: Vec::new(),
                     touched_page: None,
                     touched_at: now,
@@ -240,6 +258,9 @@ impl Presence {
             Some(at) if at.page == page => Some(agent.point(now, false).unwrap_or(at.point)),
             _ => None,
         };
+        agent.trip = agent.from.map_or(Duration::ZERO, |from| {
+            pointer::trip_time(from, target.point)
+        });
         agent.at = Some(Spot {
             page,
             point: target.point,
@@ -344,7 +365,12 @@ impl Presence {
     /// Whether something moves at `now`, so the canvas draws the next frame too: a pointer on its
     /// way, an outline or a check fading, a shimmer, text being revealed.
     pub fn animating(&self, now: Instant, reduce: bool) -> bool {
-        let gliding = |a: &Agent| !reduce && now.saturating_duration_since(a.moved) < GLIDE;
+        let gliding = |a: &Agent| {
+            !reduce
+                && (a.travelling(now)
+                    || a.pressed
+                        .is_some_and(|p| now.saturating_duration_since(p) < pointer::PRESS))
+        };
         let touched = |a: &Agent| {
             !a.touched.is_empty() && now.saturating_duration_since(a.touched_at) < TOUCHED_TIME
         };

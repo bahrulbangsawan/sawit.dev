@@ -122,10 +122,14 @@ fn pointers_glide_between_targets() {
     assert_eq!(presence.agents[0].point(t0, false), Some((0.0, 0.0)));
     let t1 = t0 + Duration::from_secs(1);
     presence.point_at(&a, page, at((100.0, 0.0)), None, t1);
-    let half = presence.agents[0].point(t1 + GLIDE / 2, false).unwrap();
-    assert!(half.0 > 50.0 && half.0 < 100.0, "eased out: {half:?}");
+    let trip = super::super::pointer::trip_time((0.0, 0.0), (100.0, 0.0));
+    let half = presence.agents[0].point(t1 + trip / 2, false).unwrap();
+    assert!(
+        half.0 > 25.0 && half.0 < 75.0 && half.1 != 0.0,
+        "on a curve: {half:?}"
+    );
     assert_eq!(
-        presence.agents[0].point(t1 + GLIDE, false),
+        presence.agents[0].point(t1 + trip, false),
         Some((100.0, 0.0))
     );
     assert_eq!(presence.agents[0].point(t1, true), Some((100.0, 0.0)));

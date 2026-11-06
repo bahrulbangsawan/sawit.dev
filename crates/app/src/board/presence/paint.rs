@@ -2,7 +2,6 @@
 
 use gpui_kit::*;
 
-use super::POINTER;
 use super::labels::{PILL_HEIGHT, PILL_PAD, pill_rect};
 use super::marks::{Mark, Painted};
 
@@ -61,22 +60,39 @@ pub(in crate::board) fn paint(
                 phase,
                 failed,
             } => paint_ghost(rect_bounds(rect), color, phase, failed, window, cx),
-            Mark::Cursor { tip, color, alpha } => {
+            Mark::Cursor {
+                tip,
+                color,
+                alpha,
+                tool,
+                scale,
+            } => {
                 let tip = at(tip);
-                let points: Vec<Point<Pixels>> = POINTER
-                    .iter()
-                    .map(|(x, y)| point(tip.x + px(*x), tip.y + px(*y)))
-                    .collect();
-                // A 3 px stroke under the fill leaves a 1.5 px white edge around it.
-                let mut edge = PathBuilder::stroke(px(3.0));
-                edge.add_polygon(&points, true);
-                if let Ok(path) = edge.build() {
-                    window.paint_path(path, white(alpha));
-                }
-                let mut body = PathBuilder::fill();
-                body.add_polygon(&points, true);
-                if let Ok(path) = body.build() {
-                    window.paint_path(path, color.opacity(alpha));
+                for shape in tool.shape() {
+                    let points = |dx: f32, dy: f32| -> Vec<Point<Pixels>> {
+                        (shape.iter())
+                            .map(|(x, y)| {
+                                point(tip.x + px(x * scale + dx), tip.y + px(y * scale + dy))
+                            })
+                            .collect()
+                    };
+                    // A soft shadow, then a 3 px stroke under the fill that leaves a 1.5 px
+                    // white edge around it.
+                    let mut shadow = PathBuilder::fill();
+                    shadow.add_polygon(&points(0.6, 1.2), true);
+                    if let Ok(path) = shadow.build() {
+                        window.paint_path(path, hsla(0.0, 0.0, 0.0, 0.18 * alpha));
+                    }
+                    let mut edge = PathBuilder::stroke(px(3.0));
+                    edge.add_polygon(&points(0.0, 0.0), true);
+                    if let Ok(path) = edge.build() {
+                        window.paint_path(path, white(alpha));
+                    }
+                    let mut body = PathBuilder::fill();
+                    body.add_polygon(&points(0.0, 0.0), true);
+                    if let Ok(path) = body.build() {
+                        window.paint_path(path, color.opacity(alpha));
+                    }
                 }
             }
             Mark::Pill {
