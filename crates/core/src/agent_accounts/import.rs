@@ -25,14 +25,35 @@ pub struct PoolPaths {
 }
 
 impl PoolPaths {
+    /// Claude Pool's places for the user whose home is `home`. The Mac-wide ones (the app in
+    /// /Applications) count only when `home` is this user's own home folder: a Sawit run with
+    /// another HOME (a test's) sees only what is in that folder.
     pub fn of(home: &Path) -> PoolPaths {
+        let app = if is_users_home(home) {
+            PathBuf::from("/Applications/ClaudePool.app")
+        } else {
+            home.join("Applications/ClaudePool.app")
+        };
         PoolPaths {
             home_dir: home.join(".claude-pool"),
             support: home.join("Library/Application Support/ClaudePool"),
             caches: home.join("Library/Caches/ClaudePool"),
-            app: PathBuf::from("/Applications/ClaudePool.app"),
+            app,
         }
     }
+}
+
+/// Whether `home` is this user's own home folder (the password database's), not one a test or
+/// another run put in HOME.
+pub fn is_users_home(home: &Path) -> bool {
+    let pw = unsafe { libc::getpwuid(libc::getuid()) };
+    if pw.is_null() {
+        return false;
+    }
+    let dir = unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) };
+    let real = PathBuf::from(dir.to_string_lossy().to_string());
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    canon(&real) == canon(home)
 }
 
 /// Claude Pool's data to import, when there is some.
@@ -322,12 +343,16 @@ pub struct Removal {
 
 /// Where Claude Pool's command-line links can be: `~/.local/bin`, `/opt/homebrew/bin`,
 /// `/usr/local/bin`.
+/// The Mac-wide ones only when `home` is this user's own ([`is_users_home`]).
 pub fn link_dirs(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join(".local/bin"),
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-    ]
+    let mut dirs = vec![home.join(".local/bin")];
+    if is_users_home(home) {
+        dirs.extend([
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+        ]);
+    }
+    dirs
 }
 
 /// The removal, with what blocks it: Claude Pool running, a `statusLine` still running its

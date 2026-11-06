@@ -203,3 +203,19 @@ fn claude_pool_goes_only_after_a_verified_backup_and_never_while_needed() {
     // The accounts' folders are untouched.
     assert!(home.join(".claude-2/settings.json").is_file());
 }
+
+/// A home that isn't this user's own (a test's, an e2e run's) sees no Mac-wide Claude Pool: not
+/// /Applications/ClaudePool.app, not /opt/homebrew/bin.
+#[test]
+fn another_home_never_sees_the_macs_claude_pool() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    assert!(!import::is_users_home(&home));
+    assert_eq!(
+        PoolPaths::of(&home).app,
+        home.join("Applications/ClaudePool.app")
+    );
+    assert_eq!(import::link_dirs(&home), [home.join(".local/bin")]);
+    assert!(import::found(&home).is_none());
+}
