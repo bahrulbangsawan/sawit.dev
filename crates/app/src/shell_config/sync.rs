@@ -246,16 +246,12 @@ impl ShellConfigPanel {
         } else {
             format!("Upload {n} Files")
         };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &title,
-            Some(&detail),
-            &[&verb, "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(title, verb)
+            .detail(detail)
+            .ask(window, cx);
         let rels: Vec<String> = files.iter().map(|f| f.rel.clone()).collect();
         cx.spawn_in(window, async move |this, cx| {
-            if !matches!(answer.await, Ok(0)) {
+            if !answer.await {
                 return;
             }
             let Ok(rx) = this.update(cx, |this, cx| {
@@ -336,16 +332,12 @@ impl ShellConfigPanel {
         } else {
             format!("Replace {n} Files")
         };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &title,
-            Some(&detail),
-            &[&verb, "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(title, verb)
+            .detail(detail)
+            .ask(window, cx);
         let commit = backup.tree.commit.clone();
         cx.spawn_in(window, async move |this, cx| {
-            if !matches!(answer.await, Ok(0)) {
+            if !answer.await {
                 return;
             }
             let _ = this.update(cx, |this, cx| {

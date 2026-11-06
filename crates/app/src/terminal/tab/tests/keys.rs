@@ -74,14 +74,7 @@ fn pane_menu_disables_what_does_not_apply() {
     // One pane, nothing selected, the click on no link.
     assert_eq!(
         off(&PaneMenuState::default()),
-        [
-            "Copy",
-            "Find…",
-            "Open Link",
-            "Copy Link",
-            "Open File",
-            "Zoom Pane"
-        ]
+        ["Copy", "Open Link", "Copy Link", "Open File", "Zoom Pane"]
     );
     // A split tab, text selected, the click on a link, the tab locked.
     let state = PaneMenuState {
@@ -94,7 +87,7 @@ fn pane_menu_disables_what_does_not_apply() {
         )),
         locked: true,
     };
-    assert_eq!(off(&state), ["Find…", "Open File", "Close Pane"]);
+    assert_eq!(off(&state), ["Open File", "Close Pane"]);
     assert!(enabled(&state).contains(&("Unzoom Pane", true)));
     let checked = pane_menu(&state).into_iter().find_map(|e| match e {
         PaneEntry::Item {
@@ -160,7 +153,11 @@ fn menu_keys(cx: &mut TestAppContext) -> Vec<(String, Option<String>)> {
 /// clash-free key shows none.
 #[gpui_kit::test]
 fn every_menu_item_has_its_own_key(cx: &mut TestAppContext) {
-    cx.update(init);
+    cx.update(|cx| {
+        init(cx);
+        // ⌘F is the workspace's find key, which reaches the terminal's find bar (item 21).
+        crate::find::init(cx);
+    });
     let keys = menu_keys(cx);
     assert_eq!(
         keys,
@@ -169,6 +166,7 @@ fn every_menu_item_has_its_own_key(cx: &mut TestAppContext) {
             ("terminal::Copy", None),
             ("terminal::Paste", Some("cmd-v")),
             ("terminal::SelectAll", Some("cmd-a")),
+            ("find::Find", Some("cmd-f")),
             ("terminal::CopyLastOutput", Some("cmd-shift-c")),
             ("terminal::CopyError", Some("alt-cmd-shift-c")),
             ("terminal::Clear", Some("cmd-k")),
@@ -178,8 +176,7 @@ fn every_menu_item_has_its_own_key(cx: &mut TestAppContext) {
             ("terminal::SplitRight", Some("cmd-d")),
             ("terminal::SplitDown", Some("cmd-shift-d")),
             ("terminal::ZoomPane", Some("cmd-shift-enter")),
-            // ⇧⌘↩ is the workspace's, but a terminal zooms its pane with it.
-            ("workspace::ToggleMaximizePane", None),
+            ("workspace::MaximizeTerminal", Some("ctrl-cmd-1")),
             ("terminal::ToggleSendRightClicks", Some("alt-cmd-r")),
             ("terminal::ClosePane", Some("alt-cmd-w")),
             ("terminal::RenameTab", Some("cmd-shift-i")),

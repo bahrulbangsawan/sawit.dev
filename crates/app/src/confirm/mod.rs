@@ -217,7 +217,8 @@ impl ConfirmView {
         }
     }
 
-    /// Whether the question is still waiting for its answer.
+    /// Whether the question is still waiting for its answer (for tests).
+    #[cfg(test)]
     pub fn waiting(&self) -> bool {
         self.answer.borrow().is_some()
     }

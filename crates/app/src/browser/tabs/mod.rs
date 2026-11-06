@@ -246,15 +246,14 @@ impl BrowserTabs {
             return;
         }
         let view = tab.view.clone();
-        let answer = window.prompt(
-            PromptLevel::Warning,
+        let answer = crate::confirm::Confirm::new(
             "Close the tab with its annotations?",
-            Some(&super::notes_lost(notes)),
-            &["Close Anyway", "Cancel"],
-            cx,
-        );
+            "Close and Discard Notes",
+        )
+        .detail(super::notes_lost(notes))
+        .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if let Ok(0) = answer.await {
+            if answer.await {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(ix) = this.tabs.iter().position(|t| t.view == view) {
                         this.remove(ix, cx);

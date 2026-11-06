@@ -110,15 +110,16 @@ impl ToolsPage {
             .map(|p| tilde(p))
             .collect::<Vec<_>>()
             .join("\n");
-        let answer = window.prompt(
-            PromptLevel::Critical,
-            &format!("Delete {}'s Settings?", tool.name),
-            Some(&format!("Deletes:\n{list}\n\nThis can't be undone.")),
-            &["Delete Settings", "Cancel"],
-            cx,
-        );
+        let answer = crate::confirm::Confirm::new(
+            format!("Delete {}'s settings?", tool.name),
+            "Delete Settings",
+        )
+        .thing(tool.name)
+        .detail("This can't be undone.")
+        .items(list.lines().map(str::to_string).collect::<Vec<_>>())
+        .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if !matches!(answer.await, Ok(0)) {
+            if !answer.await {
                 return;
             }
             let _ = this.update(cx, |this, cx| {

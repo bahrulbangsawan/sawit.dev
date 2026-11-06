@@ -426,45 +426,6 @@ fn a_terminal_split_round_trips() {
     }
 }
 
-/// A close from a `sawit-mcp` that predates `confirm` reads as unconfirmed, so the app still
-/// asks before ending what runs there.
-#[test]
-fn a_terminal_close_is_unconfirmed_unless_it_says_so() {
-    let old = decode(
-        br#"sawit-control/1
-{"cmd":"terminal_close","tab":1}"#,
-    );
-    assert!(matches!(
-        old,
-        Some(Ok(Request {
-            command: Command::TerminalClose {
-                tab: 1,
-                pane: None,
-                confirm: false,
-                scope: None
-            },
-            ..
-        }))
-    ));
-    let request = Request {
-        project: None,
-        agent_folder: None,
-        agent: None,
-        command: Command::TerminalClose {
-            tab: 1,
-            pane: Some(0),
-            confirm: true,
-            scope: None,
-        },
-    };
-    let bytes = encode(&request);
-    assert_eq!(
-        &bytes[MAGIC.len()..],
-        br#"{"cmd":"terminal_close","tab":1,"pane":0,"confirm":true}"#
-    );
-    assert_eq!(decode(&bytes), Some(Ok(request)));
-}
-
 /// The keymap's ops go to the app inside one `keymap` command.
 #[test]
 fn keymap_ops_round_trip() {

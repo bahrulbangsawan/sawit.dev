@@ -165,7 +165,9 @@ impl PermissionsPage {
                         Button::new("perms-save")
                             .primary()
                             .small()
-                            .label("Save")
+                            // Says what it does; Return doesn't press it (only Escape, which
+                            // cancels, is a key here), so Cancel stays the safe default.
+                            .label("Save Change")
                             .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     ),
             )

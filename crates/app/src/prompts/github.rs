@@ -138,15 +138,12 @@ impl PromptsPanel {
         } else {
             "Your version of these prompts is replaced with GitHub's.".to_string()
         };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Restore prompts from GitHub?",
-            Some(&detail),
-            &["Restore", "Cancel"],
-            cx,
-        );
+        let answer =
+            crate::confirm::Confirm::new("Restore prompts from GitHub?", "Restore Prompts")
+                .detail(detail)
+                .ask(window, cx);
         cx.spawn_in(window, async move |this, cx| {
-            if !matches!(answer.await, Ok(0)) {
+            if !answer.await {
                 return;
             }
             let Ok(rx) = this.update(cx, |this, cx| {

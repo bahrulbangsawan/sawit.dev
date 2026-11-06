@@ -222,18 +222,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let name = canvases::canvas_name(&file);
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("Delete the canvas “{name}”?"),
-            Some("Its file goes to the Trash, where Finder can put it back."),
-            &[
-                PromptButton::cancel("Cancel"),
-                PromptButton::new("Delete Canvas"),
-            ],
-            cx,
-        );
+        let answer =
+            crate::confirm::Confirm::new(format!("Delete the canvas {name}?"), "Delete Canvas")
+                .thing(name.to_string())
+                .detail("Its file goes to the Trash, where Finder can put it back.")
+                .ask(window, cx);
         cx.spawn(async move |this, cx| {
-            if answer.await != Ok(1) {
+            if !answer.await {
                 return;
             }
             let _ = this.update(cx, |this, cx| {

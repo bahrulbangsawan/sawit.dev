@@ -19,7 +19,7 @@ pub enum PaneAct {
     Copy,
     Paste,
     SelectAll,
-    /// ⌘F's find bar: item 21 (built in parallel) wires it.
+    /// ⌘F's find bar over the pane.
     Find,
     CopyLastOutput,
     CopyError,
@@ -85,7 +85,12 @@ pub fn pane_menu(s: &PaneMenuState) -> Vec<PaneEntry> {
             Some(Box::new(SelectAll)),
             true,
         ),
-        item("Find…", PaneAct::Find, None, false),
+        item(
+            "Find…",
+            PaneAct::Find,
+            Some(Box::new(crate::find::Find)),
+            true,
+        ),
         PaneEntry::Separator,
         item(
             "Copy Last Output",
@@ -139,7 +144,7 @@ pub fn pane_menu(s: &PaneMenuState) -> Vec<PaneEntry> {
         item(
             "Full Screen",
             PaneAct::FullScreen,
-            Some(Box::new(crate::workspace::ToggleMaximizePane)),
+            Some(Box::new(crate::workspace::MaximizeTerminal)),
             true,
         ),
         PaneEntry::Separator,
@@ -264,7 +269,6 @@ impl TerminalTab {
             PaneAct::Copy => view.update(cx, |v, cx| v.copy_selection(cx)),
             PaneAct::Paste => view.update(cx, |v, cx| v.paste_clipboard(cx)),
             PaneAct::SelectAll => view.update(cx, |v, cx| v.select_all(cx)),
-            PaneAct::Find => {}
             PaneAct::CopyLastOutput => self.copy_output(pane, false, cx),
             PaneAct::CopyError => self.copy_output(pane, true, cx),
             PaneAct::OpenLink => {
@@ -285,12 +289,15 @@ impl TerminalTab {
             PaneAct::Clear => view.update(cx, |v, cx| v.clear(cx)),
             PaneAct::Reset => view.update(cx, |v, cx| v.reset(cx)),
             PaneAct::Rename => self.rename_pane(pane, window, cx),
-            PaneAct::SplitRight | PaneAct::SplitDown | PaneAct::FullScreen => {
+            PaneAct::SplitRight | PaneAct::SplitDown | PaneAct::FullScreen | PaneAct::Find => {
+                // From the pane: Find opens its find bar, Full Screen fills the window with the
+                // terminal (item 17's Maximize Terminal).
                 self.focus_pane(pane, window, cx);
                 let action: Box<dyn Action> = match act {
                     PaneAct::SplitRight => Box::new(SplitRight),
                     PaneAct::SplitDown => Box::new(SplitDown),
-                    _ => Box::new(crate::workspace::ToggleMaximizePane),
+                    PaneAct::Find => Box::new(crate::find::Find),
+                    _ => Box::new(crate::workspace::MaximizeTerminal),
                 };
                 window.dispatch_action(action, cx);
             }

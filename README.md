@@ -67,7 +67,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🌐 **Browser for agents** | A browser tab per project that opens your dev server, with device sizes and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (152 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (156 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn/ui and shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop, Design to Code and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -1500,7 +1500,7 @@ sawit github token --header                  # the GitHub sign-in as {"Authoriza
 
 <img src="docs/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 152 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 156 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -1552,7 +1552,9 @@ download from the internet; so does `install_sawit_skills`, because it writes yo
 folders and MCP configs; so do `uninstall_dev_tools` (it deletes the
 tools' files), `stop_processes`, `local_explorer_request` for anything but GET (it writes to a dev server's
 local KV, R2, D1, Durable Objects or Workflows), and `write_env` when it would replace a different `DATABASE_URL`. `terminal_close`
-needs `confirm: true` while a program runs in that terminal or you're typing in it, and `keymap_bind` and
+needs `confirm: true` while a program runs in that terminal (or, with a `scope`, in any it would close) or you're
+typing in it, and never closes a locked one; `app_close_all_tabs` with `force` needs it while unsaved changes,
+browser notes or an install would be lost; `keymap_bind` and
 `keymap_unbind` need it when keymap.json has comments. `browser_export_design` replaces an earlier export of the same
 host only with `replace: true`. Passwords never appear in a result. Every tool
 also carries MCP's hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), for clients that let read-only tools

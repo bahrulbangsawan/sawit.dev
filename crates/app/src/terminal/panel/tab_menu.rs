@@ -185,7 +185,7 @@ pub fn tab_menu(s: &MenuState) -> Vec<TabEntry> {
         e(
             "Full Screen",
             FullScreen,
-            Some(Box::new(crate::workspace::ToggleMaximizePane)),
+            Some(Box::new(crate::workspace::MaximizeTerminal)),
             true,
             true,
         ),
@@ -250,7 +250,7 @@ impl TerminalPanel {
             TabAct::Export => tab.update(cx, |t, cx| t.on_focused(cx, |v, cx| v.export_output(cx))),
             TabAct::FullScreen => {
                 self.activate(ix, window, cx);
-                window.dispatch_action(Box::new(crate::workspace::ToggleMaximizePane), cx);
+                window.dispatch_action(Box::new(crate::workspace::MaximizeTerminal), cx);
             }
         }
     }

@@ -6,6 +6,10 @@ use super::{Bucket, RulesFile};
 /// Every `sawit` MCP tool that refuses unless called with `confirm: true`, and what it does that
 /// makes it ask. A test in `crates/mcp` keeps this list equal to the tools' own parameters.
 pub const CONFIRM_TOOLS: &[(&str, &str)] = &[
+    (
+        "app_close_all_tabs",
+        "Closes every center tab, discarding unsaved changes with force",
+    ),
     ("delete_prompt", "Deletes a prompt from the library"),
     ("drop_database", "Drops a PostgreSQL database"),
     ("drop_relation", "Drops a table, view or other relation"),

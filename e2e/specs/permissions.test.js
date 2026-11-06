@@ -42,7 +42,7 @@ async function settled(file, ok) {
 /** Opens the diff sheet's Save and waits for the sheet to go. */
 async function save(win) {
   const sheet = await win.waitFor({ role: "dialog", name: "Save Change" });
-  await win.click({ role: "button", name: "Save", within: sheet.name });
+  await win.click({ role: "button", name: "Save Change", within: sheet.name });
   await win.waitForGone({ role: "dialog", name: "Save Change" });
 }
 
