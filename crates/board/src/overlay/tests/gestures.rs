@@ -191,9 +191,11 @@ fn the_pen_shows_its_points_handles_and_next_segment() {
     }
 }
 
-/// Item 10: a connector being drawn.
+/// Item 10: a connector being drawn. Since FigCraft 0.15 the engine previews the connector in the
+/// document, where the renderer draws it as it will be made, so the overlay draws no line of its
+/// own for it.
 #[test]
-fn a_connector_being_drawn_shows_its_line() {
+fn a_connector_being_drawn_is_previewed_in_the_document() {
     let mut board = BoardDoc::new_board("Canvas").unwrap();
     zoom(&mut board, 1.0);
     make(&mut board, "board.sticky", json!({"x": -100, "y": -100}));
@@ -201,19 +203,16 @@ fn a_connector_being_drawn_shows_its_line() {
     select(&mut board, &[]);
     board.session.set_tool(ToolId::Connector);
     // From the first sticky's middle toward the second, held.
+    let before = board.doc().unwrap().nodes().count();
     pointer(&mut board, PointerKind::Down, 0.0, 0.0);
     pointer(&mut board, PointerKind::Move, 200.0, 0.0);
     pointer(&mut board, PointerKind::Move, 400.0, 0.0);
-    let [x0, y0, x1, y1] = board
-        .session
-        .tool
-        .overlay
-        .rubber
-        .expect("a connector drawn");
-    assert_eq!((x1, y1), (400.0, 0.0));
-    let shapes = overlay(&board.session);
-    let (from, to) = ((x0 + 100.0, y0 + 100.0), (500.0, 100.0));
-    assert!(has_line(&shapes, from, to, 1.5), "{shapes:?}");
+    assert!(board.session.tool.overlay.rubber.is_none());
+    assert_eq!(
+        board.doc().unwrap().nodes().count(),
+        before + 1,
+        "the connector, previewed"
+    );
 }
 
 /// Item 10: the eraser's reach, while it erases.

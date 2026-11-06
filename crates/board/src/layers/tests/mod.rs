@@ -42,6 +42,7 @@ fn component() -> NodeKind {
     NodeKind::Component {
         description: String::new(),
         props: BTreeMap::new(),
+        prop_order: Vec::new(),
     }
 }
 

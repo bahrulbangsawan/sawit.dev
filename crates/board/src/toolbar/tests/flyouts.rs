@@ -73,7 +73,7 @@ fn every_flyout_item_runs() {
     let board_groups = groups(DocKind::Board);
     for (f, count) in [
         (Flyout::StickyColors, 8),
-        (Flyout::Shapes, 7),
+        (Flyout::Shapes, figcraft_doc::board::BoardShape::ALL.len()),
         (Flyout::ConnectorStyles, 3),
         (Flyout::Stamps, 6),
     ] {

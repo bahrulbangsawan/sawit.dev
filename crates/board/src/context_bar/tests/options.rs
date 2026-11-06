@@ -75,8 +75,24 @@ fn options_are_the_commands_the_controls_run() {
         ("ellipse", "Ellipse"),
         ("diamond", "Diamond"),
         ("triangle", "Triangle"),
-        ("speechBubble", "Speech bubble"),
+        ("triangleDown", "Triangle down"),
+        ("parallelogramRight", "Parallelogram right"),
+        ("parallelogramLeft", "Parallelogram left"),
+        ("trapezoid", "Trapezoid"),
+        ("pentagon", "Pentagon"),
+        ("hexagon", "Hexagon"),
+        ("octagon", "Octagon"),
+        ("star", "Star"),
+        ("plus", "Plus"),
+        ("arrowLeft", "Arrow left"),
+        ("arrowRight", "Arrow right"),
         ("chevron", "Chevron"),
+        ("speechBubble", "Speech bubble"),
+        ("database", "Database"),
+        ("document", "Document"),
+        ("predefinedProcess", "Predefined process"),
+        ("manualInput", "Manual input"),
+        ("internalStorage", "Internal storage"),
     ];
     assert_eq!(
         picks(&Control::Shape { current: None }),
@@ -236,6 +252,6 @@ fn every_option_runs_but_the_shape_the_item_has() {
             }
         }
     }
-    // The 8 colours for each of the 4 items, 7 shapes, 4 sizes, 3 routings, and 6 caps twice.
-    assert_eq!(run, 4 * 8 + 7 + 4 + 3 + 2 * 6);
+    // The 8 colours for each of the 4 items, 23 shapes, 4 sizes, 3 routings, and 6 caps twice.
+    assert_eq!(run, 4 * 8 + 23 + 4 + 3 + 2 * 6);
 }

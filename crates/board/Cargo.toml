@@ -13,6 +13,8 @@ figcraft-doc.workspace = true
 figcraft-engine.workspace = true
 figcraft-format.workspace = true
 figcraft-geom.workspace = true
+# The layout grids' columns and rows the overlay draws (overlay/aids.rs).
+figcraft-layout.workspace = true
 figcraft-render.workspace = true
 figcraft-text.workspace = true
 # Mermaid's SVG as board shapes (src/mermaid/): its geometry and its markup. Both versions are

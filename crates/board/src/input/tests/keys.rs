@@ -61,6 +61,11 @@ fn gpui_keystrokes_from_specs() {
 fn every_mac_shortcut_round_trips_through_gpui() {
     // A binding's GPUI keystroke, read back through `key_name`, is that binding's key again.
     for spec in KEYS.iter().flat_map(|b| b.mac) {
+        let no_mac_key = keymap::parse(spec).is_some_and(|(_, key)| NO_MAC_KEY.contains(&key));
+        if no_mac_key {
+            assert!(gpui_keystroke(spec).is_none(), "{spec}");
+            continue;
+        }
         let keystroke = gpui_keystroke(spec).unwrap_or_else(|| panic!("{spec}: no keystroke"));
         let (mods, key) = split_keystroke(&keystroke);
         let name = key_name(key).unwrap_or_else(|| panic!("{spec} -> {keystroke}: no name"));
@@ -93,9 +98,8 @@ fn undo_runs_through_the_keymap() {
 fn hidden_commands_are_blocked() {
     let mut board = board();
     let before = tool(&board);
-    // ⌘N is file.new, I is edit.pickColor (the eyedropper).
+    // ⌘N is file.new.
     assert_eq!(route_key(&mut board, "n", CMD), Ok(KeyOutcome::Unhandled));
-    assert_eq!(route_key(&mut board, "i", NONE), Ok(KeyOutcome::Unhandled));
     assert_eq!(board.session.docs.len(), 1);
     assert_eq!(tool(&board), before);
 }

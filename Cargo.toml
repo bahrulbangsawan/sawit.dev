@@ -18,13 +18,14 @@ tokio-postgres = "0.7.18"
 
 # FigCraft drives the native canvas (crates/board). One pinned rev for every crate, never a
 # branch: bump them together.
-figcraft-color = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
-figcraft-doc = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
-figcraft-engine = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
-figcraft-format = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
-figcraft-geom = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
-figcraft-render = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
-figcraft-text = { git = "https://github.com/storytold/figcraft", rev = "0971d096db18aa107c5f3d1f83af4ac7f89ea2c3" }
+figcraft-color = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+figcraft-doc = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+figcraft-engine = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+figcraft-format = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+figcraft-geom = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+figcraft-layout = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+figcraft-render = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+figcraft-text = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
 
 # GPUI's dependency tree is large; full debuginfo for it filled the disk
 # (17 GB in target/). Keep line tables for our crates only.

@@ -72,6 +72,10 @@ pub fn gpui_keystroke(spec: &str) -> Option<String> {
     Some(keystroke)
 }
 
+/// Keys FigCraft binds that a Mac keyboard hasn't: PC's Menu key, which FigCraft 0.15 gives the
+/// context menu beside ⇧F10. Their bindings are left out on the canvas.
+pub const NO_MAC_KEY: &[&str] = &["Menu"];
+
 /// GPUI's name for a key as [`keymap::parse`] gives it.
 fn gpui_key(key: &str) -> Option<String> {
     // FigCraft reads Backspace and Delete as one key, `Delete`: on a Mac keyboard that is ⌫.

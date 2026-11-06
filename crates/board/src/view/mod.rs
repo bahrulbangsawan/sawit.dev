@@ -132,6 +132,10 @@ pub fn dots(zoom: f64, page_rgb: [u8; 3]) -> Option<Dots> {
         size,
         color: color(alpha),
         faded: color(alpha * fade),
+        // Dots, every other one strong: the grid twice as coarse, as before FigCraft 0.15 made
+        // both a choice.
+        lines: false,
+        major: 2,
     })
 }
 
