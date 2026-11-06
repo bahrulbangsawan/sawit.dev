@@ -1,4 +1,4 @@
-//! The Homebrew formulas: the GitHub CLI, MinIO and the MinIO Client. Homebrew's copy
+//! The Homebrew formulas: the GitHub CLI, MinIO, the MinIO Client and FFmpeg. Homebrew's copy
 //! is upgraded and removed by the formula it came from; another copy is found and left alone;
 //! Midnight Commander's `mc` isn't the MinIO Client.
 
@@ -234,5 +234,28 @@ async fn midnight_commander_is_not_the_minio_client() {
             .await
             .as_deref(),
         Some("2025-08-13T08-35-41Z")
+    );
+}
+
+/// FFmpeg says its version with `-version`, as it has no `--version`.
+#[tokio::test]
+async fn ffmpeg_says_its_version_with_a_single_dash() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let ffmpeg = find("ffmpeg").unwrap();
+    assert_eq!(ffmpeg.version_arg, "-version");
+    assert_eq!(ffmpeg.formula, Some("ffmpeg"));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ffmpeg");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\n[ \"$1\" = -version ] && echo 'ffmpeg version 8.0 Copyright (c) 2000-2025 the FFmpeg developers' && exit 0\necho \"Unrecognized option '$1'\" >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        crate::dev_tools::detect::version_of(ffmpeg, &path)
+            .await
+            .as_deref(),
+        Some("8.0")
     );
 }

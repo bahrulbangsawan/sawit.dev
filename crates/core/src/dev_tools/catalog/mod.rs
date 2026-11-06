@@ -5,6 +5,7 @@ use super::{Category, Latest, Tool};
 
 mod brew;
 mod herdr;
+mod media;
 
 const fn tool(
     id: &'static str,
@@ -422,6 +423,9 @@ rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
     brew::GH,
     brew::MINIO,
     brew::MC,
+    brew::FFMPEG,
     herdr::APP,
     herdr::TUI,
+    media::HYPERFRAMES,
+    media::HYPERFRAMES_STUDIO,
 ];

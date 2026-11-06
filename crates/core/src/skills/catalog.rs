@@ -42,6 +42,15 @@ const CLOUDFLARE: &[&str] = &[
     "wrangler",
 ];
 
+/// HyperFrames' Core Skills: what `npx skills add heygen-com/hyperframes` installs when Core
+/// Skills is chosen, and its plugin's `core-skills`.
+const HYPERFRAMES: &[&str] = &[
+    "hyperframes",
+    "hyperframes-cli",
+    "hyperframes-registry",
+    "media-use",
+];
+
 /// Where the skills Sawit ships live in its repository.
 const CANVAS_DESIGN_HOME: &str =
     "https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills/sawit-canvas-design";
@@ -150,6 +159,37 @@ pub const PACKS: &[Pack] = &[
         }],
         note: Some(
             "Live-site snapshots and story videos need Playwright with Chromium, and ffmpeg.",
+        ),
+    },
+    // The repository's .claude-plugin/marketplace.json names the marketplace `hyperframes`, with
+    // the plugin `hyperframes` (every published skill, versioned as one) and the older
+    // `core-skills`. Its docs install the plugin in Claude Code (guides/with-claude-code.md) and
+    // the Core Skills with `npx skills add heygen-com/hyperframes` elsewhere (guides/skills.md):
+    // hyperframes, hyperframes-cli, hyperframes-registry and media-use, the plugin's
+    // core-skills list. `npx hyperframes skills update` (and `hyperframes update`) refreshes
+    // them; installing again does the same here.
+    Pack {
+        id: "hyperframes",
+        name: "HyperFrames",
+        by: "HeyGen",
+        about: "Make videos with your agent: write a video as HTML, add captions, motion and media, use the registry's blocks, and render it with the HyperFrames CLI.",
+        category: Category::Media,
+        skills: HYPERFRAMES,
+        home: "https://hyperframes.heygen.com",
+        repo: "https://github.com/heygen-com/hyperframes",
+        methods: &[
+            Method::Plugin {
+                repo: "heygen-com/hyperframes",
+                marketplace: "hyperframes",
+                plugin: "hyperframes",
+            },
+            Method::SkillsCli {
+                source: "heygen-com/hyperframes",
+                all: false,
+            },
+        ],
+        note: Some(
+            "Renders with the HyperFrames CLI: install it, and FFmpeg, from the Dev Tools page. The Claude Code plugin brings every HyperFrames skill; its entry skill is /hyperframes:hyperframes.",
         ),
     },
     Pack {

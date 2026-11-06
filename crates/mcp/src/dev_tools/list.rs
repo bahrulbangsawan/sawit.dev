@@ -21,8 +21,9 @@ pub(super) fn upgrade_line(tool: &Tool, found: &dev_tools::Found) -> String {
 }
 
 /// What `list_dev_tools` adds under a tool: what uninstalling it stops, the settings it
-/// leaves, the GitHub CLI's sign-in.
+/// leaves, the GitHub CLI's sign-in, HyperFrames' Chrome.
 pub(super) async fn notes(tool: &Tool, found: Option<&dev_tools::Found>) -> String {
+    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
     let mut out = String::new();
     if found.is_some() {
         if let Some(warning) = tool.warning {
@@ -35,8 +36,9 @@ pub(super) async fn notes(tool: &Tool, found: Option<&dev_tools::Found>) -> Stri
             ));
         }
     }
-    if let ("gh", Some(f)) = (tool.id, found) {
-        let auth = match extras::gh_auth(&f.path).await {
+    match (tool.id, found) {
+        ("gh", Some(f)) => {
+            let auth = match extras::gh_auth(&f.path).await {
                 Some(extras::GhAuth::SignedIn(Some(login))) => {
                     format!("signed in to github.com as @{login}")
                 }
@@ -44,7 +46,16 @@ pub(super) async fn notes(tool: &Tool, found: Option<&dev_tools::Found>) -> Stri
                 Some(extras::GhAuth::SignedOut) => "not signed in. The user signs in with `gh auth login` in a terminal (it asks questions); Sawit's own GitHub sign-in is separate".into(),
                 None => "unknown (gh didn't answer)".into(),
             };
-        out.push_str(&format!("\n    gh auth: {auth}"));
+            out.push_str(&format!("\n    gh auth: {auth}"));
+        }
+        ("hyperframes", Some(_)) => {
+            let env = |name: &str| std::env::var(name).ok();
+            out.push_str(&match extras::hyperframes_browser(&home, &env) {
+                Some(chrome) => format!("\n    chrome: {}", tilde(&chrome)),
+                None => "\n    chrome: none found. `hyperframes browser ensure` downloads one, or set HYPERFRAMES_BROWSER_PATH; `hyperframes doctor` checks the rest".into(),
+            });
+        }
+        _ => {}
     }
     out
 }

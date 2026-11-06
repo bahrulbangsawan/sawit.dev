@@ -26,7 +26,7 @@ fn everything_but_npm_can_be_uninstalled() {
         assert_eq!(t.uninstall.is_none(), t.id == "npm", "{}", t.id);
     }
     let ids: Vec<_> = dependents("node").iter().map(|t| t.id).collect();
-    assert_eq!(ids, ["npm", "gemini", "cf"]);
+    assert_eq!(ids, ["npm", "gemini", "cf", "hyperframes"]);
 }
 
 /// PureMac is the app from its Homebrew cask, as its README installs it: Homebrew first,
@@ -56,7 +56,7 @@ fn puremac_is_the_app_from_its_homebrew_cask() {
     assert_eq!(ids(plan(&["puremac"], &|id| id == "homebrew")), ["puremac"]);
     assert_eq!(
         ids(dependents("homebrew")),
-        ["puremac", "gh", "minio", "mc"]
+        ["puremac", "gh", "minio", "mc", "ffmpeg"]
     );
     // No `command -v` for it: that would find the PureMac CLI.
     let script = detect_script();
@@ -66,7 +66,7 @@ fn puremac_is_the_app_from_its_homebrew_cask() {
 }
 
 /// Every app of the catalog (an app bundle among its places) is one whose copy the rule of
-/// `installed_outside` works out: Cap, Zed, PureMac and Herdr, each with
+/// `installed_outside` works out: Cap, Zed, PureMac, Herdr and HyperFrames Studio, each with
 /// an uninstaller, which that rule is built on.
 #[test]
 fn the_catalogs_apps_have_uninstallers() {
@@ -75,7 +75,10 @@ fn the_catalogs_apps_have_uninstallers() {
         .filter(|t| is_app_tool(t))
         .map(|t| t.id)
         .collect();
-    assert_eq!(apps, ["cap", "zed", "puremac", "herdr-app"]);
+    assert_eq!(
+        apps,
+        ["cap", "zed", "puremac", "herdr-app", "hyperframes-studio"]
+    );
     for id in apps {
         assert!(find(id).unwrap().uninstall.is_some(), "{id}");
     }
@@ -91,7 +94,7 @@ fn npm_tools_install_with_the_package_manager_picked() {
         .filter(|t| npm_package(t).is_some())
         .map(|t| t.id)
         .collect();
-    assert_eq!(npm_tools, ["gemini", "cf"]);
+    assert_eq!(npm_tools, ["gemini", "cf", "hyperframes"]);
     assert_eq!(
         install_command(tool("cf"), Some(PackageManager::Bun)),
         "bun add -g cf"

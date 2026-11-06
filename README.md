@@ -66,7 +66,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps and `sawit pupuk` upgrades dev tools. |
 | 🤖 **Ready for AI agents** | The `sawit-mcp` server (143 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
-| ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn's improve, Cloudflare's skills, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
+| ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
 
@@ -302,7 +302,7 @@ explained. A conflict on the same address can't be forced.
 
 - Open **Dev Tools** (**Pages** menu) for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
   (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, Herdr, …) and terminal apps
-  (Zed, Starship, the Fly.io CLI, Cloudflare's `cf`, the GitHub CLI, MinIO, PureMac, …).
+  (Zed, Starship, the Fly.io CLI, Cloudflare's `cf`, the GitHub CLI, MinIO, FFmpeg, HyperFrames, PureMac, …).
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
   An app's version comes from its `Info.plist`.
 - **PureMac** ([momenbasel/PureMac](https://github.com/momenbasel/PureMac)), the open source Mac cleaner, installs
@@ -324,6 +324,11 @@ explained. A conflict on the same address can't be forced.
   tools. The app's version comes from its bundle; uninstalling it closes it and stops `herdr-core`, whose agents stop,
   as the confirmation says. Neither uninstall deletes your settings (`~/.config/herdr-app`, `~/.config/herdr`):
   **Delete Settings…** under the row is its own choice, confirmed separately.
+- **HyperFrames CLI** installs from npm (Node.js and **FFmpeg** first, after asking) and updates with
+  `hyperframes update --yes`, with `HYPERFRAMES_SKIP_SKILLS=1`: its skills install from the Skills page only.
+  **Run Doctor** runs `hyperframes doctor` in a terminal, and the row says when FFmpeg or a Chrome to render with is
+  missing. **HyperFrames Studio** downloads HeyGen's installer and opens
+  it; you sign in to HeyGen in the app.
 - An install that needs tools you don't have and didn't pick (FFmpeg for HyperFrames) asks first, naming them.
 - The tools npm installs for every project (Gemini CLI, Cloudflare's `cf`) have a package manager menu beside their
   command: **npm** (`npm install -g cf`), **pnpm** (`pnpm add -g cf`), **bun** (`bun add -g cf`) or **yarn**
@@ -384,6 +389,9 @@ explained. A conflict on the same address can't be forced.
     codebase and writes plans for cheaper models to execute, with the `skills` CLI as its README says
     (`npx skills add shadcn/improve`), or as the Claude Code plugin from its own marketplace
     (`claude plugin install improve@improve`).
+  - **HyperFrames** by HeyGen ([hyperframes.heygen.com](https://hyperframes.heygen.com)): its Claude Code plugin
+    (`hyperframes@hyperframes`, entry skill `/hyperframes:hyperframes`), or its Core Skills with the `skills` CLI
+    (`npx skills add heygen-com/hyperframes`) for the other agents. The CLI installs from the Dev Tools page.
   - **MCP Apps** ([modelcontextprotocol.io](https://modelcontextprotocol.io/extensions/apps/build)):
     `create-mcp-app` and its three siblings, as the `mcp-apps` plugin or with the `skills` CLI.
   - **cf CLI** and **Cloudflare Skills** ([developers.cloudflare.com/cf](https://developers.cloudflare.com/cf/agents/)):
@@ -1317,7 +1325,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt` |
 | Files | `search_files` |
 | Config files | `list_config_files` (the Config Files tab's shell and coding-agent config files, as paths: never their contents) |
-| Dev tools | `list_dev_tools` (with newer releases, where each was found, its uninstall command, what uninstalling stops and the settings it keeps, the GitHub CLI's `gh auth status`), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
+| Dev tools | `list_dev_tools` (with newer releases, where each was found, its uninstall command, what uninstalling stops and the settings it keeps, the GitHub CLI's `gh auth status`, HyperFrames' Chrome), `install_dev_tools` (`package_manager`: npm, pnpm, bun or yarn for the tools npm installs globally), `upgrade_dev_tools` (with the package manager that installed the copy), `uninstall_dev_tools` (the copy its own installer, Homebrew or the package manager put in place) |
 | MCP servers | `list_mcp_servers`, `install_mcp_server` (`package_manager`: a local server and the remote bridge run with `npx -y`, `pnpm dlx`, `bunx` or `yarn dlx`; `github` is refused with "Sign in to GitHub in Sawit first" while Sawit is signed out, since agents can't sign in for you), `uninstall_mcp_server` |
 | New project | `stack_options` (every category, option and preset, and the default stack), `stack_check` (a stack by `create-better-t-stack`'s flag names, resolved: what the compatibility rules change, every disabled option and why, the command), `stack_create` (in `<location>/<name>`, never over a folder that exists; in a Sawit terminal that opens the project when the app runs, or with `open: false` only makes it, as Create Project Only does; else here) |
 | Skills | `list_skills` (each pack, its skills, source and install commands per package manager, and the agents that have it), `install_skill` (into the agents given: the skills CLI with `package_manager`, a Claude Code plugin, a clone and copy, or built in for the packs Sawit ships, Canvas Design and Sawit, which install this Sawit's version), `uninstall_skill`, `install_sawit_skills` (what **Install Skills** does: `scope` `global` or `project`, `remove`; every path it changed) |

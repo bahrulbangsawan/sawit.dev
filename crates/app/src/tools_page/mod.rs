@@ -188,6 +188,8 @@ pub struct ToolsPage {
     pm: Option<PackageManager>,
     /// The GitHub CLI's sign-in, once `gh auth status` answered.
     gh_auth: Option<sawit_core::dev_tools::extras::GhAuth>,
+    /// The Chrome HyperFrames would render with: `Some(None)` when there is none.
+    chrome: Option<Option<std::path::PathBuf>>,
     /// The settings an uninstall kept, of tools not installed, that are there.
     kept: HashMap<&'static str, Vec<std::path::PathBuf>>,
     /// A tool another part of Sawit asked to install (Install GitHub CLI on the welcome
@@ -212,7 +214,9 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
         "puremac" => ("tool_logos/puremac.png", true),
         "gh" => ("tool_logos/github.svg", false),
         "minio" | "mc" => ("tool_logos/minio-color.svg", true),
+        "ffmpeg" => ("tool_logos/ffmpeg-color.svg", true),
         "herdr-app" | "herdr" => ("tool_logos/herdr-color.svg", true),
+        "hyperframes" | "hyperframes-studio" => ("tool_logos/hyperframes-color.svg", true),
         "bun" | "deno" | "rust" | "flyio" => {
             return svg()
                 .path(SharedString::from(format!("tool_logos/{id}.svg")))
@@ -296,6 +300,7 @@ impl ToolsPage {
             pms: Vec::new(),
             pm: None,
             gh_auth: None,
+            chrome: None,
             kept: HashMap::new(),
             pending_install: None,
         }

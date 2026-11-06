@@ -1,4 +1,4 @@
-//! Command-line tools from Homebrew formulas: the GitHub CLI, MinIO and its client.
+//! Command-line tools from Homebrew formulas: the GitHub CLI, MinIO and its client, FFmpeg.
 //! Each copy found in Homebrew's Cellar is upgraded with `brew upgrade` of the formula its
 //! install receipt names, and removed with `brew uninstall`; a copy installed another way is
 //! detected and left alone ([`Tool::formula`]).
@@ -76,5 +76,24 @@ pub(super) const MC: Tool = Tool {
         Category::Other,
         "mc",
         "brew install minio/stable/mc",
+    )
+};
+
+/// FFmpeg from Homebrew's core, with `ffprobe`: what HyperFrames encodes video and probes
+/// media with (`hyperframes doctor` asks for both). `ffmpeg -version` prints "ffmpeg version
+/// 8.0 Copyright …"; `--version` isn't one of its options.
+pub(super) const FFMPEG: Tool = Tool {
+    formula: Some("ffmpeg"),
+    version_arg: "-version",
+    upgrade: Some("brew upgrade ffmpeg"),
+    uninstall: Some("brew uninstall ffmpeg"),
+    needs: &["homebrew"],
+    ..tool(
+        "ffmpeg",
+        "FFmpeg",
+        "Records, converts and streams audio and video; ffprobe reads media files.",
+        Category::Other,
+        "ffmpeg",
+        "brew install ffmpeg",
     )
 };

@@ -7,6 +7,7 @@ mod catalog;
 mod detect;
 mod extras;
 mod herdr;
+mod media;
 mod programs;
 mod removal;
 mod script;

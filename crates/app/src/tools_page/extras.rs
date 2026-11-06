@@ -1,5 +1,5 @@
 //! What some rows add under their main line: the GitHub CLI's sign-in with Sign In with GitHub
-//! CLI, and the settings an uninstall kept, with Delete Settings. Also asking before an
+//! CLI, HyperFrames' Run Doctor and its Chrome, Studio's HeyGen sign-in, and the settings an uninstall kept, with Delete Settings. Also asking before an
 //! install pulls in prerequisites the user didn't pick.
 
 use std::collections::HashMap;
@@ -18,7 +18,7 @@ use crate::rt;
 
 impl ToolsPage {
     /// Reads again what the extras show, after detection: the settings uninstalls kept, the
-    /// GitHub CLI's sign-in (off the UI thread: gh asks GitHub).
+    /// GitHub CLI's sign-in (off the UI thread: gh asks GitHub), HyperFrames' Chrome.
     pub(super) fn refresh_extras(&mut self, cx: &mut Context<Self>) {
         let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
         self.kept = TOOLS
@@ -27,6 +27,8 @@ impl ToolsPage {
             .map(|t| (t.id, kept(t, &home)))
             .filter(|(_, places)| !places.is_empty())
             .collect::<HashMap<_, _>>();
+        let env = |name: &str| std::env::var(name).ok();
+        self.chrome = Some(extras::hyperframes_browser(&home, &env));
         let Some(gh) = self.found.get("gh").map(|f| f.path.clone()) else {
             self.gh_auth = None;
             return;
@@ -191,6 +193,37 @@ impl ToolsPage {
                 }
                 None => {}
             },
+            "hyperframes" if installed => {
+                parts.push(
+                    button("tool-doctor", Lucide::Stethoscope, "Run Doctor")
+                        .tooltip("Runs hyperframes doctor in a Terminal")
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(ToolsEvent::RunInTerminal("hyperframes doctor".into()))
+                        }))
+                        .into_any_element(),
+                );
+                if !self.installed("ffmpeg") {
+                    parts.push(note(
+                        "FFmpeg isn't installed: rendering video needs it.".into(),
+                    ));
+                }
+                if matches!(self.chrome, Some(None)) {
+                    parts.push(note(
+                        "No Chrome or Chromium found. Run hyperframes browser ensure to download one, or set HYPERFRAMES_BROWSER_PATH."
+                            .into(),
+                    ));
+                }
+            }
+            "hyperframes-studio" if self.states.get(tool.id) == Some(&State::Done) => {
+                parts.push(note(
+                    "Finish in HeyGen's installer that opened, then sign in with your HeyGen account in the app."
+                        .into(),
+                ));
+            }
+            "hyperframes-studio" if installed => parts.push(note(
+                "Sign in with your free HeyGen account in the app. Sawit never handles that sign-in."
+                    .into(),
+            )),
             _ => {}
         }
         if let Some(places) = self.kept.get(tool.id).filter(|_| !self.installed(tool.id)) {
