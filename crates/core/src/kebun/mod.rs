@@ -3,7 +3,9 @@
 //! ("burn": stop dev servers or instances, like the `kill-dev` script),
 //! `sawit panen|backup|tanam` (export, `pg_dump`, CSV import),
 //! `sawit pasang|pupuk|cabut` (install, upgrade or uninstall developer
-//! tools) and `sawit nyalakan` (start instances). Two need the app:
+//! tools), `sawit nyalakan` (start instances), `sawit permissions` (agents' permission
+//! rules), `sawit shell` (the shell files' sync with GitHub) and `sawit prompts` (the prompt
+//! library's backup on GitHub). Two need the app:
 //! `sawit browse` (a page in the app's browser), which starts it first, and
 //! `sawit list keys`, which asks the running app and never starts it.
 //! The wording riffs on Indonesia's forest fires (karhutla) and the palm-oil
@@ -13,11 +15,14 @@ mod args;
 mod bakar;
 mod bibit;
 mod browse;
+mod cangkang;
 mod db_job;
 mod find;
 mod ink;
+mod izin;
 mod keys;
 mod list;
+mod mantra;
 mod nyalakan;
 mod query;
 mod sql;
@@ -30,9 +35,12 @@ pub use args::{
 pub use bakar::{PROTECTED, bakar, burnable, protected};
 pub use bibit::{BibitAction, BibitArgs, bibit};
 pub use browse::browse;
+pub use cangkang::{CangkangAction, CangkangArgs, cangkang};
 pub use db_job::db_job;
 pub use find::{Kebun, dotenv_kebuns, find, local_kebuns, saved_profiles};
+pub use izin::{IzinAction, IzinArgs, izin};
 pub use list::list;
+pub use mantra::{MantraAction, MantraArgs, mantra};
 pub use nyalakan::nyalakan;
 pub use query::query;
 pub use sql::plan_sql;
@@ -75,6 +83,13 @@ pub(crate) const SUBCOMMANDS: &[&str] = &[
     "skills",
     "skill",
     "bibit",
+    // `sawit permissions …`, `sawit shell …`, `sawit prompts …`.
+    "permissions",
+    "izin",
+    "shell",
+    "cangkang",
+    "prompts",
+    "mantra",
 ];
 
 /// Runs `fut` on a fresh Tokio runtime (the CLI runs before the app's).

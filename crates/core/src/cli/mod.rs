@@ -72,6 +72,12 @@ pub enum Invocation {
     GitHub(crate::github_token::TokenArgs),
     /// `sawit skills install|update|remove …`: Sawit Skills, as the footer's Install Skills.
     Bibit(BibitArgs),
+    /// `sawit permissions …` (`izin`): the Permissions page's rules.
+    Izin(crate::kebun::IzinArgs),
+    /// `sawit shell status|upload|download …` (`cangkang`): the shell files' sync.
+    Cangkang(crate::kebun::CangkangArgs),
+    /// `sawit prompts backup|restore …` (`mantra`): the prompt library on GitHub.
+    Mantra(crate::kebun::MantraArgs),
 }
 
 /// What `sawit browse` opens in Sawit's browser.
@@ -157,6 +163,22 @@ pub fn parse_args(
                 && let Some(parsed) = BibitArgs::parse(&words[1..], cwd) =>
         {
             return parsed.map(Invocation::Bibit);
+        }
+        Some("permissions" | "izin") if words.len() == args.len() => {
+            return crate::kebun::IzinArgs::parse(&words[1..], cwd).map(Invocation::Izin);
+        }
+        // `sawit shell <word>` with a word that isn't an action is still a path.
+        Some("shell" | "cangkang")
+            if words.len() == args.len()
+                && let Some(parsed) = crate::kebun::CangkangArgs::parse(&words[1..]) =>
+        {
+            return parsed.map(Invocation::Cangkang);
+        }
+        Some("prompts" | "mantra")
+            if words.len() == args.len()
+                && let Some(parsed) = crate::kebun::MantraArgs::parse(&words[1..]) =>
+        {
+            return parsed.map(Invocation::Mantra);
         }
         Some("browse" | "intip") if words.len() == args.len() => {
             return BrowseTarget::parse(&words[1..]).map(Invocation::Browse);

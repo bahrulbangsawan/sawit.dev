@@ -6,9 +6,9 @@
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
-use sawit_core::github::{FileState, Keychain, TokenStore};
+use sawit_core::github::{Keychain, TokenStore};
 use sawit_core::instances::AppPaths;
-use sawit_core::shell_config::{self, FileSync, SyncStatus};
+use sawit_core::shell_config::{self, Direction, FileSync, SyncStatus};
 use serde_json::json;
 
 use crate::{Sawit, blocking, fail, ok, tri};
@@ -66,33 +66,23 @@ fn status_json(s: &SyncStatus) -> serde_json::Value {
 
 /// The files of `status` named `names`, each refused when it isn't listed, or when it changed on
 /// both sides and `overwrite` wasn't said, or (for `fits`) when there is nothing to move.
+/// The files `names` names that move the way `fits` allows ([`shell_config::pick_files`]).
 fn chosen<'a>(
     status: &'a SyncStatus,
     names: &[String],
     overwrite: bool,
-    fits: impl Fn(FileState) -> bool,
+    way: Direction,
 ) -> Result<Vec<&'a FileSync>, String> {
-    if names.is_empty() {
-        return Err("Name the files in `files` (as `status` lists them).".into());
-    }
-    names
-        .iter()
-        .map(|name| {
-            let f = status
-                .files
-                .iter()
-                .find(|f| &f.rel == name)
-                .ok_or_else(|| format!("{name} isn't one of the shell files `status` lists."))?;
-            match f.state {
-                FileState::ChangedOnBoth if !overwrite => Err(format!(
-                    "{name} changed both here and on GitHub: pass overwrite_conflicts to pick a side, after the user chose."
-                )),
-                FileState::ChangedOnBoth => Ok(f),
-                s if fits(s) => Ok(f),
-                s => Err(format!("{name} is {}: nothing to move that way.", s.label())),
-            }
-        })
-        .collect()
+    shell_config::pick_files(status, names, overwrite, way).map_err(|e| {
+        e.replace(
+            "choose a side first (overwrite)",
+            "pass overwrite_conflicts to pick a side, after the user chose",
+        )
+        .replace(
+            "as the status lists them",
+            "in `files`, as `status` lists them",
+        )
+    })
 }
 
 impl Sawit {
@@ -114,16 +104,13 @@ impl Sawit {
                         shell_config::BACKUP_REPO
                     ));
                 };
-                let files = tri!(chosen(&status, &a.files, a.overwrite_conflicts, |s| s
-                    .uploads()
-                    || s == FileState::Same));
-                let mut secrets = Vec::new();
-                for f in &files {
-                    let text = std::fs::read_to_string(&f.path).unwrap_or_default();
-                    for (line, name) in shell_config::find_secrets(&text) {
-                        secrets.push(format!("~/{}:{line} {name}", f.rel));
-                    }
-                }
+                let files = tri!(chosen(
+                    &status,
+                    &a.files,
+                    a.overwrite_conflicts,
+                    Direction::Upload
+                ));
+                let secrets = shell_config::secret_lines(&files);
                 if !secrets.is_empty() && !a.allow_secrets {
                     return fail(format!(
                         "These lines look like secrets, so nothing was sent:\n{}\nAsk the user; pass allow_secrets to send them to the private repository anyway.",
@@ -146,8 +133,12 @@ impl Sawit {
                 let Some(backup) = &status.backup else {
                     return fail("There is no shell files repository on GitHub to download from.");
                 };
-                let files =
-                    tri!(chosen(&status, &a.files, a.overwrite_conflicts, |s| s.downloads()));
+                let files = tri!(chosen(
+                    &status,
+                    &a.files,
+                    a.overwrite_conflicts,
+                    Direction::Download
+                ));
                 let owned: Vec<FileSync> = files.into_iter().cloned().collect();
                 let contents = tri!(
                     (shell_config::fetch_remote(&token, backup, &owned).await)
@@ -202,6 +193,8 @@ impl Sawit {
 
 #[cfg(test)]
 mod tests {
+    use sawit_core::github::FileState;
+
     use super::*;
 
     fn status() -> SyncStatus {
@@ -229,13 +222,13 @@ mod tests {
     fn files_are_moved_only_when_named_and_movable() {
         let s = status();
         let names = |n: &[&str]| n.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-        assert!(chosen(&s, &[], false, FileState::downloads).is_err());
-        let picked = chosen(&s, &names(&[".zshrc"]), false, FileState::downloads).unwrap();
+        assert!(chosen(&s, &[], false, Direction::Download).is_err());
+        let picked = chosen(&s, &names(&[".zshrc"]), false, Direction::Download).unwrap();
         assert_eq!(picked[0].rel, ".zshrc");
-        assert!(chosen(&s, &names(&[".bashrc"]), false, FileState::downloads).is_err());
-        assert!(chosen(&s, &names(&[".bashrc"]), true, FileState::downloads).is_ok());
-        assert!(chosen(&s, &names(&[".profile"]), false, FileState::downloads).is_err());
-        assert!(chosen(&s, &names(&["../.ssh/config"]), true, FileState::downloads).is_err());
+        assert!(chosen(&s, &names(&[".bashrc"]), false, Direction::Download).is_err());
+        assert!(chosen(&s, &names(&[".bashrc"]), true, Direction::Download).is_ok());
+        assert!(chosen(&s, &names(&[".profile"]), false, Direction::Download).is_err());
+        assert!(chosen(&s, &names(&["../.ssh/config"]), true, Direction::Download).is_err());
         assert_eq!(
             status_json(&s)["files"][1]["state"],
             serde_json::json!("changed_on_both")

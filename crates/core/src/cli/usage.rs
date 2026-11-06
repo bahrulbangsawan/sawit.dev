@@ -19,6 +19,10 @@ Usage:
   sawit pupuk [tool ...] [-y]
   sawit cabut <tool ...> [-y]
   sawit skills install|update|remove [--project [dir]] [-y]
+  sawit permissions [list] [--project <dir>]
+  sawit permissions add|remove|move ... [--file user|project|local] [-y]
+  sawit shell [status] | upload|download <file ...> [--overwrite] [-y]
+  sawit prompts backup|restore [--repo <name>] [--overwrite <id>] [-y]
   sawit github token --header | --exec <program> [args ...]
   sawit account [list|open|use|login|status|usage|add|remove|help]
 
@@ -111,6 +115,35 @@ Sawit Skills (the footer's Install Skills; asks first, -y to skip):
                            it holds nothing else) and the MCP entries install
                            added; an entry that was there before stays
 
+Permissions (the app's Permissions page; Claude Code's rules):
+  sawit permissions        each settings file's allow, ask and deny rules (user,
+                           this folder's project and its local file), Sawit's
+                           tools that need confirm=true, other agents' settings
+  sawit permissions add allow \"Bash(npm run test:*)\"
+                           add a rule to your user settings: shows the diff,
+                           asks (-y to skip), keeps a .sawit-backup beside it
+  sawit permissions add deny mcp__sawit__drop_database --file project
+                           the project's .claude/settings.json (local: its
+                           .claude/settings.local.json; user:<profile>)
+  sawit permissions move \"Bash(npm run test:*)\" ask
+  sawit permissions remove \"Bash(npm run test:*)\"
+  Rules that look like secrets are refused; the managed file is never changed.
+
+Shell files and prompts on GitHub (Sawit's GitHub sign-in, made in the app):
+  sawit shell              how each shell file stands against your private
+                           sawit-shell-config repository
+  sawit shell upload .zshrc
+                           send it (asks; refused when lines look like
+                           secrets unless --allow-secrets)
+  sawit shell download .zshrc
+                           replace it with GitHub's, backed up first (asks)
+  --overwrite picks this side (upload) or GitHub's (download) for a file
+  changed on both.
+  sawit prompts backup     the prompt library to your private sawit-prompts
+                           repository (made on the first backup)
+  sawit prompts restore    bring GitHub's prompts here (asks; -y to skip);
+                           --overwrite <id> for one changed on both sides
+
 More lists, shown only when asked:
   sawit list mcp           the MCP page: servers and the AI clients that
                            have them (colokan)
@@ -146,6 +179,12 @@ Aliases (every word has an English and an Indonesian name):
   pasang = install · pupuk = upgrade · cabut = uninstall
   skills = skill, bibit: install = pasang · update = upgrade, pupuk ·
     remove = uninstall, cabut · --project = --proyek
+  permissions = izin: list = lihat, ls · add = tambah · remove = hapus, rm ·
+    move = pindah, mv · allow = izinkan, boleh · ask = tanya · deny = tolak,
+    larang · --file = --berkas
+  shell = cangkang: status = cek · upload = unggah, push · download = unduh,
+    pull · --overwrite = --timpa
+  prompts = mantra: backup = cadangkan, push · restore = pulihkan, pull
   list: all = semua · instances = instance, kebun · db = dbs, database,
     databases, blok · ports = port, lahan · connections = connection,
     conn, koneksi, konsesi · tools = tool, alat, perkakas · mcp = colokan ·

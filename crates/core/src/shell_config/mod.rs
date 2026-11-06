@@ -4,12 +4,14 @@
 //! saved to a private GitHub repository.
 
 mod backup;
+mod pick;
 mod secrets;
 mod sync;
 
 pub use backup::{
     BACKUP_REPO, BackupPlan, Saved, backup_files, computer_name, plan_backup, save_backup,
 };
+pub use pick::{Direction, pick_files, secret_lines};
 pub use secrets::find_secrets;
 pub use sync::{
     Backup, Downloaded, FileSync, Replaced, SYNC_STATE, SyncStatus, apply_download, backup_path,

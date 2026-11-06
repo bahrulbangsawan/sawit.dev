@@ -8,6 +8,7 @@ mod link;
 mod paths;
 mod request;
 mod subcommands;
+mod workshop;
 
 fn target(raw: &str, existing: &[&str]) -> Target {
     parse_target(OsStr::new(raw), Path::new("/p"), |p| {

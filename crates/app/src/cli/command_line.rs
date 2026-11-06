@@ -54,6 +54,13 @@ pub fn command_line() -> OpenRequest {
         Ok(Invocation::Bibit(args)) => {
             std::process::exit(kebun::block_on(kebun::bibit(args, &paths)));
         }
+        Ok(Invocation::Izin(args)) => std::process::exit(kebun::izin(args)),
+        Ok(Invocation::Cangkang(args)) => {
+            std::process::exit(kebun::block_on(kebun::cangkang(args, &paths)));
+        }
+        Ok(Invocation::Mantra(args)) => {
+            std::process::exit(kebun::block_on(kebun::mantra(args, &paths)));
+        }
         // The page goes to the running app, started first as `send` starts it.
         Ok(Invocation::Browse(target)) => {
             let start = || start_app(&paths.cli_socket()).map(drop);
