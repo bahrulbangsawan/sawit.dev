@@ -419,4 +419,6 @@ rm -rf "/Applications/Zed.app" "$HOME/Applications/Zed.app""#,
         )
     },
     brew::GH,
+    brew::MINIO,
+    brew::MC,
 ];

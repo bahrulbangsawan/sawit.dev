@@ -1,10 +1,11 @@
-//! The Homebrew formulas: the GitHub CLI. Homebrew's copy is upgraded and removed by the
-//! formula it came from; another copy is found and left alone.
+//! The Homebrew formulas: the GitHub CLI, MinIO and the MinIO Client. Homebrew's copy
+//! is upgraded and removed by the formula it came from; another copy is found and left alone;
+//! Midnight Commander's `mc` isn't the MinIO Client.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::dev_tools::detect::short_version;
+use crate::dev_tools::detect::{another_program, short_version, version_text};
 use crate::dev_tools::removal::{brew_formula, installed_outside_at, uninstall_command_in};
 use crate::package_manager::PackageManager;
 
@@ -109,4 +110,129 @@ fn only_homebrews_github_cli_is_upgraded_or_removed() {
     let latest = HashMap::from([("gh", "2.103.3".to_string())]);
     assert!(newer("gh", &found, &latest).is_none());
     assert!(upgrade_plan(&["gh"], &found, &latest).is_empty());
+}
+
+/// MinIO and its client install from MinIO's tap. A copy from Homebrew's core (`minio`,
+/// `minio-mc`, deprecated) is Homebrew's too: `brew upgrade` names the formula its receipt
+/// gives, so neither a tap's nor core's copy is upgraded by the other's name.
+#[test]
+fn minio_and_its_client_upgrade_by_the_formula_they_came_from() {
+    for (id, formula) in [("minio", "minio/stable/minio"), ("mc", "minio/stable/mc")] {
+        let tool = find(id).unwrap();
+        assert_eq!(tool.formula, Some(formula));
+        assert_eq!(tool.install, format!("brew install {formula}"));
+        assert_eq!(tool.needs, ["homebrew"]);
+        assert_eq!(tool.signature, Some("minio"));
+        // The repositories are archived: no release to compare with.
+        assert_eq!(tool.latest, Latest::None);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("me");
+    let tap = keg(
+        &dir.path().join("a"),
+        "mc",
+        "RELEASE.2025-08-13T08-35-41Z",
+        "mc",
+        Some("minio/stable"),
+    );
+    assert_eq!(
+        plan_for("mc", &tap, &home),
+        (
+            Some("brew uninstall mc".into()),
+            "brew upgrade minio/stable/mc".into(),
+            None
+        )
+    );
+    let core = keg(
+        &dir.path().join("b"),
+        "minio-mc",
+        "2025-08-13T08-35-41Z",
+        "mc",
+        Some("homebrew/core"),
+    );
+    assert_eq!(
+        plan_for("mc", &core, &home),
+        (
+            Some("brew uninstall minio-mc".into()),
+            "brew upgrade minio-mc".into(),
+            None
+        )
+    );
+    // An old receipt without a tap is core's.
+    let server = keg(
+        &dir.path().join("c"),
+        "minio",
+        "2025-10-15T17-29-55Z",
+        "minio",
+        None,
+    );
+    assert_eq!(plan_for("minio", &server, &home).1, "brew upgrade minio");
+    // Their keeping: the client's aliases and keys stay.
+    assert_eq!(find("mc").unwrap().keeps, ["~/.mc"]);
+    assert!(kept(find("mc").unwrap(), &home).is_empty());
+    std::fs::create_dir_all(home.join(".mc")).unwrap();
+    assert_eq!(kept(find("mc").unwrap(), &home), [home.join(".mc")]);
+}
+
+/// MinIO names its releases by date: their versions are read, and compared by date and time.
+#[test]
+fn minio_versions_are_dates() {
+    assert_eq!(
+        short_version("mc version RELEASE.2025-08-13T08-35-41Z (commit-id=7394ce0)\nRuntime: go1.27.1 darwin/arm64").as_deref(),
+        Some("2025-08-13T08-35-41Z")
+    );
+    assert_eq!(
+        short_version("minio version RELEASE.2025-10-15T17-29-55Z (commit-id=9e49d5e)").as_deref(),
+        Some("2025-10-15T17-29-55Z")
+    );
+    assert!(is_newer("2025-10-15T17-29-55Z", "2025-09-06T17-38-46Z"));
+    assert!(is_newer(
+        "RELEASE.2025-08-13T08-35-42Z",
+        "2025-08-13T08-35-41Z"
+    ));
+    assert!(!is_newer("2025-08-13T08-35-41Z", "2025-08-13T08-35-41Z"));
+    assert!(!is_newer("2024-12-31T23-59-59Z", "2025-01-01T00-00-00Z"));
+    // Others compare as before.
+    assert!(is_newer("2.10.0", "2.9.9"));
+}
+
+/// An `mc` is the MinIO Client only when its version says MinIO: Midnight Commander's isn't,
+/// nor one that can't say. A tool without a signature is whatever its command is.
+#[tokio::test]
+async fn midnight_commander_is_not_the_minio_client() {
+    let mc = find("mc").unwrap();
+    assert!(another_program(
+        mc,
+        Some("GNU Midnight Commander 4.8.33\nBuilt with GLib 2.84")
+    ));
+    assert!(another_program(mc, None));
+    assert!(!another_program(
+        mc,
+        Some("mc version RELEASE.2025-08-13T08-35-41Z\nCopyright (c) 2015-2025 MinIO, Inc.")
+    ));
+    assert!(!another_program(find("gh").unwrap(), Some("anything")));
+    // Read from the command itself.
+    let dir = tempfile::tempdir().unwrap();
+    let script = |name: &str, text: &str| {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.path().join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '{text}\\n'\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    };
+    let gnu = script("gnu-mc", "GNU Midnight Commander 4.8.33");
+    let minio = script(
+        "minio-mc",
+        "mc version RELEASE.2025-08-13T08-35-41Z (commit-id=1)\\nCopyright (c) 2015-2025 MinIO, Inc.",
+    );
+    let text = version_text(mc, &gnu).await;
+    assert!(another_program(mc, text.as_deref()));
+    let text = version_text(mc, &minio).await;
+    assert!(!another_program(mc, text.as_deref()));
+    assert_eq!(
+        crate::dev_tools::detect::version_of(mc, &minio)
+            .await
+            .as_deref(),
+        Some("2025-08-13T08-35-41Z")
+    );
 }

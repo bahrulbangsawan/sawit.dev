@@ -302,7 +302,7 @@ explained. A conflict on the same address can't be forced.
 
 - Open **Dev Tools** (**Pages** menu) for package managers (Homebrew, nvm, pnpm, npm, uv), languages and runtimes
   (Node.js, Bun, Deno, Python, Rust), AI agents (Claude Code, Codex, OpenCode, Amp, …) and terminal apps
-  (Zed, Starship, the Fly.io CLI, Cloudflare's `cf`, the GitHub CLI, PureMac, …).
+  (Zed, Starship, the Fly.io CLI, Cloudflare's `cf`, the GitHub CLI, MinIO, PureMac, …).
 - Each tool shows whether it's installed, its version and where it lives, and the exact command that installs it.
   An app's version comes from its `Info.plist`.
 - **PureMac** ([momenbasel/PureMac](https://github.com/momenbasel/PureMac)), the open source Mac cleaner, installs
@@ -317,6 +317,9 @@ explained. A conflict on the same address can't be forced.
   token is never copied into gh. A `gh` from the `.pkg`, MacPorts or conda is found and left alone. Without `gh`, the
   welcome screen's **Set Up** has it ticked, and **Install GitHub CLI** (there and on the GitHub page) installs it
   only when clicked.
+- **MinIO** and the **MinIO Client** install from MinIO's tap (`brew install minio/stable/minio`,
+  `minio/stable/mc`); a copy from Homebrew's core (`minio`, `minio-mc`) upgrades with the formula it came from. An
+  `mc` counts only when `mc --version` names MinIO: Homebrew's `mc` is Midnight Commander.
 - An install that needs tools you don't have and didn't pick (FFmpeg for HyperFrames) asks first, naming them.
 - The tools npm installs for every project (Gemini CLI, Cloudflare's `cf`) have a package manager menu beside their
   command: **npm** (`npm install -g cf`), **pnpm** (`pnpm add -g cf`), **bun** (`bun add -g cf`) or **yarn**

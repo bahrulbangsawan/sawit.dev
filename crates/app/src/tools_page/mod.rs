@@ -211,6 +211,7 @@ fn logo(id: &str, size: f32, cx: &App) -> AnyElement {
         // The app's own icon.
         "puremac" => ("tool_logos/puremac.png", true),
         "gh" => ("tool_logos/github.svg", false),
+        "minio" | "mc" => ("tool_logos/minio-color.svg", true),
         "bun" | "deno" | "rust" | "flyio" => {
             return svg()
                 .path(SharedString::from(format!("tool_logos/{id}.svg")))

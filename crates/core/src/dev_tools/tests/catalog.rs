@@ -54,7 +54,10 @@ fn puremac_is_the_app_from_its_homebrew_cask() {
     let ids = |tools: Vec<&Tool>| tools.iter().map(|t| t.id).collect::<Vec<_>>();
     assert_eq!(ids(plan(&["puremac"], &|_| false)), ["homebrew", "puremac"]);
     assert_eq!(ids(plan(&["puremac"], &|id| id == "homebrew")), ["puremac"]);
-    assert_eq!(ids(dependents("homebrew")), ["puremac", "gh"]);
+    assert_eq!(
+        ids(dependents("homebrew")),
+        ["puremac", "gh", "minio", "mc"]
+    );
     // No `command -v` for it: that would find the PureMac CLI.
     let script = detect_script();
     assert!(!script.contains(&format!("{MARK}puremac")), "{script}");
