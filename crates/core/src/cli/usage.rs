@@ -20,6 +20,7 @@ Usage:
   sawit cabut <tool ...> [-y]
   sawit skills install|update|remove [--project [dir]] [-y]
   sawit github token --header | --exec <program> [args ...]
+  sawit account [list|open|use|login|status|usage|add|remove|help]
 
 Examples:
   sawit .                  open this folder as a project (joins the open

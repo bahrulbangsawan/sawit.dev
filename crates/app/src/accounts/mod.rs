@@ -8,6 +8,7 @@ mod list;
 mod login;
 mod page;
 mod rows;
+mod settings_tab;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -152,6 +153,13 @@ impl AccountsModel {
     }
 
     fn read_usage(&mut self, cx: &mut Context<Self>) {
+        // `sawit account` and the import change the file too: read it again when it did.
+        if let Ok(on_disk) = Accounts::load(&self.root)
+            && on_disk != self.accounts
+        {
+            self.accounts = on_disk;
+            cx.notify();
+        }
         let before = self.usage.clone();
         for a in &self.accounts.accounts {
             if let Some(s) = usage::load_snapshot(&self.root, &a.id) {

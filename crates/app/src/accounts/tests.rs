@@ -106,7 +106,7 @@ fn a_sign_in_runs_claude_and_takes_the_code(cx: &mut TestAppContext) {
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let id = m.update(cx, |m, cx| {
+    let id = m.update(cx, |m, _| {
         m.claude = Some(fake.clone());
         m.list()[0].id.clone()
     });

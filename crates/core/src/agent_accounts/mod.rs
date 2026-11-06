@@ -8,9 +8,11 @@
 //! list of accounts, which one is active, and usage the agent itself reported.
 
 pub mod claude;
+pub mod cli;
 pub mod collector;
 pub mod login;
 pub mod run;
+pub mod shell;
 pub mod statusline;
 mod store;
 pub mod tracking;

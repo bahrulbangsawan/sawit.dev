@@ -30,3 +30,12 @@ sawitTest("accounts: an agent opens the page without taking the keyboard", async
   await ctx.call({ cmd: "open_page", page: "accounts" });
   await win.waitFor({ role: "button", name: "Adopt Existing…" });
 });
+
+sawitTest("accounts: the Settings tab offers the shell block, the shortcuts and Open at Login", async (ctx) => {
+  const { win } = ctx;
+  await ctx.call({ cmd: "open_page", page: "accounts" });
+  await win.click({ role: "button", name: "Settings" });
+  // The test's own ~/.zshrc has no block yet: only Install is offered, nothing is written.
+  await win.waitFor({ role: "button", name: "Install…" });
+  await win.waitFor({ role: "button", name: "Install Shortcuts" });
+});

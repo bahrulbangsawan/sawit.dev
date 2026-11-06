@@ -2,7 +2,6 @@
 //! chosen one on the right: Set Active, Open in Terminal, Sign In, usage tracking with Check Usage
 //! Now, Rename and Remove. Add Account and Adopt Existing sit under the list.
 
-
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Input, InputState};
@@ -28,6 +27,24 @@ pub enum AccountsEvent {
 
 impl EventEmitter<AccountsEvent> for AccountsPage {}
 
+/// The page's tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tab {
+    Accounts,
+    Settings,
+}
+
+impl Tab {
+    pub const ALL: &[Tab] = &[Tab::Accounts, Tab::Settings];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Accounts => "Accounts",
+            Tab::Settings => "Settings",
+        }
+    }
+}
+
 pub struct AccountsPage {
     pub(super) model: Entity<AccountsModel>,
     pub(super) selected: Option<String>,
@@ -35,6 +52,7 @@ pub struct AccountsPage {
     rename: Entity<InputState>,
     pub(super) renaming: bool,
     pub(super) code: Entity<InputState>,
+    tab: Tab,
     focus: FocusHandle,
     _observe: Subscription,
 }
@@ -74,6 +92,7 @@ impl AccountsPage {
             new_name: input("New account name, like work", window, cx),
             rename: input("Name", window, cx),
             renaming: false,
+            tab: Tab::Accounts,
             code: input("Paste the code from the sign-in page", window, cx),
             focus: cx.focus_handle(),
         }
@@ -395,8 +414,37 @@ impl Render for AccountsPage {
             let m = self.model.read(cx);
             (m.error.clone(), m.notice.clone())
         };
-        let list = self.render_list(cx);
-        let detail = self.render_detail(window, cx);
+        let body = match self.tab {
+            Tab::Accounts => {
+                let list = self.render_list(cx);
+                let detail = self.render_detail(window, cx);
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(list)
+                    .child(detail)
+                    .into_any_element()
+            }
+            Tab::Settings => self.render_settings(cx),
+        };
+        let current = self.tab;
+        let tabs = h_flex()
+            .px_4()
+            .pt_2()
+            .gap_1()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .children(Tab::ALL.iter().map(|&t| {
+                Button::new(SharedString::from(format!("accounts-tab-{}", t.label())))
+                    .small()
+                    .ghost()
+                    .label(t.label())
+                    .selected(t == current)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tab = t;
+                        cx.notify();
+                    }))
+            }));
         v_flex()
             .id("accounts-page")
             .track_focus(&self.focus)
@@ -422,6 +470,7 @@ impl Render for AccountsPage {
                     },
                 )))
             })
-            .child(h_flex().flex_1().min_h_0().child(list).child(detail))
+            .child(tabs)
+            .child(div().flex_1().min_h_0().flex().child(body))
     }
 }

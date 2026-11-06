@@ -18,6 +18,7 @@ mod highlight;
 mod keymap;
 mod layout;
 mod local_explorer;
+mod login_item;
 mod mcp_page;
 #[cfg(test)]
 mod menu_tests;
@@ -128,6 +129,24 @@ fn main() -> std::process::ExitCode {
     if invoked_as(sawit_core::agent_accounts::collector::PROGRAM) {
         let args: Vec<String> = std::env::args().skip(1).collect();
         std::process::exit(sawit_core::agent_accounts::collector::main(&args));
+    }
+    // `cp2`: Claude Code as account 2, in this terminal (a link to this binary).
+    if let Some(n) = std::env::args_os()
+        .next()
+        .and_then(|a| {
+            std::path::Path::new(&a)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+        })
+        .and_then(|name| sawit_core::agent_accounts::shell::shortcut_number(&name))
+    {
+        let rest: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+        std::process::exit(sawit_core::agent_accounts::cli::shortcut_main(n, &rest));
+    }
+    // `sawit account …`: the Accounts page from a terminal.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "account") {
+        let rest: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+        std::process::exit(sawit_core::agent_accounts::cli::main(&rest));
     }
     // `RUST_LOG=sawit=debug` prints the debug log (the canvas's render times, …) on stderr. Without
     // RUST_LOG no logger is installed, and log calls do nothing.
