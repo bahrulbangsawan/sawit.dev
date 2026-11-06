@@ -391,7 +391,12 @@ impl AccountsPage {
             .overflow_y_scroll()
             .p_6()
             .gap_2()
-            .children(checks.into_iter().map(|c| {
+            .children(checks.into_iter().enumerate().map(|(ix, c)| {
+                // GPUI shows assistive technology no plain text: each check says itself.
+                let spoken = match &c.fix {
+                    Some(f) => format!("{}: {} {f}", c.title, c.detail),
+                    None => format!("{}: {}", c.title, c.detail),
+                };
                 let (mark, color) = match c.level {
                     Level::Pass => ("✓", cx.theme().success),
                     Level::Warn => ("!", cx.theme().warning),
@@ -399,6 +404,9 @@ impl AccountsPage {
                     Level::Info => ("i", cx.theme().muted_foreground),
                 };
                 h_flex()
+                    .id(("accounts-check", ix))
+                    .role(Role::Label)
+                    .aria_label(spoken)
                     .gap_2()
                     .items_start()
                     .child(div().w(px(16.)).text_color(color).child(mark))
