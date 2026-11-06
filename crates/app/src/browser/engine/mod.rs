@@ -203,8 +203,12 @@ impl Engine {
         };
     }
 
+    /// The page's address, or `None` before the view has one: wry's own `url()` unwraps
+    /// `WKWebView.URL`, which is nil for a tab that has not loaded yet, and would panic.
     pub fn url(&self) -> Option<String> {
-        self.webview.url().ok()
+        use wry::WebViewExtMacOS as _;
+        let url = unsafe { self.webview.webview().URL() }?;
+        url.absoluteString().map(|s| s.to_string())
     }
 
     pub fn set_frame(&self, frame: Frame) {
