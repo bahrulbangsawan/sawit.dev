@@ -12,6 +12,7 @@ pub mod analytics;
 pub mod claude;
 pub mod cli;
 pub mod collector;
+pub mod import;
 pub mod login;
 pub mod run;
 pub mod sessions;

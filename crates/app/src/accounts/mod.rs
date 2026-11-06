@@ -8,6 +8,7 @@ mod list;
 mod login;
 mod ops;
 mod page;
+mod pool_ui;
 mod rows;
 mod settings_tab;
 mod statusline_tab;

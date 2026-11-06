@@ -156,6 +156,7 @@ impl AccountsPage {
     }
 
     pub(super) fn render_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let pool = self.render_pool_card(cx);
         let m = self.model.read(cx);
         let status = m.shell_status();
         let muted = cx.theme().muted_foreground;
@@ -202,6 +203,7 @@ impl AccountsPage {
             .overflow_y_scroll()
             .p_6()
             .gap_4()
+            .children(pool)
             .child(
                 card("Shell Integration")
                     .child(div().text_xs().text_color(muted).child(file))

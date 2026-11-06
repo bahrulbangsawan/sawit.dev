@@ -59,3 +59,13 @@ sawitTest("accounts: the Usage and Diagnostics tabs open", async (ctx) => {
   // The test's PATH has no claude: Diagnostics says so, with the fix.
   await win.waitFor({ name: /Install Claude Code/ });
 });
+
+sawitTest("accounts: no Claude Pool in the home, no import or removal offered", async (ctx) => {
+  const { win } = ctx;
+  await ctx.call({ cmd: "open_page", page: "accounts" });
+  await win.waitFor({ role: "button", name: "Adopt Existing…" });
+  assert.equal((await win.findAll({ role: "button", name: "Import from Claude Pool…" })).length, 0);
+  await win.click({ role: "button", name: "Settings" });
+  await win.waitFor({ role: "button", name: "Install Shortcuts" });
+  assert.equal((await win.findAll({ role: "button", name: "Remove Claude Pool…" })).length, 0);
+});

@@ -32,6 +32,8 @@ pub struct Settings {
     pub collector_output: String,
     /// Open in Terminal asks for a project in this folder first, when set.
     pub projects_folder: Option<PathBuf>,
+    /// Claude Pool's data was imported (the offer doesn't show again).
+    pub imported_from_pool: bool,
 }
 
 impl Default for Settings {
@@ -43,6 +45,7 @@ impl Default for Settings {
             suggest_account: false,
             collector_output: "summary".into(),
             projects_folder: None,
+            imported_from_pool: false,
         }
     }
 }

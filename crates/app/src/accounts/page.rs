@@ -399,13 +399,14 @@ impl Render for AccountsPage {
         };
         let body = match self.tab {
             Tab::Accounts => {
+                let offer = self.render_import_offer(cx);
                 let list = self.render_list(cx);
                 let detail = self.render_detail(window, cx);
-                h_flex()
+                v_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(list)
-                    .child(detail)
+                    .children(offer)
+                    .child(h_flex().flex_1().min_h_0().child(list).child(detail))
                     .into_any_element()
             }
             Tab::Usage => self.render_usage(cx),
