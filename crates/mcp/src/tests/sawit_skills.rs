@@ -51,8 +51,9 @@ fn the_skills_and_the_block_name_only_real_tools_and_arguments() {
     let mut checked = 0;
     for (name, text) in &texts {
         for word in names(text) {
-            // Programs a skill names beside the tools.
-            if ["pg_dump"].contains(&word.as_str()) {
+            // Programs a skill names beside the tools, and values of app_open_page's `page` and
+            // app_show_panel's `panel`.
+            if ["pg_dump", "git_graph", "new_project", "shell_config"].contains(&word.as_str()) {
                 continue;
             }
             let known = match word.strip_suffix('*') {
@@ -107,10 +108,43 @@ fn the_skills_and_the_block_name_only_real_tools_and_arguments() {
             "sawit-terminal",
             &[
                 "terminal_run",
+                "terminal_read",
                 "app_run_script",
                 "list_ports",
                 "stop_processes",
-                "ssh_exec",
+                "local_explorer",
+            ],
+        ),
+        (
+            "sawit-ssh",
+            &["list_ssh_hosts", "ssh_exec", "app_ssh_connect"],
+        ),
+        ("sawit-git", &["git_status", "git_commit", "git_push"]),
+        (
+            "sawit-project",
+            &[
+                "stack_create",
+                "install_dev_tools",
+                "install_mcp_server",
+                "install_skill",
+            ],
+        ),
+        (
+            "sawit-prompts",
+            &[
+                "list_prompts",
+                "fill_prompt",
+                "backup_prompts",
+                "restore_prompts",
+            ],
+        ),
+        (
+            "sawit-app",
+            &[
+                "app_state",
+                "app_open_page",
+                "keymap_bind",
+                "edit_permission",
             ],
         ),
     ] {
@@ -130,6 +164,72 @@ fn the_skills_and_the_block_name_only_real_tools_and_arguments() {
             text.contains("MCP server isn't connected")
                 || text.contains("Without the sawit MCP server"),
             "{skill}"
+        );
+    }
+}
+
+/// The tools no skill teaches, each with why: an old name kept so older prompts still work.
+const NOT_TAUGHT: &[(&str, &str)] = &[
+    ("render_mermaid", "deprecated name of render_diagram"),
+    (
+        "canvas_add_mermaid",
+        "deprecated name of canvas_add_diagram",
+    ),
+    (
+        "app_maximize_terminal",
+        "alias of app_maximize with panel terminal",
+    ),
+];
+
+/// Skills v2: every tool the server lists is taught (named as `tool`) by at least one skill of
+/// the pack, or is in [`NOT_TAUGHT`] with its reason; every skill is reachable from the router;
+/// and each description stays short enough for agents to read whole and pick by.
+#[test]
+fn the_skills_teach_every_tool_and_the_router_reaches_every_skill() {
+    let tools = Sawit::router().list_all();
+    let pack = skills::get(SAWIT_PACK).unwrap();
+    let texts: Vec<(&str, &str)> = pack
+        .skills
+        .iter()
+        .map(|s| (*s, bundled::text(s, "SKILL.md").unwrap()))
+        .collect();
+    let untaught: Vec<&str> = tools
+        .iter()
+        .map(|t| t.name.as_ref())
+        .filter(|name| !NOT_TAUGHT.iter().any(|(n, _)| n == name))
+        .filter(|name| {
+            !texts
+                .iter()
+                .any(|(_, text)| text.contains(&format!("`{name}`")))
+        })
+        .collect();
+    assert!(untaught.is_empty(), "no skill teaches {untaught:?}");
+    for (name, _) in NOT_TAUGHT {
+        assert!(
+            tools.iter().any(|t| t.name == *name),
+            "{name} is gone: drop it from NOT_TAUGHT"
+        );
+    }
+    let router = bundled::text("sawit", "SKILL.md").unwrap();
+    for skill in pack.skills.iter().filter(|s| **s != "sawit") {
+        assert!(
+            router.contains(&format!("`{skill}`")),
+            "the router doesn't route to {skill}"
+        );
+    }
+    for (skill, text) in &texts {
+        let description = text
+            .lines()
+            .find_map(|l| l.strip_prefix("description: "))
+            .unwrap_or_else(|| panic!("{skill} has no description"));
+        let chars = description.chars().count();
+        assert!(
+            (80..=600).contains(&chars),
+            "{skill}'s description is {chars} characters"
+        );
+        assert!(
+            text.starts_with(&format!("---\nname: {skill}\n")),
+            "{skill}'s front matter"
         );
     }
 }
