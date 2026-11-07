@@ -75,8 +75,10 @@ mod refusal;
 mod replace;
 mod routes;
 mod screen;
+mod starter;
 #[cfg(test)]
 mod tests;
+mod tokens;
 mod work;
 
 use command::{command, commands};
@@ -240,6 +242,9 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         Some("progress") => work::progress(board, op),
         Some("screen") => screen::screen(board, op),
         Some("checks") => checks::checks(board, op),
+        Some("lint") => checks::lint(board, op),
+        Some("design_status") => checks::design_status(board),
+        Some("starter") => starter::starter(board, op),
         Some("frame_code") => code::frame_code(board, op),
         Some("handoff") => handoff::handoff(board, op),
         Some("routes") => routes::routes(board, op),

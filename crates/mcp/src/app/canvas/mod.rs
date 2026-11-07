@@ -9,6 +9,7 @@ mod dispatch;
 mod files;
 mod guide;
 mod handoff;
+mod lint_tools;
 mod routes;
 mod screens;
 mod settings;
@@ -27,9 +28,10 @@ use serde_json::{Value, json};
 
 pub use args::{
     CanvasAddRoutesArgs, CanvasBeginArgs, CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs,
-    CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasHandoffArgs, CanvasLoadArgs,
-    CanvasMermaidArgs, CanvasProgressArgs, CanvasScreenExportArgs, CanvasScreenGetArgs,
-    CanvasScreenWriteArgs, CanvasSettingsArgs, CanvasTargetArgs, CanvasUpdateArgs,
+    CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasHandoffArgs, CanvasLintArgs,
+    CanvasLoadArgs, CanvasMermaidArgs, CanvasProgressArgs, CanvasScreenExportArgs,
+    CanvasScreenGetArgs, CanvasScreenWriteArgs, CanvasSettingsArgs, CanvasStarterArgs,
+    CanvasTargetArgs, CanvasUpdateArgs,
 };
 use dispatch::{command_list, in_work};
 use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
@@ -80,14 +82,14 @@ macro_rules! canvas_add_diagram_says {
 #[tool_router(router = canvas_router, vis = "pub(super)")]
 impl Sawit {
     #[tool(
-        description = "Sawit's design standard for UI on the canvas, as Markdown: the SKILL.md of the Canvas Design skill Sawit ships. Read it before you design, build or review any UI on the canvas, follow it, and run its checklist before you say a design is done. `section` (a heading, such as Typography) gives that section with the checklist. Works without the app"
+        description = "Sawit's design standard for UI on the canvas, as Markdown: the SKILL.md of the Canvas Design skill Sawit ships. Read it before you design, build or review any UI on the canvas, follow it, and run its checklist before you say a design is done. `section` (a heading, such as Typography) gives that section with the checklist; `section: \"lint\"` gives the design lint's rules, each with the guide section it checks (canvas_lint runs them). Works without the app"
     )]
     async fn canvas_design_guide(
         &self,
         Parameters(a): Parameters<CanvasDesignGuideArgs>,
     ) -> CallToolResult {
         let text = tri!(guide::text());
-        match guide::answer(text, a.section.as_deref()) {
+        match guide::with_lint(text, a.section.as_deref()) {
             Ok(answer) => ok(answer),
             Err(e) => fail(e),
         }
@@ -115,10 +117,11 @@ impl Sawit {
         Parameters(mut a): Parameters<CanvasElementsArgs>,
     ) -> CallToolResult {
         tri!(a.tab_into_file());
+        let work = a.work.clone();
         let op = in_work(json!({ "op": "add", "elements": a.elements }), a.work);
         let op = with_lane(op, a.agent.as_ref());
-        match self.canvas(a.project, a.file, op).await {
-            Ok(v) => ok(pretty(&v)),
+        match self.canvas(a.project.clone(), a.file.clone(), op).await {
+            Ok(v) => ok(pretty(&self.with_lint(a.project, a.file, work, v).await)),
             Err(e) => fail(e),
         }
     }
@@ -156,10 +159,11 @@ impl Sawit {
         Parameters(mut a): Parameters<CanvasUpdateArgs>,
     ) -> CallToolResult {
         tri!(a.tab_into_file());
+        let work = a.work.clone();
         let op = in_work(json!({ "op": "update", "elements": a.elements }), a.work);
         let op = with_lane(op, a.agent.as_ref());
-        match self.canvas(a.project, a.file, op).await {
-            Ok(v) => ok(pretty(&v)),
+        match self.canvas(a.project.clone(), a.file.clone(), op).await {
+            Ok(v) => ok(pretty(&self.with_lint(a.project, a.file, work, v).await)),
             Err(e) => fail(e),
         }
     }
@@ -343,8 +347,11 @@ impl Sawit {
         });
         let op = with_lane(op, a.agent.as_ref());
         let begun = match screen {
-            true => self.begin_screen(a.project, a.file, op).await,
-            false => self.canvas(a.project, a.file, op).await,
+            true => {
+                self.begin_screen(a.project.clone(), a.file.clone(), op)
+                    .await
+            }
+            false => self.canvas(a.project.clone(), a.file.clone(), op).await,
         };
         let mut v = match begun {
             Ok(v) => v,
@@ -353,6 +360,9 @@ impl Sawit {
         if vector_screen {
             v["use_screen"] = json!(design::USE_A_SCREEN);
         }
+        let (project, file, sketch) = (a.project.clone(), a.file.clone(), a.sketch == Some(true));
+        self.begin_design_status(project, file, &mut v, ui, screen, sketch)
+            .await;
         // The standard goes with the work: its digest with the session's first UI, then the
         // sections later works name.
         let mut sent = vec![Content::text(pretty(&v))];
