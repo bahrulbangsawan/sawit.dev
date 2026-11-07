@@ -238,6 +238,7 @@ fn show(view: &Entity<BoardView>, shown: bool, cx: &mut VisualTestContext) {
 fn bind_app_keys(cx: &mut App) {
     gpui_kit::init(cx);
     crate::workspace::init(cx);
+    crate::find::init(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", crate::cli::Quit, None),
         KeyBinding::new("cmd-shift-n", crate::cli::NewWindow, None),

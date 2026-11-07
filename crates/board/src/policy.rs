@@ -175,6 +175,9 @@ pub const CLIPBOARD: &[&str] = &[
 /// [`crate::input::gpui_keystroke`] writes them.
 pub const SAWIT_WINS: &[&str] = &[
     "cmd-w",
+    // The app's find bar (⌘F finds the canvas's layers by their text); FigCraft's Find and
+    // replace dialog stays in the Edit menu.
+    "cmd-f",
     "cmd-o",
     "ctrl-tab",
     "ctrl-shift-tab",

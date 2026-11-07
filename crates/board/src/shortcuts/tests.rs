@@ -61,8 +61,7 @@ fn sheet_has_a_group_for_each_keymap_group_but_prototype() {
             "edit.pickColor",
             "file.save",
             "file.saveAs",
-            "file.saveVersion",
-            "edit.findReplace"
+            "file.saveVersion"
         ]
     );
 }
@@ -308,6 +307,10 @@ const LEFT_UNBOUND: &[(&str, &str)] = &[
     // menus: a key of their own would be one more to remember. An agent passes the value in the
     // command's parameters.
     ("object.batchRename", "needs the new names"),
+    (
+        "edit.findReplace",
+        "⌘F is the app's find bar; Find and replace is in the Edit menu",
+    ),
     ("object.moveToPage", "needs the page to move to"),
     ("vector.offset", "needs the offset"),
     ("file.colorProfile", "needs the colour profile"),
