@@ -1,6 +1,5 @@
-//! The JSON contract of the page's `scan` and `rules` ops.
-//!
-//! Field names are the wire format: `browser/page/design.js` produces exactly these.
+//! The design scan, as the page's `scan` and `rules` ops end up once Rust has read them
+//! (`site_design::page`, whose types are the page's wire format).
 
 use std::collections::HashSet;
 
@@ -217,15 +216,6 @@ mod tests {
         let back = serde_json::to_value(&s).unwrap();
         assert_eq!(back["colors"][1]["role"], "background");
         assert_eq!(back["spacing"][0], serde_json::json!([4.0, 50]));
-    }
-
-    /// What `scan` and `rules` (`browser/page/design/`) emit, field for field.
-    #[test]
-    fn page_output_is_the_contract() {
-        crate::site_design::assert_wire_exact::<Scan>(include_str!("fixtures/page_scan.json"));
-        crate::site_design::assert_wire_exact::<SheetRules>(include_str!(
-            "fixtures/page_rules.json"
-        ));
     }
 
     #[test]

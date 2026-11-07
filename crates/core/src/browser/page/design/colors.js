@@ -1,34 +1,39 @@
-  // Any color the page computes → sRGB [r, g, b, a], falling back to the
-  // browser's own reading (a detached canvas) for syntax not handled above.
+  // ---- Colours ----
+
+  // Rust reads the colours the page computes (site_design::computed): rgb()/rgba(), hex,
+  // oklch(), oklab(), lab(), lch() and color(srgb | srgb-linear | display-p3). For any other
+  // syntax an answer sends the browser's own reading with it (a detached canvas's fillStyle),
+  // in `color_fallbacks`.
   let canvasCtx = null;
   const canvas = () => {
     if (!canvasCtx) canvasCtx = document.createElement("canvas").getContext("2d");
     return canvasCtx;
   };
-  const rgbaOf = (c) => {
-    const read = readColor(c);
-    if (read) return read;
+  const READ_IN_RUST = /^(?:#[0-9a-f]{3,8}|transparent|(?:rgba?|oklab|oklch|lab|lch)\([^()]*\)|color\(\s*(?:srgb|srgb-linear|display-p3)\s[^()]*\))$/;
+  const browserReading = (c) => {
     try {
       const ctx = canvas();
       if (!ctx) return null;
       ctx.fillStyle = "#010203";
       ctx.fillStyle = String(c);
       const out = String(ctx.fillStyle);
-      if (out === "#010203") return null;
-      return readColor(out);
+      return out === "#010203" ? null : out;
     } catch (_) {
       return null;
     }
   };
-  const transparent = (c) => {
-    if (!c || c === "transparent") return true;
-    const p = rgbaOf(c);
-    return !!p && p[3] === 0;
-  };
-  // OKLCH chroma of any color, for "chromatic" (≥ 0.03, as in site_design).
-  const chroma = (c) => {
-    const p = rgbaOf(c);
-    return !p || p[3] === 0 ? 0 : chromaOf(p);
+  // The colours one answer sends: `note(c)` passes `c` through, keeping the browser's reading
+  // of it in `fallbacks` when Rust can't read its syntax.
+  const newReadings = () => {
+    const fallbacks = Object.create(null);
+    const seen = new Set();
+    const note = (c) => {
+      if (typeof c !== "string" || seen.has(c)) return c;
+      seen.add(c);
+      if (!READ_IN_RUST.test(c.trim().toLowerCase())) fallbacks[c] = browserReading(c);
+      return c;
+    };
+    return { note, fallbacks };
   };
   // Every color written inside a computed value (box-shadow, gradients).
   const COLOR_IN_VALUE = /(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^()]*\)|#[0-9a-fA-F]{3,8}\b/g;
