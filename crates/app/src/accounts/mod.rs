@@ -6,6 +6,7 @@ mod agents_seen;
 mod card;
 mod chip;
 mod detail;
+mod diagnostics_tab;
 mod list;
 mod login;
 mod ops;
