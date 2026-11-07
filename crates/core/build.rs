@@ -48,6 +48,26 @@ fn main() {
         .unwrap_or_else(|e| panic!("{} can't be read: {e}", skill.display()));
     let made = digest::digest(&text).unwrap_or_else(|e| panic!("the design digest: {e}"));
     std::fs::write(out.join("design_digest.md"), made).expect("write design_digest.md");
+    // The big JS bundles, deflated: the binary carries about a third of their size, and
+    // `embedded::inflate` gives them back when they are run (they are never held).
+    for (source, name) in [
+        ("crates/core/assets/pele/pele.global.js", "pele.js.deflate"),
+        ("vendor/mesurer/bundle/mesurer.js", "mesurer.js.deflate"),
+    ] {
+        let source = repository.join(source);
+        println!("cargo:rerun-if-changed={}", source.display());
+        deflate(&source, &out.join(name));
+    }
+}
+
+/// Writes `source` deflated (raw DEFLATE, the best level) to `to`.
+fn deflate(source: &Path, to: &Path) {
+    use std::io::Write as _;
+    let bytes =
+        std::fs::read(source).unwrap_or_else(|e| panic!("{} can't be read: {e}", source.display()));
+    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder.write_all(&bytes).expect("deflate");
+    std::fs::write(to, encoder.finish().expect("deflate")).expect("write a deflated bundle");
 }
 
 /// What `dir` holds, by name, without hidden files (`.DS_Store`). Its absence fails the build:

@@ -69,6 +69,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 # SAWIT_WEB_FRAMES=1; browser::engine::web_frame).
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGImage", "objc2", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDirectDisplay", "CGDisplayConfiguration"] }
 block2 = "0.6"
+# mmap and munmap for the allocator's large blocks (src/memory.rs); already in the tree.
+libc = "0.2"
 # Canvas screens' folders, watched so a change on disk shows (board::web::watch); the version
 # gpui-component already links.
 notify = "8.2.1"

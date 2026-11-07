@@ -1,0 +1,30 @@
+# FigCraft's figcraft-text at the rev the workspace pins (8eb0b87646c5aef712326d6c431ccde5408630de),
+# with Sawit's patch (SAWIT_PATCH.md). Its workspace's versions are written out here.
+[package]
+name = "figcraft-text"
+version = "0.15.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "FigCraft text: font database (embedded craft-fonts + system fonts), shaping, line layout, glyph outlines"
+publish = false
+
+[dependencies]
+figcraft-geom = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+figcraft-doc = { git = "https://github.com/storytold/figcraft", rev = "8eb0b87646c5aef712326d6c431ccde5408630de" }
+skrifa = "0.47"
+harfrust = "0.13"
+# Colour emoji: sbix/CBDT strikes are PNG images the text layer decodes for the renderer.
+png = "0.18"
+unicode-bidi = "0.3"
+unicode-segmentation = "1.13"
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
+log = "0.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
+# Sawit patch: system font files are mapped rather than read (SAWIT_PATCH.md).
+memmap2 = "0.9"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text = { version = "=22.0.0", default-features = false, features = ["link"] }
+objc2 = "0.6"
