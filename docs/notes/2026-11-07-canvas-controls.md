@@ -2,7 +2,7 @@
 
 Every control on the canvas, by family: what it does, whether it works on a frame of layers and
 on an HTML screen, how it looks against the design standard, its MCP path (B4,
-`sawit_board::mcp_paths`) and its status. Checked on 2026-11-07 in the `wt/canvas` build.
+`sawit_board::mcp_paths`) and its status. Checked on 2026-11-07 in the `wt/canvas` build, and again in the `wt/canvas2` build (B15 second pass: Convert to Layers, the panels fitted to the selection, Preview's zoom, device frame, Open in Browser and custom size).
 
 Status: **works**, **fixed** (in this pass), **looks off** (works, needs the panel redesign),
 **not verified** (not exercised by hand in this pass), **missing**.
@@ -38,7 +38,7 @@ behaviour is FigCraft's own, covered by `crates/board` tests and the canvas e2e 
 | Control | Does | Layer frame | Screen | Look | MCP path | Status |
 |---|---|---|---|---|---|---|
 | Context bar | the selection's quick properties | yes | frame only | ok | `canvas_update`, `node.set` | works |
-| Screen bar: Preview, downloads, Send to Agent | per screen | – | yes | B13/B16 own the redesign | `canvas_screen_get`, `canvas_screen_export`, `canvas_handoff` | works; redesign is B13 |
+| Screen bar: Preview, Convert to Layers, Export, Send to Agent | per screen | – | yes | B16's bar, icons | `canvas_screen_get`, `canvas_screen_to_layers`, `canvas_screen_export`, `canvas_handoff` | works; **new**: Convert to Layers (e2e `screens-layers`) |
 | Frame bar: Export HTML / React, Send | per artboard | yes | – | B13/B16 | `canvas_screen_export {id}`, `canvas_handoff` | works |
 | Route bar: Live, Reload, Full page, Open in Browser | per route frame | – | route | ok | `canvas_add_routes` | works (e2e `covers`) |
 | Timer and vote pill | the board's countdown and vote | – | – | was always shown over the top right | `board.timer`, `board.vote` | **fixed**: shows only while one runs or has results, at the bottom right above the toolbar, never over Preview or Present; started from View › Start Timer / Start Vote |
@@ -48,13 +48,14 @@ behaviour is FigCraft's own, covered by `crates/board` tests and the canvas e2e 
 
 | Control | Does | Look | MCP path | Status |
 |---|---|---|---|---|
-| Bar | name, size picker, Rotate, Reload, Close | was a scrolling row of every size, cut off and covered by the timer pill | `canvas_screen_get` | **fixed**: one size menu (B16's bar, with icons) whose devices are grouped Mobile, Tablet, Laptop, Desktop under headings (B15); the name truncates with its full text in a tooltip; nothing is drawn over it |
-| Rotate | turns the size | ok | – | works |
-| Reload (new) | reloads the page | ok | – | works |
-| Zoom fit / 100 % | – | – | – | **missing**: Preview always fits |
-| Device frame | – | – | – | **missing** |
-| Open in Browser | – | – | – | **missing** for screens (they are served from a private scheme) |
-| Custom size | – | – | – | **missing** (waits for D1's sizes) |
+| Bar | name (cut short, whole name in its tooltip), size menu, Rotate, Fit / 100%, Device frame, Reload, Open in Browser, Close | one row of icon buttons, no scrolling, nothing drawn over it; fits a 900 × 700 window | `canvas_screen_get`; `app_state.canvases[].view.preview_state` | **fixed** (canvas2) |
+| Size menu | As Made, Window, D1's 20 devices grouped Mobile / Tablet / Laptop / Desktop, Custom size… | icons per kind, the size shown checked | – | works (e2e `screens-panels`) |
+| Custom size | width and height typed in the bar (200–3840), Enter or Apply, Escape or × cancels; a wrong size says what to type | inline fields, error note under the bar | – | **new**, works (e2e: a wrong size keeps the fields and says why; 1024 × 768 lays the page out at it) |
+| Rotate | turns the size | icon toggle, off for Window | – | works |
+| Fit / 100% | fits the page in the room (never up) / one CSS px a point, a taller page scrolling inside the room | segmented pair; 100% is off with a tooltip when the window is narrower than the page | – | **new**, works (e2e: scale 1 at 100%) |
+| Device frame | a bezel and shadow round a phone or tablet size | icon toggle, off (with why) for laptop and desktop sizes | – | **new**, works (e2e) |
+| Reload | reloads the page | icon | – | works |
+| Open in Browser | opens the screen's `index.html` in the project's Browser tab and closes Preview | icon | – | **new**; not verified end to end (file URL in the Browser tab) |
 
 ## Present
 
@@ -68,10 +69,15 @@ behaviour is FigCraft's own, covered by `crates/board` tests and the canvas e2e 
 
 | Control | Status |
 |---|---|
-| Pages list, Find layers, layer rows, rename, drag, visibility and lock | works; icons by kind were there; **fixed**: a sticky, shape or label is called by its first words, not "Sticky"; **not done**: compact pages, search in the header, 28 px rows |
-| A screen in the Layers panel | **fixed**: its own icon (app window) and an "HTML" tag whose tooltip says its content is a web page; route frames show a globe |
-| Design panel sections (Position, Layout, Fill, Stroke, Effects, Typography, Component, Layout grid) | works on layers; **looks off** on a screen (shows Fill, Auto layout and the rest, which a screen's HTML covers) |
-| Prototype tab: Present, + Interaction, + Flow | **fixed**: Present full width with a play icon and its key; Interactions and Flows sections with icons and empty states; add buttons with a + icon; flow rows with icon buttons. **Not done**: prototype settings section |
+| Find (search field) | **moved** to the panel's head, under the Layers / Assets tabs, with its icon and clear button (canvas2) |
+| Pages list | compact 28 px rows inset with rounded corners, a page icon, the page on show marked with a check; fold and add in its header; rename in place and the context menu as before |
+| Layer rows | 28 px, inset and rounded, icons by kind, a sticky's first words, visibility and lock on hover, indentation and expand / collapse, the selection marked; works |
+| A screen in the Layers panel | its own icon and an "HTML" tag whose tooltip says "HTML screen: its content is a web page. Select it and choose Convert to Layers to edit it here" |
+| Design panel on a screen | **fixed** (canvas2): only Position and a Screen section (what it is, its size as a device, Convert to Layers, Preview, Export); no Fill, Auto layout, Resizing, Layout grid, Typography or Export settings |
+| Design panel header | the kind ("Screen" for a screen), the name cut short with its whole name in a tooltip, an HTML tag for a screen |
+| Design panel on text | Typography comes first, then Position and the rest (canvas2) |
+| Section headers | each folds away or opens with a click on its title (a button with a chevron; keyboard reachable); a folded section is one row |
+| Prototype tab: Present, Device, Interactions, Flows | **fixed**: a Device section at the top (the device Present shows the frames in, and Landscape for devices that turn), then Interactions and Flows with icons and empty states |
 | Inspect (Dev Mode) | works |
 
 ## Windows and dialogs
@@ -84,11 +90,9 @@ behaviour is FigCraft's own, covered by `crates/board` tests and the canvas e2e 
 | Add Routes from Dev Server… | `canvas_add_routes` | works (e2e) |
 | Actions palette, shortcuts sheet | – (the engine's commands) | works |
 
-## Not done in this pass (B15)
+## Not done (after the canvas2 pass)
 
-- Layers as the source of truth for UI, Convert to Layers, and in-place editing of HTML screens:
-  not started. Agents can already build editable UI from layers with the new starter system and
-  lint (B12), but `canvas_begin`'s UI default is still `kind: "screen"`.
-- The right panel fitted to the selection (a screen getting only name, size, position, Preview,
-  Export), compact two-column fields and collapsible sections; the left panel's compact pages and
-  search in its header.
+- In-place editing of HTML screens (the backlog's alternative to Convert to Layers): not built;
+  Convert to Layers is the path, as the backlog recommends.
+- The design panel's header name is not editable in place (rename it in the Layers panel, ⌘R).
+- Open in Browser for a screen: built, not verified end to end.
