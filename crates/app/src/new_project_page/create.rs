@@ -35,6 +35,15 @@ impl NewProjectPage {
                 return Err(why);
             }
         };
+        let version = self.cli_version();
+        self.cli.requested = None;
+        if self.cli.versions.chosen.as_deref() == Some(version.as_str())
+            && let Some(why) = self.cli.versions.refuses(&self.stack)
+        {
+            self.problem = Some(why.clone());
+            cx.notify();
+            return Err(why);
+        }
         let key = format!("new-project:{}", dir.display());
         let name = stack_builder::format_project_name(&self.stack.project_name);
         let job = CreateJob {
@@ -44,7 +53,7 @@ impl NewProjectPage {
             },
             location: self.location.clone(),
             dir: dir.clone(),
-            command: stack_builder::run_command(&self.stack),
+            command: stack_builder::run_command_at(&self.stack, &version),
         };
         self.problem = None;
         self.creating = Creating::Running {

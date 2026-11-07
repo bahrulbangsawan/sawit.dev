@@ -157,12 +157,14 @@ impl Workspace {
         location: PathBuf,
         stack: Stack,
         open: bool,
+        cli_version: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         let page = self.show_new_project_page(false, window, cx);
         let job = page.update(cx, |page, cx| {
             page.set_stack(stack, location, window, cx);
+            page.request_cli_version(cli_version);
             page.begin_create(open, cx)
         })?;
         let (dir, command) = (job.dir.clone(), job.command.clone());

@@ -361,6 +361,10 @@ pub enum Command {
         /// An op without it, from an older `sawit-mcp`, opens the project as before.
         #[serde(default = "opens")]
         open: bool,
+        /// The `create-better-t-stack` version to run (`x.y.z`), for this create only; without
+        /// it, the one the page uses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cli_version: Option<String>,
     },
 }
 

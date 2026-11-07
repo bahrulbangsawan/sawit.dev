@@ -19,12 +19,16 @@ impl NewProjectPage {
         Category::ALL
             .iter()
             .filter_map(|&category| {
-                let all = stack_builder::options(category);
+                // Options the CLI version in use no longer takes are hidden.
+                let all: Vec<&'static StackOption> = stack_builder::options(category)
+                    .iter()
+                    .filter(|o| !self.cli.versions.hides(category, o.id))
+                    .collect();
                 let options: Vec<&'static StackOption> =
                     if query.is_empty() || category.label().to_lowercase().contains(query) {
-                        all.iter().collect()
+                        all
                     } else {
-                        all.iter()
+                        all.into_iter()
                             .filter(|o| {
                                 o.name.to_lowercase().contains(query)
                                     || o.id.contains(query)
@@ -184,8 +188,9 @@ impl NewProjectPage {
 
     /// Copies the command, and says so for a moment.
     pub(super) fn copy_command(&mut self, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(stack_builder::command(
+        cx.write_to_clipboard(ClipboardItem::new_string(stack_builder::command_at(
             &self.stack,
+            &self.cli_version(),
         )));
         self.copied = true;
         cx.notify();

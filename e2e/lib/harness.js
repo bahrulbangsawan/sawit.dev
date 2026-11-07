@@ -33,14 +33,15 @@ export const RUN = {
  * - `site`: serve the fixture project's `site/` folder on a loopback port (`ctx.site.url`);
  * - `args`: Sawit's arguments after `--foreground` (default: the fixture project);
  * - `pending`: a reason; the test is reported as a TODO and its body does not run;
- * - `timeout`: ms for the whole test, setup and teardown included.
+ * - `timeout`: ms for the whole test, setup and teardown included;
+ * - `env`: `(world) => ({...})`, variables Sawit starts with besides the usual ones.
  *
  * The body gets `ctx`: `{ world, app, win, desktop, site, call, log }`, where `call` sends a
  * control request to this test's Sawit and `win` drives its window (see desktop.js).
  */
 export function sawitTest(name, opts, body) {
   if (typeof opts === "function") [opts, body] = [{}, opts];
-  const { headed = false, site = false, args, pending, timeout = 180_000 } = opts;
+  const { headed = false, site = false, args, env, pending, timeout = 180_000 } = opts;
   if (pending) {
     NO_APP.add(name);
     return test(name, { todo: pending }, () => {});
@@ -60,7 +61,7 @@ export function sawitTest(name, opts, body) {
     let failed = false;
     try {
       if (site) ctx.site = await serveSite(world);
-      ctx.app = await launch(world, { args: args?.(world) });
+      ctx.app = await launch(world, { args: args?.(world), env: env?.(world) });
       // Sawit asks to come forward as it starts, and macOS may refuse it while another app has
       // just taken the front (the one the last test's teardown or macOS itself brought back).
       // A Sawit window that has never been in front stays out of accessibility's reach, so the

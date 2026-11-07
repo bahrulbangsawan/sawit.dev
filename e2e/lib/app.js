@@ -59,13 +59,13 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
  * handing the folder to a Sawit already running, which may be the person's own). Resolves once its
  * own control socket answers with a window: `{ pid, socket, call, kill, log }`.
  */
-export async function launch(world, { args = [world.project], timeoutMs = 60_000 } = {}) {
+export async function launch(world, { args = [world.project], timeoutMs = 60_000, env: extraEnv = {} } = {}) {
   if (!existsSync(BINARY)) {
     throw new Error(`${BINARY} is missing: build it with \`cargo build -p sawit\``);
   }
   const logPath = path.join(world.artifacts, "app.log");
   const log = createWriteStream(logPath);
-  const env = appEnv(world);
+  const env = { ...appEnv(world), ...extraEnv };
   const envArgs = ["-i", ...Object.entries(env).map(([k, v]) => `${k}=${v}`)];
   const child = spawn("/usr/bin/env", [...envArgs, BINARY, "--foreground", ...args], {
     cwd: world.project,

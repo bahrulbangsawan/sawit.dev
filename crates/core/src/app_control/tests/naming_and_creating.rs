@@ -63,6 +63,7 @@ fn a_create_says_whether_it_opens_the_project() {
         location: "/Users/me/Developer".into(),
         stack: crate::stack_builder::Stack::default(),
         open: false,
+        cli_version: None,
     });
     let bytes = encode(&only);
     let wire = String::from_utf8_lossy(&bytes[MAGIC.len()..]).into_owned();

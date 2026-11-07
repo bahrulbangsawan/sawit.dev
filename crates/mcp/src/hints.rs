@@ -232,6 +232,8 @@ const OPEN_WORLD: &[&str] = &[
     "install_dev_tools",
     "upgrade_dev_tools",
     "install_skill",
+    // npm's latest create-better-t-stack, asked at most once a day.
+    "stack_options",
     "stack_create",
     "app_run_script",
     "app_ssh_connect",

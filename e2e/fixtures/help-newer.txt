@@ -1,0 +1,105 @@
+Usage: create-better-t-stack [options] [command]
+
+Available subcommands: create (default), create-json, schema, sponsors, docs,
+builder, add, add-json, history
+
+Options:
+  -V, --version                            output the version number
+  -h, --help                               display help for command
+
+Commands:
+  create [options] [Project name or path]  Create a new Better-T-Stack project
+  create-json [options]                    Create a project from a raw JSON payload (agent-friendly)
+  schema [options]                         Show runtime CLI and input schemas as JSON
+  sponsors [options]                       Show Better-T-Stack sponsors
+  docs [options]                           Open Better-T-Stack documentation
+  builder [options]                        Open the web-based stack builder
+  add [options]                            Add addons or a workspace package to an existing Better-T-Stack project
+  add-json [options]                       Add addons or a workspace package from a raw JSON payload (agent-friendly)
+  history [options]                        Show project creation history
+
+Usage: create-better-t-stack create [options] [Project name or path]
+
+Create a new Better-T-Stack project
+
+Arguments:
+  Project name or path           Project name or path
+
+Options:
+  --template [string]            Use a predefined template (choices: "mern",
+                                 "pern", "t3", "uniwind", "none")
+  --yes [boolean]                Use default configuration (default: false)
+  --no-yes                       Negate `--yes` option.
+  --yolo [boolean]               (WARNING - NOT RECOMMENDED) Bypass validations
+                                 and compatibility checks (default: false)
+  --no-yolo                      Negate `--yolo` option.
+  --dry-run [boolean]            Validate setup without writing files (default:
+                                 false)
+  --no-dry-run                   Negate `--dry-run` option.
+  --verbose [boolean]            Show detailed result information (default:
+                                 false)
+  --no-verbose                   Negate `--verbose` option.
+  --database [string]            Database type (choices: "none", "sqlite",
+                                 "postgres", "mysql", "mongodb")
+  --orm [string]                 ORM type (choices: "drizzle", "prisma",
+                                 "none")
+  --auth [string]                Authentication provider (choices:
+                                 "better-auth", "clerk", "none")
+  --payments [string]            Payments provider (choices: "polar", "none")
+  --frontend [values...]         Frontend framework; Type: string array
+                                 (choices: "tanstack-router", "react-router", "solid-start",
+                                 "tanstack-start", "next", "nuxt",
+                                 "native-bare", "native-uniwind",
+                                 "native-unistyles", "svelte", "solid", "astro",
+                                 "none")
+  --addons [values...]           Additional addons; Type: string array (choices:
+                                 "pwa", "tauri", "electrobun", "starlight",
+                                 "biome", "lefthook", "husky", "mcp",
+                                 "turborepo", "nx", "vite-plus", "fumadocs",
+                                 "ultracite", "oxlint", "opentui", "wxt",
+                                 "skills", "evlog", "axiom", "none")
+  --examples [values...]         Example templates to include; Type: string
+                                 array (choices: "todo", "ai", "none")
+  --git [boolean]
+  --no-git                       Negate `--git` option.
+  --package-manager [string]     Package manager (choices: "npm", "pnpm", "bun")
+  --install [boolean]
+  --no-install                   Negate `--install` option.
+  --open [string]                Editor, IDE, or coding agent to open after
+                                 creating the project (choices: "cursor",
+                                 "vscode", "vscode-insiders", "zed", "windsurf",
+                                 "vscodium", "webstorm", "intellij-idea",
+                                 "sublime-text", "neovim", "codex-app", "codex",
+                                 "t3-code", "claude-code", "opencode", "pi",
+                                 "gemini-cli", "github-copilot", "kiro-cli",
+                                 "droid", "goose", "cline", "continue", "amp",
+                                 "aider", "qwen-code", "crush", "cursor-agent",
+                                 "orca", "none")
+  --db-setup [string]            Database hosting setup (choices: "turso",
+                                 "neon", "prisma-postgres", "planetscale",
+                                 "mongodb-atlas", "supabase", "d1", "docker",
+                                 "none")
+  --backend [string]             Backend framework (choices: "hono", "express",
+                                 "fastify", "elysia", "convex", "self", "none")
+  --runtime [string]             Runtime environment (choices: "bun", "node",
+                                 "workers", "none")
+  --api [string]                 API type (choices: "trpc", "orpc", "none")
+  --web-deploy [string]          Web deployment (choices: "cloudflare",
+                                 "prisma", "docker", "vercel", "none")
+  --server-deploy [string]       Server deployment (choices: "cloudflare",
+                                 "prisma", "docker", "vercel", "none")
+  --directory-conflict [string]  How to handle existing directory conflicts
+                                 (choices: "merge", "overwrite", "increment",
+                                 "error")
+  --render-title [boolean]
+  --no-render-title              Negate `--render-title` option.
+  --disable-analytics [boolean]  Disable analytics (default: false)
+  --no-disable-analytics         Negate `--disable-analytics` option.
+  --manual-db [boolean]          Skip automatic/manual database setup prompt and
+                                 use manual setup (default: false)
+  --no-manual-db                 Negate `--manual-db` option.
+  --db-setup-options [json]      Structured database setup options; Object (json
+                                 formatted)
+  -h, --help                     display help for command
+
+
