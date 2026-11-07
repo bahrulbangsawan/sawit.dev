@@ -27,7 +27,8 @@ impl Workspace {
             Some(PaneItem::Other { view, .. }) if view.entity_id() == id => view.clone(),
             _ => return None,
         };
-        if view.clone().downcast::<BrowserView>().is_ok() {
+        // The browser's workspace tab holds its own tabs (`BrowserTabs`).
+        if view.clone().downcast::<BrowserTabs>().is_ok() {
             Some(FillPanel::Browser)
         } else if view.downcast::<BoardView>().is_ok() {
             Some(FillPanel::Canvas)
@@ -98,7 +99,12 @@ impl Workspace {
                 {
                     window.focus(&browser.read(cx).focus_handle(cx), cx);
                 }
-                self.fill_tab(browser.entity_id());
+                // The workspace tab on show is the browser's tabs, which hold the page.
+                let Some(tabs) = self.active_browser_tabs() else {
+                    self.unmaximized = before.filter(|_| filled.is_some());
+                    return;
+                };
+                self.fill_tab(tabs.entity_id());
             }
             FillPanel::Canvas => {
                 let Some(board) = self.open_canvas(cx) else {

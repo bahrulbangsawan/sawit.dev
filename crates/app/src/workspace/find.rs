@@ -49,8 +49,8 @@ impl Workspace {
                     Some(pdf.read(cx).focus.clone())
                 } else if let Ok(board) = view.clone().downcast::<BoardView>() {
                     Some(board.read(cx).focus_handle(cx))
-                } else if let Ok(browser) = view.downcast::<BrowserView>() {
-                    Some(browser.read(cx).focus_handle(cx))
+                } else if let Ok(tabs) = view.downcast::<BrowserTabs>() {
+                    Some(tabs.read(cx).active_view().read(cx).focus_handle(cx))
                 } else {
                     None
                 }
