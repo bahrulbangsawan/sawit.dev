@@ -37,8 +37,8 @@ macro_rules! diagram_types {
 pub mod app;
 pub mod browser;
 pub mod browser_design;
-pub mod code_mode;
 pub mod browser_seo;
+pub mod code_mode;
 pub mod config_files;
 pub mod db;
 pub mod db_admin;
