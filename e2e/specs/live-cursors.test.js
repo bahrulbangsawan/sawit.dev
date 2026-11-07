@@ -84,14 +84,19 @@ sawitTest("live cursors: four agents of one session build at once, each with its
   ctx.log(`cpu %: before ${before}, while four lanes play ${playing}, idle ${idle}`);
 });
 
-sawitTest("live cursors: the user's selection and view never change while agents build", async (ctx) => {
+sawitTest("live cursors: the user's selection never changes while agents build, and follow is reported", async (ctx) => {
   await openCanvas(ctx);
   const view = async () => (await windowState(ctx)).canvas ?? null;
   const at = await view();
   await Promise.all(["a", "b"].map((lane, i) => build(ctx, lane, i * 420)));
   const after = await view();
   assert.deepEqual(after?.selection ?? [], at?.selection ?? [], "the selection is the user's");
-  assert.deepEqual(after?.zoom, at?.zoom, "so is the zoom");
+  // The view fits the page once when the agents' session starts, and Follow agent is on (B4.1):
+  // agents read it, only the user sets it.
+  const state = await windowState(ctx);
+  const canvas = (state.canvases ?? []).find((c) => c.active);
+  assert.equal(canvas?.view?.follow?.on, true, JSON.stringify(canvas));
+  assert.equal(canvas?.view?.follow?.agent_active, true);
 });
 
 sawitTest("live cursors: a screen written three times plays three builds and ends live", async (ctx) => {

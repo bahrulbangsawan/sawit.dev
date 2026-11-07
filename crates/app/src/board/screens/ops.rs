@@ -106,6 +106,12 @@ impl BoardView {
         let now = cx.background_executor().now();
         self.agents.screen_written(&name, look, now);
         self.agent_at_screen(op, &found, look, cx);
+        // Follow agent shows the screen being written (B4.1).
+        let frame = found["frame"].as_str().and_then(|f| f.parse().ok());
+        let rect = (frame.map(figcraft_doc::NodeId))
+            .and_then(|id| self.board()?.session.ds().ok()?.doc.world_bounds(id))
+            .map(|b| [b.x0, b.y0, b.x1, b.y1]);
+        self.follow_saw(&look.session, rect, cx);
         found["written"] = json!(written);
         found["rendered"] = json!(true);
         found

@@ -14,7 +14,7 @@ use sawit_board::{BoardDoc, BoardError, DocKind};
 
 use super::toast::hide_toast_later;
 use super::worker::Worker;
-use super::{BoardView, design_panel, layers_panel, menus, presence, routes, screens, web};
+use super::{BoardView, design_panel, follow, layers_panel, menus, presence, routes, screens, web};
 
 /// The system's fonts are being read, or were ([`read_system_fonts`]).
 pub(super) struct SystemFonts;
@@ -193,6 +193,7 @@ impl BoardView {
             variables_ui: None,
             dev: Default::default(),
             proto_tab: false,
+            follow: follow::Follow::default(),
             player: None,
             comments_ui: None,
             pending_comment: None,
