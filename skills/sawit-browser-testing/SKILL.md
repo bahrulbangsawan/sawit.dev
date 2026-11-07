@@ -22,6 +22,7 @@ Sawit has a WebKit browser tab for each project that you drive and the user sees
 - `browser_resize` with a `device` (iPhone 15, Pixel 8, iPad mini, Laptop, Desktop), or a `width` and `height`; responsive fills the tab again.
 - `browser_annotations` reads the notes the user drew on the page: what to change, with each element's selector, source file and styles. Read them when the user says they left notes, and pass `clear` once you have dealt with them.
 - `browser_inspect` gives one element's box, type, colors and contrast; `browser_design` the page's colors, fonts and tokens.
+- `browser_screenshot` takes `full_page`, a `device` (or `devices` for several sizes in one call), `width`/`height`, `scale`, `format` (png, jpeg, pdf) and `clip`; `browser_record` records a full-page scroll-through in one call, `browser_record_start`/`browser_record_stop` record the view, an element or a region as MP4, MOV or GIF.
 - `browser_seo` scans a page (the tab's, or any `url`, local ones too) for SEO and agent readiness: each check with pass, warning or fail, the evidence and a fix; `scan_type` and `checks` narrow it.
 - What is typed into password fields reads as [redacted] in `browser_network`; don't look for it another way.
 - Report what you checked and what failed, with the console and network lines.
