@@ -29,7 +29,8 @@ fn hosts_keep_their_port() {
 #[test]
 fn tabs_by_name_and_ranks() {
     assert_eq!(SeoTab::named("Previews"), Some(SeoTab::Previews));
-    assert_eq!(SeoTab::named("agents"), None);
+    assert_eq!(SeoTab::named("agents"), Some(SeoTab::Agents));
+    assert_eq!(SeoTab::named("nope"), None);
     assert!(status_rank(Status::Fail) < status_rank(Status::Pass));
 }
 

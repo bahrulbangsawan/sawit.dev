@@ -12,6 +12,7 @@
 
 mod agents;
 mod annotate;
+mod capture;
 mod cover;
 mod design;
 mod device;

@@ -12,6 +12,7 @@ pub mod keyboard;
 pub(crate) mod web_frame;
 mod world;
 
+pub use capture::Pixels;
 pub use fonts::font_changes;
 pub use world::WorldReply;
 

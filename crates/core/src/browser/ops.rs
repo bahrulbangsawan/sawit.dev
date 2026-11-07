@@ -110,6 +110,34 @@ pub enum BrowserOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mesurer: Option<String>,
     },
+    /// A native capture at a chosen size (`browser::capture`): the view, an element (`target`) or
+    /// a `clip` (x, y, width, height in CSS px), as the tab shows it or laid out as `device` or
+    /// `width` × `height` CSS px for the shot (the tab's own size put back afterwards), at
+    /// `scale` (1 to 3; default the device's), as `png` or `jpeg` (`quality` 0 to 1), written to
+    /// `output_path` or the project's screenshot folder. Answers the file, its pixel size and a
+    /// small preview.
+    Capture {
+        #[serde(flatten)]
+        target: Target,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quality: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clip: Option<[f64; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mesurer: Option<String>,
+    },
     Console {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         level: Option<String>,
@@ -204,6 +232,7 @@ impl BrowserOp {
                 | Self::Reload
                 | Self::State
                 | Self::Screenshot { .. }
+                | Self::Capture { .. }
                 | Self::Console { .. }
                 | Self::Network { .. }
                 | Self::Devtools
@@ -222,7 +251,10 @@ impl BrowserOp {
     pub fn shows_tab(&self) -> bool {
         matches!(
             self,
-            Self::Navigate { .. } | Self::Screenshot { .. } | Self::Resize { .. }
+            Self::Navigate { .. }
+                | Self::Screenshot { .. }
+                | Self::Capture { .. }
+                | Self::Resize { .. }
         )
     }
 }
