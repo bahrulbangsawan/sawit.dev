@@ -414,3 +414,43 @@ fn clear_of_an_empty_page_changes_nothing_and_only_that_page_is_cleared() {
     board.execute("page.select", &json!({"index": 0})).unwrap();
     assert_eq!(elements(&mut board).len(), 1);
 }
+
+/// `get` answers the page's comment threads beside its layers, as agents read them to answer:
+/// each thread's id (what `comment.reply` and `comment.resolve` take), pin, state and messages.
+/// No engine command reads them, so this is how an agent reaches them.
+#[test]
+fn get_lists_the_comment_threads() {
+    let mut board = board();
+    let reply = run(&mut board, &json!({"op": "get"}));
+    assert!(reply.get("comments").is_none(), "{reply}");
+    let added = send(
+        &mut board,
+        "comment.add",
+        json!({"x": 40.0, "y": 60.0, "text": "Make the title bigger"}),
+    );
+    assert_eq!(added["ok"], json!(true), "{added}");
+    let reply = run(&mut board, &json!({"op": "get"}));
+    let threads = reply["comments"].as_array().unwrap().clone();
+    assert_eq!(threads.len(), 1, "{reply}");
+    let id = threads[0]["id"].clone();
+    assert_eq!(threads[0]["resolved"], json!(false));
+    assert_eq!(
+        threads[0]["messages"][0]["text"],
+        json!("Make the title bigger")
+    );
+    let replied = send(
+        &mut board,
+        "comment.reply",
+        json!({"id": id, "text": "Done"}),
+    );
+    assert_eq!(replied["ok"], json!(true), "{replied}");
+    let resolved = send(
+        &mut board,
+        "comment.resolve",
+        json!({"id": id, "resolved": true}),
+    );
+    assert_eq!(resolved["ok"], json!(true), "{resolved}");
+    let thread = run(&mut board, &json!({"op": "get"}))["comments"][0].clone();
+    assert_eq!(thread["resolved"], json!(true));
+    assert_eq!(thread["messages"][1]["text"], json!("Done"));
+}

@@ -94,7 +94,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "List the top-level layers of the canvas's page on show: id, type, position, size, text, color and what a connector joins. For the other pages and nested layers use canvas_command: page.list lists the pages, and node.get {id} reads a page's or a layer's own layers, without showing them: the page and the view on show are the user's, so page.select and view.* are refused. Works from the saved file when the app isn't running; the page on show is then the one last saved"
+        description = "List the top-level layers of the canvas's page on show: id, type, position, size, text, color and what a connector joins. Also its comment threads, as `comments` (id, pin, anchor layer, resolved, messages): answer them with canvas_command comment.reply {id, text} and comment.resolve {id, resolved}. For the other pages and nested layers use canvas_command: page.list lists the pages, and node.get {id} reads a page's or a layer's own layers, without showing them: the page and the view on show are the user's, so page.select and view.* are refused. Works from the saved file when the app isn't running; the page on show is then the one last saved"
     )]
     async fn canvas_get(&self, Parameters(mut a): Parameters<CanvasTargetArgs>) -> CallToolResult {
         tri!(a.tab_into_file());

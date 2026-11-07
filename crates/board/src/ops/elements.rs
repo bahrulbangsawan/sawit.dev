@@ -13,9 +13,37 @@ use crate::summary;
 
 pub(super) fn get(board: &BoardDoc) -> Value {
     match summaries(board) {
-        Ok(elements) => success("elements", Value::Array(elements)),
+        Ok(elements) => {
+            let mut reply = success("elements", Value::Array(elements));
+            // The page's comment threads, which `comment.add`, `comment.reply` and
+            // `comment.resolve` answer: there is no engine command that reads them.
+            if let Ok(ds) = board.session.ds() {
+                let threads = crate::design::comments::threads(&ds.doc, ds.page);
+                if !threads.is_empty() {
+                    reply["comments"] = Value::Array(threads.iter().map(thread_json).collect());
+                }
+            }
+            reply
+        }
         Err(error) => failure(error),
     }
+}
+
+/// A comment thread as `get` answers it: its id (what `comment.reply` and `comment.resolve`
+/// take), where its pin is, the layer it is pinned to, whether it is resolved, and its messages.
+fn thread_json(t: &crate::design::comments::Thread) -> Value {
+    json!({
+        "id": t.id,
+        "x": t.at.0,
+        "y": t.at.1,
+        "anchor": t.anchor.map(|a| a.0),
+        "resolved": t.resolved,
+        "messages": t.messages.iter().map(|m| json!({
+            "author": m.author,
+            "text": m.text,
+            "agent": m.agent,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// The summaries of the layers of the page on show.
