@@ -119,6 +119,7 @@ impl BrowserTabs {
             view.update(cx, |v, cx| {
                 v.restore(url, history, cx);
                 v.set_viewport(viewport, cx);
+                v.restored_favicon(cx);
             });
         }
         this.active = saved.active.min(this.tabs.len().saturating_sub(1));

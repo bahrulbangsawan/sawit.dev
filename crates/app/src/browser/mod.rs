@@ -17,6 +17,7 @@ mod design;
 mod device;
 pub(crate) mod engine;
 mod events;
+mod favicon;
 mod mesurer;
 mod modes;
 mod navigation;
@@ -117,6 +118,8 @@ type OpResult = Result<Value, String>;
 enum FromPage {
     Event(PageEvent),
     Engine(EngineEvent),
+    /// The page's icon `<link>` tags, as JSON ([`favicon`]).
+    IconLinks(String),
     /// An element's box is known: capture it (or the whole view).
     Shoot {
         rect: Option<(f64, f64, f64, f64)>,
@@ -160,6 +163,8 @@ pub struct BrowserView {
     /// Default Browser follow it); none before the first frame.
     drawn_url: Option<String>,
     title: String,
+    /// The page's favicon on its tab ([`favicon`]).
+    icon: favicon::TabIcon,
     loading: bool,
     /// How far the page in [`Self::loading`] has come, while it loads ([`progress`]).
     progress: progress::LoadProgress,
@@ -308,6 +313,7 @@ impl BrowserView {
             url: url.unwrap_or_else(|| "about:blank".into()),
             drawn_url: None,
             title: String::new(),
+            icon: Default::default(),
             loading: false,
             progress: Default::default(),
             servers: None,
@@ -341,6 +347,8 @@ impl BrowserView {
         json!({
             "url": self.current_url(),
             "title": self.title,
+            // Whether the tab shows the page's favicon ([`favicon`]).
+            "favicon": self.icon.image.is_some(),
             "loading": self.loading,
             "progress": self.loading.then_some(self.progress.value),
             "viewport": self.viewport_json(),

@@ -60,5 +60,6 @@ pub mod stack_builder;
 pub mod terminal;
 pub mod text_diff;
 pub mod update;
+pub mod web;
 
 pub use error::{CoreError, Result};
