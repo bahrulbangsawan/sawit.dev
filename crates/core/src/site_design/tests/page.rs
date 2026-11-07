@@ -78,7 +78,14 @@ fn plan_reads_colours_and_picks_buttons() {
     );
     assert_eq!(
         plan.samples_op(),
-        serde_json::json!({"op": "scan_samples", "button": {"id": 0, "bordered": false}, "secondary": {"id": 1, "bordered": true}})
+        serde_json::json!({
+            "op": "scan_samples",
+            "button": {"id": 0, "bordered": false},
+            "secondary": {"id": 1, "bordered": true},
+            "card": 1,
+            "link": 0,
+            "limits": Limits::default()
+        })
     );
     let samples: PageSamples =
         serde_json::from_str(include_str!("../fixtures/page_samples.json")).unwrap();
@@ -251,5 +258,88 @@ fn rules_and_style_from_the_page() {
     assert_eq!(
         style.effective_background.as_deref(),
         Some("rgb(250, 250, 251)")
+    );
+}
+
+#[test]
+fn plan_groups_and_ranks_what_the_page_read() {
+    let plan = plan(fixture_scan());
+    let s = &plan.scan;
+    // 24.0001px rounds to the first style's 24px: one style, its characters added.
+    assert_eq!(s.texts[0].chars, 2410);
+    assert_eq!(s.texts[0].line_height, Some(24.0));
+    assert_eq!(s.texts[0].size, 16.0);
+    assert_eq!(s.texts[0].letter_spacing, None);
+    assert!(s.texts.windows(2).all(|w| w[0].chars >= w[1].chars));
+    // 4.2px rounds to 4px.
+    assert_eq!(s.spacing, vec![(16.0, 80), (8.0, 60), (4.0, 23), (12.5, 2)]);
+    assert!(s.breakpoints.windows(2).all(|w| w[0] <= w[1]));
+    // The first of the most used card, the only link.
+    assert_eq!((plan.card, plan.link), (Some(1), Some(0)));
+    let op = plan.samples_op();
+    assert_eq!(op["card"], 1);
+    assert_eq!(op["limits"]["elements"], 6000);
+}
+
+/// The numbers as the page's JavaScript read them (`num`, `Math.round`), run in QuickJS.
+#[test]
+fn text_numbers_read_as_the_page_did() {
+    let cases = [
+        ("13.5px", "normal", "18.6667px", "-0.0005px"),
+        ("", "650", "normal", "-0.2px"),
+        ("1px", "399.5", "normal", "-0.0125px"),
+        ("1e1px", "bold", "0.00049px", "0.0015px"),
+        ("16px", "700", "24px", "-2.5005px"),
+    ];
+    let js = format!(
+        "(() => {{ const num = (v) => {{ const n = parseFloat(v); return Number.isFinite(n) ? n : 0; }};\n\
+         const round3 = (n) => Math.round(n * 1000) / 1000;\n\
+         return JSON.stringify({}.map(([s, w, lh, ls]) => [num(s), Math.round(num(w)) || 400, lh === \"normal\" ? null : round3(num(lh)), ls === \"normal\" ? null : round3(num(ls))])); }})()",
+        serde_json::to_string(&cases).unwrap()
+    );
+    let rt = rquickjs::Runtime::new().unwrap();
+    let ctx = rquickjs::Context::full(&rt).unwrap();
+    let want: String = ctx.with(|ctx| ctx.eval::<String, _>(js).unwrap());
+    let want: Vec<(f64, u16, Option<f64>, Option<f64>)> = serde_json::from_str(&want).unwrap();
+    for ((size, weight, lh, ls), want) in cases.iter().zip(want) {
+        let t = TextSample::from(PageText {
+            size: size.to_string(),
+            weight: weight.to_string(),
+            line_height: lh.to_string(),
+            letter_spacing: ls.to_string(),
+            ..Default::default()
+        });
+        assert_eq!(
+            (t.size, t.weight, t.line_height, t.letter_spacing),
+            want,
+            "{size} {weight} {lh} {ls}"
+        );
+    }
+}
+
+#[test]
+fn variables_and_breakpoints_are_capped_and_sorted() {
+    let page = PageScan {
+        variables: (0..600)
+            .map(|i| (format!("--v{i}"), "1".to_string()))
+            .collect(),
+        breakpoints: vec![1068, 734, 480],
+        ..Default::default()
+    };
+    let s = plan(page).scan;
+    assert_eq!(s.variables.len(), MAX_VARIABLES);
+    assert_eq!(s.variables[0].0, "--v0");
+    assert_eq!(s.breakpoints, vec![480, 734, 1068]);
+    let rules: SheetRules = PageRules {
+        variables: (0..600)
+            .map(|i| (format!("--v{i}"), "1".to_string()))
+            .collect(),
+        breakpoints: vec![9, 3],
+        ..Default::default()
+    }
+    .into();
+    assert_eq!(
+        (rules.variables.len(), rules.breakpoints),
+        (MAX_VARIABLES, vec![3, 9])
     );
 }

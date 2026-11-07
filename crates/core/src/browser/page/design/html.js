@@ -52,8 +52,8 @@
       }
     }
   };
-  // outerHTML of a copy, with computed styles inlined on the first MAX_INLINED
-  // elements, no scripts or on* handlers, at most MAX_HTML. The copy lives in
+  // outerHTML of a copy, with computed styles inlined on the first LIMITS.inlined
+  // elements, no scripts or on* handlers, at most LIMITS.html. The copy lives in
   // an inert document: no image loads, no custom element constructors.
   let inertDoc = null;
   const copyOf = (el) => {
@@ -66,7 +66,7 @@
       const originals = [el, ...el.querySelectorAll("*")];
       const copies = [copy, ...copy.querySelectorAll("*")];
       const styles = new Map();
-      const n = Math.min(originals.length, copies.length, MAX_INLINED);
+      const n = Math.min(originals.length, copies.length, LIMITS.inlined);
       for (let i = 0; i < n; i++) {
         try {
           const orig = originals[i];
@@ -79,14 +79,14 @@
       }
       strip(copy);
       let html = copy.outerHTML || "";
-      if (html.length > MAX_HTML) {
+      if (html.length > LIMITS.html) {
         // Too big with every element styled: the root styled, children as they are.
         const plain = copyOf(el);
         if (copy.hasAttribute("style")) plain.setAttribute("style", copy.getAttribute("style"));
         strip(plain);
         html = plain.outerHTML || "";
       }
-      if (html.length > MAX_HTML) html = html.slice(0, MAX_HTML) + "<!-- cut at " + MAX_HTML + " characters -->";
+      if (html.length > LIMITS.html) html = html.slice(0, LIMITS.html) + "<!-- cut at " + LIMITS.html + " characters -->";
       return html;
     } catch (_) {
       return "";

@@ -44,7 +44,7 @@
           const re = /url\(\s*(["']?)(.*?)\1\s*\)/g;
           let m;
           while ((m = re.exec(st.getPropertyValue("src")))) {
-            if (m[2].startsWith("data:") && m[2].length > MAX_DATA_URL) continue;
+            if (m[2].startsWith("data:") && m[2].length > LIMITS.data_url) continue;
             src.push(absUrl(m[2], base));
           }
           acc.faceKeys.add(key);
@@ -57,7 +57,8 @@
           const st = rule.style;
           if (isRootSelector(sel)) {
             const root = getComputedStyle(document.documentElement);
-            for (let i = 0; i < st.length && acc.variables.size < MAX_VARIABLES; i++) {
+            // Every variable: Rust keeps the first ones (site_design::page::MAX_VARIABLES).
+            for (let i = 0; i < st.length; i++) {
               const name = st[i];
               if (!name.startsWith("--") || acc.variables.has(name)) continue;
               const value = root.getPropertyValue(name).trim() || st.getPropertyValue(name).trim();
@@ -86,7 +87,7 @@
   const rulesOut = (acc, note) => ({
     font_faces: acc.faces,
     variables: [...acc.variables],
-    breakpoints: [...acc.breakpoints].sort((a, b) => a - b),
+    breakpoints: [...acc.breakpoints],
     focus_rings: { visible: acc.rings.visible.map(note), plain: acc.rings.plain.map(note) },
   });
   // The page's own sheets, with the ones it can't read (cross-origin) apart.

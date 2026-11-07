@@ -137,5 +137,5 @@ pub(super) fn style_op(target: Value, html: bool) -> Value {
     };
     op["op"] = "style".into();
     op["html"] = html.into();
-    op
+    sawit_core::site_design::page::with_limits(op)
 }

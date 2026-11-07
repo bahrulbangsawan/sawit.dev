@@ -1,13 +1,12 @@
-  const MAX_ELEMENTS = 6000;
-  // Hidden subtrees don't count against the budget, but walking them does cost.
-  const MAX_WALKED = 60000;
-  const MAX_TEXTS = 400;
-  const MAX_ASSETS = 400;
-  const MAX_VARIABLES = 500;
-  const MAX_SVG = 100 * 1024;
-  const MAX_DATA_URL = 100 * 1024;
-  const MAX_HTML = 30 * 1024;
-  const MAX_INLINED = 200;
+  // How much of the page a design op reads: the walk's budget and the biggest reads it keeps
+  // (an inline SVG, a data: address, an element's HTML). They come from Rust with every op
+  // (site_design::page::Limits), which also ranks and caps what the scan found.
+  let LIMITS = null;
+  const useLimits = (op) => {
+    const limits = op && op.limits;
+    if (!limits || typeof limits !== "object") throw new Error("A design op comes with its limits.");
+    LIMITS = limits;
+  };
   const STATES = ["hover", "focus", "focus-visible", "active"];
 
   // Sheets Sawit fetched and the page parsed (`rules`), kept for `style`.
