@@ -96,3 +96,9 @@ actions!(
 pub fn init(cx: &mut gpui_kit::App) {
     cx.bind_keys(view::bindings());
 }
+
+/// The terminal's own key bindings, for the app-wide key tests (`crate::keys_tests`).
+#[cfg(test)]
+pub(crate) fn key_bindings() -> Vec<gpui_kit::KeyBinding> {
+    view::bindings()
+}

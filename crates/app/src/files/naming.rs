@@ -8,6 +8,12 @@ use gpui_kit::{AppContext as _, Context, Window};
 use super::{After, Edit, EditKind, FilesPanel, Named, Op, Request};
 
 impl FilesPanel {
+    /// ⌘N from anywhere in the window (`workspace::NewFileInProject`): a new file, as the tree's
+    /// own New File makes it.
+    pub(crate) fn new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_new(false, window, cx);
+    }
+
     pub(super) fn start_new(&mut self, dir: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(parent) = self.target_dir() else {
             return;

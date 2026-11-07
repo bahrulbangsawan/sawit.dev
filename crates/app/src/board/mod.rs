@@ -192,6 +192,7 @@ fn let_through() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-k t", NoAction, board),
         KeyBinding::new("cmd-k u", NoAction, board),
         KeyBinding::new("cmd-k w", NoAction, board),
+        KeyBinding::new("cmd-k o", NoAction, board),
         KeyBinding::new("cmd-k shift-enter", NoAction, board),
         KeyBinding::new("cmd-k cmd-s", NoAction, board),
         // Root's Tab (root::Tab, the next focus): FigCraft's select.next.
@@ -201,6 +202,8 @@ fn let_through() -> Vec<KeyBinding> {
         // Root's ⌘C (input::Copy): FigCraft's edit.copy.
         KeyBinding::new("cmd-c", NoAction, board),
         KeyBinding::new("cmd-b", NoAction, text),
+        // B5: ⌘U is the canvas's open and close key, but underline while text is edited.
+        KeyBinding::new("cmd-u", NoAction, text),
         KeyBinding::new("alt-cmd-t", NoAction, text),
         KeyBinding::new("shift-cmd-enter", NoAction, text),
     ]

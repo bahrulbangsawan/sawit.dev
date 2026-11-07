@@ -183,13 +183,27 @@ pub const SAWIT_WINS: &[&str] = &[
     "ctrl-shift-tab",
     "ctrl-cmd-m",
     "alt-cmd-o",
+    // Left free by default since B5 (⌘T opens the terminal), and still kept from the canvas, so
+    // a user who binds it in the keymap gets it on the canvas too and Join keeps its ⌃J.
     "cmd-j",
     "shift-cmd-j",
+    // B5's area keys: the terminal, the browser and the folder panel open and close, and fill the
+    // window, from the canvas too; ⌥Tab moves to the terminal. ⌘N makes a project file (the
+    // canvas hides File ▸ New design file); ⌘E leaves Flatten its ⌥⇧F. ⇧⌘C stays the canvas's
+    // Copy as PNG: a place's own key wins while it has the keyboard, so from the canvas the
+    // canvas fills the window with ⌃⌘3, ⇧⌘↩ or its Maximize button.
+    "cmd-t",
+    "shift-cmd-t",
+    "shift-cmd-b",
+    "cmd-e",
+    "cmd-n",
+    "alt-tab",
+    "alt-shift-tab",
 ];
 
 /// Keystrokes that go to the canvas while it edits text (bold, centre, a new sticky) and stay
 /// Sawit's otherwise. Written as [`SAWIT_WINS`] is.
-pub const SAWIT_WINS_UNLESS_EDITING: &[&str] = &["cmd-b", "alt-cmd-t", "shift-cmd-enter"];
+pub const SAWIT_WINS_UNLESS_EDITING: &[&str] = &["cmd-b", "cmd-u", "alt-cmd-t", "shift-cmd-enter"];
 
 /// Whether command `id` is hidden: out of the menus, and dead on the keyboard.
 pub fn is_hidden(id: &str) -> bool {
