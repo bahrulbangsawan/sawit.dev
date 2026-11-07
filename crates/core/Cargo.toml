@@ -52,5 +52,10 @@ libc = "0.2"
 # Git blob hashes for the GitHub syncs; already in the app through figcraft-format.
 sha1 = "0.11"
 
+[build-dependencies]
+# Deflates the big JS bundles (Pele, mesurer) into the binary (build.rs, `embedded`); the
+# version the crate already uses.
+flate2 = "1.1"
+
 [dev-dependencies]
 tempfile = "3"

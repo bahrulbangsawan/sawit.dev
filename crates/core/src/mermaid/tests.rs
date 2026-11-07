@@ -125,7 +125,8 @@ fn renders_and_reports_errors() {
 #[test]
 fn the_bundle_is_the_pele_version_named() {
     let banner = format!("/*! Pele {PELE_VERSION} | MIT License");
-    assert!(PELE_JS.starts_with(&banner), "{}", &PELE_JS[..80]);
+    let pele = pele_js();
+    assert!(pele.starts_with(&banner), "{}", &pele[..80]);
     let licence = include_str!("../../assets/pele/LICENSE");
     assert!(licence.starts_with("MIT License\n\nCopyright (c) 2026 kepano"));
 }

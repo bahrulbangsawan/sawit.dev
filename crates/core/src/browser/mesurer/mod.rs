@@ -2,7 +2,7 @@
 //! Annotate: its bundle and keyboard gate, Sawit's glue around it, the bridge between them and the
 //! app ([`protocol`]), and where its settings and workspaces are kept ([`store`]).
 //!
-//! While Annotate is open, the app evaluates, once per page load: [`MESURER_JS`] and [`GLUE_JS`]
+//! While Annotate is open, the app evaluates, once per page load: [`mesurer_js`] and [`GLUE_JS`]
 //! in the [`WORLD`] content world, then `SawitMesurer.mount(…)` with [`mount_args`], then
 //! [`MESURER_GATE_JS`] in the page's own world (as mesurer's extension runs its gate in the page's
 //! MAIN world; after the mount, so mesurer's listeners come first on the window). The glue posts to the [`HANDLER`] message handler,
@@ -30,13 +30,16 @@ pub const MESURER_VERSION: &str = "0.2.7";
 pub const MESURER_COMMIT: &str = "5c2fdaefde54591329d94b179af6ef5f32e15676";
 
 /// React, React DOM and mesurer with its stylesheet, one IIFE (`vendor/mesurer/build/entry.tsx`):
-/// it defines `__sawitMesurerBundle` in the world it runs in.
-pub const MESURER_JS: &str = include_str!("../../../../../vendor/mesurer/bundle/mesurer.js");
+/// it defines `__sawitMesurerBundle` in the world it runs in. The binary carries it deflated:
+/// this inflates it.
+pub fn mesurer_js() -> String {
+    crate::embedded::inflate(crate::embedded::MESURER)
+}
 /// mesurer's keyboard gate and history patch, for the page's own world
 /// (`vendor/mesurer/build/gate.ts`).
 pub const MESURER_GATE_JS: &str = include_str!("../../../../../vendor/mesurer/bundle/gate.js");
 
-/// Sawit's glue, evaluated after [`MESURER_JS`] in [`WORLD`]: one block whose `const`s its
+/// Sawit's glue, evaluated after [`mesurer_js`] in [`WORLD`]: one block whose `const`s its
 /// sections share (each a file in `page/mesurer/`, its opening comment in `page/mesurer.js`).
 pub const GLUE_JS: &str = concat!(
     include_str!("../page/mesurer.js"),
@@ -64,7 +67,12 @@ pub const HOST_ID: &str = "mesurer-extension-host";
 /// What the world evaluates once per page: the bundle, then the glue. It ends in `undefined`, a
 /// value WebKit can hand back.
 pub fn world_script() -> String {
-    format!("{MESURER_JS}\n;{GLUE_JS}\n;void 0;")
+    let mut script = String::with_capacity(crate::embedded::MESURER.len() * 4 + GLUE_JS.len());
+    crate::embedded::inflate_into(crate::embedded::MESURER, &mut script);
+    script.push_str("\n;");
+    script.push_str(GLUE_JS);
+    script.push_str("\n;void 0;");
+    script
 }
 
 /// The argument of `SawitMesurer.mount`: mesurer's props from the app (its theme), and the

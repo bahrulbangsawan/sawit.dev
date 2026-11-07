@@ -19,6 +19,7 @@ pub mod date;
 pub mod db;
 pub mod dev_tools;
 pub mod download;
+mod embedded;
 pub mod error;
 pub mod files;
 pub mod find;

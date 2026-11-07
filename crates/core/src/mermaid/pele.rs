@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use super::{
-    MAX_EDGES, MEMORY_LIMIT, OUTPUT_LIMIT, PELE_JS, RENDER_TIMEOUT, Raw, SOURCE_LIMIT,
-    TOOK_TOO_LONG, unsupported,
+    MAX_EDGES, MEMORY_LIMIT, OUTPUT_LIMIT, RENDER_TIMEOUT, Raw, SOURCE_LIMIT, TOOK_TOO_LONG,
+    unsupported,
 };
 
 struct Job {
@@ -47,7 +47,7 @@ fn worker(jobs: mpsc::Receiver<Job>) {
         })));
         let cx = Context::full(&rt).map_err(|e| e.to_string())?;
         cx.with(|cx| {
-            cx.eval::<(), _>(PELE_JS)
+            cx.eval::<(), _>(super::pele_js())
                 .map_err(|e| exception(&cx, e, "Pele failed to load", ""))
         })?;
         Ok::<_, String>((rt, cx))

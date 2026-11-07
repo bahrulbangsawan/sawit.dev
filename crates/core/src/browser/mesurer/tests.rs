@@ -15,17 +15,18 @@ use crate::instances::AppPaths;
 /// same notice.
 #[test]
 fn the_bundle_is_the_mesurer_version_named() {
+    let mesurer = mesurer_js();
     let banner = format!(
         "/*! mesurer {MESURER_VERSION} (ibelick/mesurer@{MESURER_COMMIT}) | MIT License | Copyright (c) 2026 Julien Thibeaut"
     );
-    assert!(MESURER_JS.starts_with(&banner), "{}", &MESURER_JS[..200]);
+    assert!(mesurer.starts_with(&banner), "{}", &mesurer[..200]);
     assert!(MESURER_GATE_JS.starts_with(&banner));
     let licence = include_str!("../../../../../vendor/mesurer/LICENSE");
     assert!(licence.starts_with(
         "MIT License\n\nCopyright (c) 2026 Julien Thibeaut\n\nPermission is hereby granted"
     ));
     // The permission text, line by line, in the banner.
-    let head = &MESURER_JS[..4000];
+    let head = &mesurer[..4000];
     for line in licence.lines().skip(4).filter(|l| !l.is_empty()) {
         assert!(
             head.contains(&format!(" * {line}")),
@@ -35,21 +36,22 @@ fn the_bundle_is_the_mesurer_version_named() {
     assert!(head.contains("React and React DOM 19.2.4 (MIT License"));
     assert!(head.contains("Tailwind CSS output (MIT License"));
     // React's own notices close the bundle.
-    assert!(MESURER_JS[MESURER_JS.len() - 3000..].contains("@license React"));
+    assert!(mesurer[mesurer.len() - 3000..].contains("@license React"));
     let info: Value = serde_json::from_str(include_str!(
         "../../../../../vendor/mesurer/bundle/BUILD.json"
     ))
     .unwrap();
     assert_eq!(info["mesurer"]["commit"], MESURER_COMMIT);
     assert_eq!(info["mesurer"]["version"], MESURER_VERSION);
-    assert!(MESURER_JS.contains(&format!("\"{MESURER_COMMIT}\"")));
+    assert!(mesurer.contains(&format!("\"{MESURER_COMMIT}\"")));
 }
 
 /// What a page that opens Annotate takes: the bundle under 850 000 bytes, the gate under 8 KiB,
 /// the glue under 40 KiB.
 #[test]
 fn the_bundle_gate_and_glue_stay_small() {
-    assert!(MESURER_JS.len() < 850_000, "{}", MESURER_JS.len());
+    let mesurer = mesurer_js();
+    assert!(mesurer.len() < 850_000, "{}", mesurer.len());
     assert!(
         MESURER_GATE_JS.len() < 8 * 1024,
         "{}",
@@ -83,7 +85,7 @@ fn the_glue_is_whole_and_has_no_placeholder() {
     assert!(GLUE_JS.contains(&format!("\"{HOST_ID}\"")));
     assert!(GLUE_JS.contains("2147483646"));
     let script = world_script();
-    assert!(script.starts_with(MESURER_JS) && script.trim_end().ends_with("void 0;"));
+    assert!(script.starts_with(&mesurer_js()) && script.trim_end().ends_with("void 0;"));
     assert_eq!(
         serde_json::from_str::<Value>(&mount_args(
             &json!({"theme": "dark"}),
