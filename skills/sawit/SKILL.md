@@ -24,6 +24,15 @@ Load that skill before you start the job. What you run in Sawit stays in front o
 - The app tools act on the window that has your project open; pass `project` (the project folder) when that is unclear. `app_state` lists the windows, tabs, terminals and the browser.
 - Also there: `git_status`, `git_diff`, `git_commit` and the other git tools, `search_files`, `list_config_files` (agent and shell config paths), `list_dev_tools` and `install_dev_tools`, `install_mcp_server`, `list_skills`.
 
+## Code mode
+
+When the server lists only `search_api` and `run` (it was set up with `SAWIT_MCP_TOOLS=code`), every tool above is a function instead:
+
+1. `search_api {query: "terminal read"}` gives the matching functions with their typed arguments; no query lists them all.
+2. `run {code: "const r = sawit.terminal_run({command: 'npm test', wait_secs: 20}); return r;"}` runs a short JavaScript. Calls are synchronous, a failed call throws, and only what you `return` (and `console.log`) comes back, so chain the steps of one job in one script.
+
+The arguments, confirmations and rules are the tools' own. The tools also answer by name when they aren't listed.
+
 ## When the sawit MCP server isn't connected
 
 Its tools may carry your client's prefix (`mcp__sawit__list_instances`). If there are none:

@@ -80,6 +80,9 @@ fn every_tool_is_routed() {
         "git_unstage",
         "git_commit",
         "git_switch",
+        "git_fetch",
+        "git_pull",
+        "git_push",
         // prompts
         "list_prompts",
         "get_prompt",
@@ -198,6 +201,9 @@ fn every_tool_is_routed() {
         "keymap_list",
         "keymap_bind",
         "keymap_unbind",
+        // code mode
+        "search_api",
+        "run",
     ];
     expected.sort();
     assert_eq!(names, expected);

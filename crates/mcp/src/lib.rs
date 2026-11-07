@@ -37,6 +37,7 @@ macro_rules! diagram_types {
 pub mod app;
 pub mod browser;
 pub mod browser_design;
+pub mod code_mode;
 pub mod config_files;
 pub mod db;
 pub mod db_admin;
@@ -46,6 +47,7 @@ pub mod dev_tools;
 pub mod diagrams;
 pub mod files;
 pub mod git;
+pub mod git_remote;
 mod hints;
 pub mod instances;
 pub mod keymap;
@@ -145,6 +147,8 @@ pub struct Sawit {
     tool_router: ToolRouter<Sawit>,
     /// The agent session this process serves, whose identity goes with every op to the app.
     agent: std::sync::Arc<agent::Session>,
+    /// Which tools `tools/list` shows ([`code_mode::ToolsMode`]).
+    mode: code_mode::ToolsMode,
 }
 
 pub(crate) fn ok(text: impl Into<String>) -> CallToolResult {
@@ -222,10 +226,28 @@ pub(crate) fn utc_time(secs: i64) -> String {
 impl Sawit {
     /// A server for the Sawit data folder `paths`.
     pub fn new(paths: AppPaths) -> Self {
+        Self::with_mode(paths, code_mode::ToolsMode::from_env())
+    }
+
+    /// A server that lists the tools `mode` picks (every tool stays callable).
+    pub fn with_mode(paths: AppPaths, mode: code_mode::ToolsMode) -> Self {
         Self {
             paths,
             tool_router: Self::router(),
             agent: Default::default(),
+            mode,
+        }
+    }
+
+    /// The tools `tools/list` shows in this server's mode.
+    pub fn listed_tools(&self) -> Vec<rmcp::model::Tool> {
+        let all = self.tool_router.list_all();
+        match self.mode {
+            code_mode::ToolsMode::All => all,
+            code_mode::ToolsMode::Code => all
+                .into_iter()
+                .filter(|t| code_mode::CODE_MODE_TOOLS.contains(&t.name.as_ref()))
+                .collect(),
         }
     }
 
@@ -250,6 +272,7 @@ impl Sawit {
             + Self::ssh_router()
             + Self::scripts_router()
             + Self::git_router()
+            + Self::git_remote_router()
             + Self::prompts_router()
             + Self::files_router()
             + Self::dev_tools_router()
@@ -268,6 +291,8 @@ impl Sawit {
             + Self::browser_design_router()
             + Self::tabs_router()
             + Self::keymap_router()
+            // Code mode: the whole API behind a search and a script.
+            + Self::code_mode_router()
     }
 
     /// Tells a running app to re-read `store` after a tool changed its file.
@@ -287,7 +312,29 @@ impl ServerHandler for Sawit {
             .build();
         ServerConfig::new(capabilities)
             .with_server_info(Implementation::new("sawit-mcp", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(match self.mode {
+                code_mode::ToolsMode::All => INSTRUCTIONS,
+                code_mode::ToolsMode::Code => code_mode::CODE_INSTRUCTIONS,
+            })
+    }
+
+    /// Every tool, or in code mode only `search_api` and `run`; the others still answer a call.
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, ErrorData> {
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools: self.listed_tools(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: supports_cache_hints.then_some(0),
+            cache_scope: supports_cache_hints.then_some(rmcp::model::CacheScope::Public),
+        })
     }
 
     /// The client says who it is here, and the agent session takes its name
