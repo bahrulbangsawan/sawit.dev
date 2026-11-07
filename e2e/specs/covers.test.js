@@ -47,6 +47,10 @@ sawitTest("covers: the Pages and account menus open over the browser's page, whi
     { timeoutMs: 20_000, what: "the fixture site to load" },
   );
   await pageIs(ctx, false, "the page to show, with nothing over it");
+  // The page reaches the footer: with the terminal dock shown, the Pages menu (now shorter than
+  // the dock) rises over the dock alone and never reaches the page.
+  await ctx.call({ cmd: "layout", terminal: false });
+  await pageIs(ctx, false, "the page to show down to the footer");
 
   // The footer's Pages menu rises over the page's bottom right.
   await win.openMenu({ role: "button", name: "Pages" });
@@ -95,6 +99,8 @@ sawitTest("covers: the Pages menu opens over the canvas's live web frame, which 
     },
     { timeoutMs: 45_000, what: "the route frame to go live" },
   );
+  // The canvas reaches the footer, so the Pages menu rises over it, not over the terminal dock.
+  await ctx.call({ cmd: "layout", terminal: false });
   await win.openMenu({ role: "button", name: "Pages" });
   await win.waitFor({ role: "menuitem", name: "Canvas" });
   await until(async () => ((await live(ctx))?.hidden ? true : null), {
