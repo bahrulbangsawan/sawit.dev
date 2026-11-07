@@ -30,6 +30,12 @@ impl EventEmitter<AccountsEvent> for AccountsPage {}
 /// The page's tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
+    Overview,
+    Detailed,
+    Compare,
+    Timeline,
+    Analytics,
+    Wallet,
     Accounts,
     Usage,
     StatusLine,
@@ -39,6 +45,17 @@ pub enum Tab {
 
 /// The tab list's groups, in order: a label and its tabs.
 pub const GROUPS: &[(&str, &[Tab])] = &[
+    (
+        "Pool",
+        &[
+            Tab::Overview,
+            Tab::Detailed,
+            Tab::Compare,
+            Tab::Timeline,
+            Tab::Analytics,
+            Tab::Wallet,
+        ],
+    ),
     ("Accounts", &[Tab::Accounts, Tab::Usage]),
     ("Claude Code", &[Tab::StatusLine]),
     ("Setup", &[Tab::Diagnostics, Tab::Settings]),
@@ -46,6 +63,12 @@ pub const GROUPS: &[(&str, &[Tab])] = &[
 
 impl Tab {
     pub const ALL: &[Tab] = &[
+        Tab::Overview,
+        Tab::Detailed,
+        Tab::Compare,
+        Tab::Timeline,
+        Tab::Analytics,
+        Tab::Wallet,
         Tab::Accounts,
         Tab::Usage,
         Tab::StatusLine,
@@ -55,6 +78,12 @@ impl Tab {
 
     pub fn label(self) -> &'static str {
         match self {
+            Tab::Overview => "Overview",
+            Tab::Detailed => "Detailed",
+            Tab::Compare => "Compare",
+            Tab::Timeline => "Timeline",
+            Tab::Analytics => "Analytics",
+            Tab::Wallet => "Wallet",
             Tab::Accounts => "Accounts",
             Tab::Usage => "Usage",
             Tab::StatusLine => "Status Line",
@@ -65,12 +94,31 @@ impl Tab {
 
     pub fn icon(self) -> Lucide {
         match self {
+            Tab::Overview => Lucide::LayoutDashboard,
+            Tab::Detailed => Lucide::List,
+            Tab::Compare => Lucide::GitCompare,
+            Tab::Timeline => Lucide::CalendarClock,
+            Tab::Analytics => Lucide::TrendingUp,
+            Tab::Wallet => Lucide::Wallet,
             Tab::Accounts => Lucide::Users,
             Tab::Usage => Lucide::ChartColumn,
             Tab::StatusLine => Lucide::SquareTerminal,
             Tab::Diagnostics => Lucide::Stethoscope,
             Tab::Settings => Lucide::Settings,
         }
+    }
+
+    /// One of the pool's views, which read the pool when shown.
+    pub fn is_pool(self) -> bool {
+        matches!(
+            self,
+            Tab::Overview
+                | Tab::Detailed
+                | Tab::Compare
+                | Tab::Timeline
+                | Tab::Analytics
+                | Tab::Wallet
+        )
     }
 
     /// The tab `delta` places on in the list's order, clamped to the ends (↑ and ↓).
@@ -102,9 +150,23 @@ pub struct AccountsPage {
     /// The tab list and the account list each take the keyboard (↑ and ↓ move in them).
     pub(super) nav_focus: FocusHandle,
     pub(super) list_focus: FocusHandle,
+    /// The pool views' choices, and the wallet's fields.
+    pub(super) pool_view: super::pool_tabs::PoolView,
+    pub(super) price_input: Entity<InputState>,
+    pub(super) day_input: Entity<InputState>,
+    pub(super) topup_amount: Entity<InputState>,
+    pub(super) topup_credits: Entity<InputState>,
+    pub(super) topup_days: Entity<InputState>,
+    pub(super) topup_note: Entity<InputState>,
+    pub(super) topup_account: Option<String>,
+    /// The agents Sawit sees in this page's window (its terminals, MCP clients).
+    pub(super) agents_source: Option<AgentsSource>,
     _observe: Subscription,
     _inputs: Vec<Subscription>,
 }
+
+/// Where the Overview gets the window's agents from.
+pub type AgentsSource = std::rc::Rc<dyn Fn(&App) -> Vec<super::SeenAgent>>;
 
 impl Focusable for AccountsPage {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -200,7 +262,21 @@ impl AccountsPage {
             focus: cx.focus_handle(),
             nav_focus: cx.focus_handle().tab_stop(true),
             list_focus: cx.focus_handle().tab_stop(true),
+            pool_view: Default::default(),
+            price_input: input("200", window, cx),
+            day_input: input("3", window, cx),
+            topup_amount: input("10", window, cx),
+            topup_credits: input("1000", window, cx),
+            topup_days: input("30", window, cx),
+            topup_note: input("Promo credits", window, cx),
+            topup_account: None,
+            agents_source: None,
         }
+    }
+
+    /// Gives the Overview the agents of the window this page is in.
+    pub fn set_agents_source(&mut self, source: AgentsSource) {
+        self.agents_source = Some(source);
     }
 
     pub(super) fn selected<'a>(&self, m: &'a AccountsModel) -> Option<&'a Account> {
@@ -304,6 +380,9 @@ impl AccountsPage {
             let period = self.period;
             self.model
                 .update(cx, |m, cx| m.refresh_analytics(period, cx));
+        }
+        if t.is_pool() {
+            self.model.update(cx, |m, cx| m.refresh_pool(cx));
         }
         cx.notify();
     }
@@ -479,6 +558,7 @@ impl Render for AccountsPage {
             Tab::StatusLine => self.render_statusline(cx),
             Tab::Diagnostics => self.render_diagnostics(cx),
             Tab::Settings => self.render_settings(cx),
+            t => self.render_pool(t, narrow, window, cx),
         };
         let nav = self.render_nav(narrow, window, cx);
         v_flex()

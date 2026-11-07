@@ -77,7 +77,7 @@ impl Workspace {
     /// The agents at work in this window, as `app_state.agents` lists them: on each canvas and
     /// browser where one acted in the last 30 s, its id, label, colour, the surface (`canvas` with
     /// its file, `browser` with its project), what it did last and how long ago.
-    fn describe_agents(&self, cx: &App) -> Vec<Value> {
+    pub(crate) fn describe_agents(&self, cx: &App) -> Vec<Value> {
         let boards = self.boards.iter().filter_map(|b| b.upgrade());
         let mut agents: Vec<Value> = boards
             .flat_map(|b| b.read(cx).describe_agents(cx))

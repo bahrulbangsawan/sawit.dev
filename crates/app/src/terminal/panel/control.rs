@@ -161,6 +161,28 @@ impl TerminalPanel {
             .collect()
     }
 
+    /// Every pane running a coding agent, for the Accounts page: the tab's place, its title and
+    /// project, the agent, the pane's activity and the account folder it runs with.
+    pub fn seen_agents(&self, cx: &App) -> Vec<crate::accounts::TerminalAgent> {
+        let mut out = Vec::new();
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            let t = tab.read(cx);
+            for (_, view) in t.views() {
+                let v = view.read(cx);
+                if let Some(kind) = v.agent() {
+                    out.push(crate::accounts::TerminalAgent {
+                        tab: ix,
+                        project: t.group.clone(),
+                        kind,
+                        activity: v.activity(),
+                        profile: v.agent_profile(),
+                    });
+                }
+            }
+        }
+        out
+    }
+
     fn tab_ix(&self, tab: Option<usize>) -> Result<usize, String> {
         let ix = tab.unwrap_or(self.active);
         if ix < self.tabs.len() {

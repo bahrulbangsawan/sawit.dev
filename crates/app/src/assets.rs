@@ -217,7 +217,14 @@ gpui_kit::assets::icon_assets!(
         Timer,
         Ungroup,
         Variable,
-        Vote
+        Vote,
+        // The pool's views (Overview, Detailed, Compare, Timeline, Analytics, Wallet).
+        List,
+        CalendarClock,
+        TrendingUp,
+        Wallet,
+        GitCompare,
+        Flame,
     ]
 );
 
