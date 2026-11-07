@@ -70,7 +70,7 @@ pub(crate) fn options(a: &SeoArgs) -> Result<ScanOptions, String> {
 #[tool_router(router = browser_seo_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "Scan a page for SEO and agent readiness, as the browser's SEO panel does: title, description, canonical, robots, hreflang, headings, favicons, manifest, Open Graph and X tags with the share image's size, JSON-LD, sitemaps, llms.txt, alt text, broken links;, scored. Each check gives pass/warning/fail, evidence and a fix. Default: the page open in the browser tab"
+        description = "Scan a page for SEO and agent readiness, as the browser's SEO panel does: title, description, canonical, robots, hreflang, headings, favicons, manifest, Open Graph and X tags with the share image's size, JSON-LD, sitemaps, llms.txt, alt text, broken links;, and the agent-readiness checks (discovery files, Markdown negotiation, AI bot rules, MCP endpoints, OAuth metadata, OpenAPI, WebMCP, accessibility tree), scored per layer with a total, grade and Essentials score. Each check gives pass/warning/fail, evidence and a fix. Default: the page open in the browser tab"
     )]
     async fn browser_seo(&self, Parameters(a): Parameters<SeoArgs>) -> CallToolResult {
         let mut options = tri!(options(&a));

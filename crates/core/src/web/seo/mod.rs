@@ -8,8 +8,12 @@
 //! Every check is in one table ([`catalog::CHECKS`]), keyed by id: a check never runs twice. The
 //! report ([`Report`]) is what the browser's SEO panel draws and what `browser_seo` returns.
 
+mod agent;
 pub mod catalog;
 mod checks;
+pub mod external;
+mod mcp;
+mod openapi;
 pub mod robots;
 mod site;
 pub mod sitemap;

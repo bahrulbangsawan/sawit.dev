@@ -79,11 +79,21 @@ sawitTest("seo: the tab shows the favicon, the SEO panel scans the page and open
   await shot(ctx, "seo-previews");
 
   await win.click({ name: "Checks" });
+  // Problems come first: the missing canonical link is at the top, on screen.
   const broken = await win.waitFor({ role: "button", name: /^Broken links: / });
   assert.match(broken.name, /warning|fail/);
-  await win.click({ role: "button", name: /^Broken links: / });
+  await win.click({ role: "button", name: /^Canonical address: / });
   await win.waitFor({ role: "button", name: "Copy fix prompt" });
   await shot(ctx, "seo-checks-open");
+
+  // Agents: the scan type, layers and the agent-readiness checks.
+  await win.click({ name: "Agents" });
+  await win.waitFor({ role: "switch", name: "Content site" });
+  await shot(ctx, "seo-agents");
+  await win.click({ role: "switch", name: "Content site" });
+  await win.waitFor({ role: "button", name: "Copy fixes for an agent" }, { timeoutMs: 1 }).catch(() => {});
+  await win.waitFor({ role: "switch", name: "API or app" }, { timeoutMs: 30_000 });
+  await shot(ctx, "seo-agents-content");
 
   // A narrow window keeps the panel whole.
   await win.resize(900, 640).catch(() => {});

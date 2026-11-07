@@ -175,7 +175,7 @@ pub enum BrowserOp {
     /// How the last design export is doing.
     ExportStatus,
     /// Opens the side panel (`annotate`, `design` on its `tab`: inspect, colors, fonts,
-    /// assets or system, or `seo` on overview, previews or checks), or closes it (`panel` left out). For scripts and visual checks:
+    /// assets or system, or `seo` on overview, previews, checks or agents), or closes it (`panel` left out). For scripts and visual checks:
     /// agents read annotations and design through their own ops, panel or not.
     Panel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
