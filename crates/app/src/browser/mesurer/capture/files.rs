@@ -6,7 +6,9 @@ use std::path::PathBuf;
 
 use gpui_kit::*;
 use sawit_core::browser::base64_decode;
-use sawit_core::browser::mesurer::files::{captures_dir, png_size, save_capture, shown_folder};
+use sawit_core::browser::mesurer::files::{
+    captures_dir, data_url, png_size, save_capture, shown_folder,
+};
 use serde_json::json;
 
 use super::super::super::BrowserView;
@@ -18,13 +20,14 @@ fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
-/// Saves a download mesurer made (a screenshot, a recording) and replies `{path, name}`; the
-/// Annotate panel says where it went.
+/// Saves a download mesurer made (a screenshot, a recording: its `base64` bytes, or a `data:`
+/// `href`) and replies `{path, name}`; the Annotate panel says where it went.
 pub(super) fn save(
     view: &mut BrowserView,
     name: String,
     mime: String,
     base64: String,
+    href: Option<String>,
     reply: WorldReply,
     cx: &mut Context<BrowserView>,
 ) {
@@ -32,7 +35,13 @@ pub(super) fn save(
     let home = home();
     let asked = name.clone();
     let saved = cx.background_executor().spawn(async move {
-        let bytes = base64_decode(&base64).ok_or_else(|| format!("{name} came as bad base64."))?;
+        let (mime, bytes) = match href {
+            Some(href) => data_url(&href)?,
+            None => (
+                mime,
+                base64_decode(&base64).ok_or_else(|| format!("{name} came as bad base64."))?,
+            ),
+        };
         let path = save_capture(project.as_deref(), &home, &name, &mime, &bytes)?;
         let folder = captures_dir(project.as_deref(), &home);
         Ok::<_, String>((path, shown_folder(project.as_deref(), &home, &folder)))

@@ -16,6 +16,7 @@ use sawit_core::agent_accounts::tracking;
 
 use super::AccountsModel;
 use super::page::AccountsPage;
+use super::ui;
 
 impl AccountsModel {
     /// Uses (or stops using) Sawit's layout for `id`, with the name, email and plan it shows.
@@ -84,23 +85,19 @@ impl AccountsPage {
         let first = m.list().first().map(|a| a.id.clone());
         let values = preview_values(m, first.as_deref());
         let muted = cx.theme().muted_foreground;
-        let card = |title: &'static str| {
-            v_flex()
-                .gap_2()
-                .p_3()
-                .rounded(cx.theme().radius)
-                .border_1()
-                .border_color(cx.theme().border)
-                .child(div().text_sm().font_semibold().child(title))
-        };
         // The preview, drawn by the collector's own code.
         let lines = sl::segments(&layout, &values, Some(100));
         let preview = v_flex()
-            .p_2()
+            .id("sl-preview")
+            .role(Role::Image)
+            .aria_label("Status line preview")
+            .px_3()
+            .py_2()
             .rounded(cx.theme().radius)
             .bg(gpui_kit::rgb(0x1e1e1e))
             .font_family(cx.theme().mono_font_family.clone())
             .text_sm()
+            .overflow_x_hidden()
             .children(lines.into_iter().map(|line| {
                 h_flex().children(line.into_iter().map(|s| {
                     let mut el = div().child(s.text.replace(' ', "\u{a0}"));
@@ -124,9 +121,11 @@ impl AccountsPage {
         let theme_name = sl::theme(&layout.theme)
             .map(|t| t.name)
             .unwrap_or("Classic");
+        let page = cx.entity();
         let editor = v_flex()
             .gap_2()
             .children(layout.lines.iter().enumerate().map(|(li, line)| {
+                let len = line.len();
                 h_flex()
                     .gap_1()
                     .flex_wrap()
@@ -134,133 +133,172 @@ impl AccountsPage {
                         div()
                             .text_xs()
                             .text_color(muted)
-                            .w(px(44.))
+                            .w(px(48.))
                             .child(format!("Line {}", li + 1)),
                     )
+                    // Each chip's menu moves it left or right, or removes it: the keyboard path.
                     .children(line.iter().enumerate().map(|(wi, w)| {
+                        let page = page.clone();
                         Button::new(SharedString::from(format!("sl-w-{li}-{wi}")))
                             .xsmall()
                             .outline()
                             .label(w.kind.title())
-                            .icon(Lucide::X)
-                            .tooltip("Remove")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(l) = this.layout.as_mut()
-                                    && let Some(line) = l.lines.get_mut(li)
-                                {
-                                    line.remove(wi);
-                                }
-                                cx.notify();
-                            }))
+                            .dropdown_caret(true)
+                            .accessibility_label(format!(
+                                "{}, line {}, place {}",
+                                w.kind.title(),
+                                li + 1,
+                                wi + 1
+                            ))
+                            .dropdown_menu(move |menu, _, _| {
+                                let edit = |f: fn(&mut Vec<Widget>, usize)| {
+                                    let page = page.clone();
+                                    move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                                        page.update(cx, |this, cx| {
+                                            if let Some(l) = this.layout.as_mut()
+                                                && let Some(line) = l.lines.get_mut(li)
+                                                && wi < line.len()
+                                            {
+                                                f(line, wi);
+                                            }
+                                            cx.notify();
+                                        })
+                                    }
+                                };
+                                menu.item(
+                                    PopupMenuItem::new("Move Left")
+                                        .icon(Lucide::ArrowLeft)
+                                        .disabled(wi == 0)
+                                        .on_click(edit(|line, wi| line.swap(wi, wi - 1))),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Move Right")
+                                        .icon(Lucide::ArrowRight)
+                                        .disabled(wi + 1 >= len)
+                                        .on_click(edit(|line, wi| line.swap(wi, wi + 1))),
+                                )
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("Remove").icon(Lucide::Trash).on_click(
+                                        edit(|line, wi| {
+                                            line.remove(wi);
+                                        }),
+                                    ),
+                                )
+                            })
                     }))
                     .child(
                         Button::new(SharedString::from(format!("sl-add-{li}")))
                             .xsmall()
                             .ghost()
                             .icon(Lucide::Plus)
-                            .tooltip("Add a Component")
+                            .accessibility_label(format!("Add a Component to Line {}", li + 1))
+                            .tooltip("Add a component")
                             .dropdown_menu({
                                 let page = cx.entity();
                                 move |menu, _, _| {
                                     Kind::ALL.iter().fold(menu, |menu, &k| {
                                         let page = page.clone();
-                                        menu.item(PopupMenuItem::new(k.title()).on_click(
-                                            move |_, _, cx| {
-                                                page.update(cx, |this, cx| {
-                                                    if let Some(l) = this.layout.as_mut()
-                                                        && let Some(line) = l.lines.get_mut(li)
-                                                    {
-                                                        line.push(Widget::new(k));
-                                                    }
-                                                    cx.notify();
-                                                })
-                                            },
-                                        ))
-                                    })
-                                }
-                            }),
-                    )
-            }))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("sl-add-line")
-                            .xsmall()
-                            .ghost()
-                            .label("Add Line")
-                            .disabled(layout.lines.len() >= sl::MAX_LINES)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(l) = this.layout.as_mut() {
-                                    l.lines.push(Vec::new());
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("sl-theme")
-                            .xsmall()
-                            .outline()
-                            .label(format!("Theme: {theme_name}"))
-                            .dropdown_menu({
-                                let page = cx.entity();
-                                move |menu, _, _| {
-                                    sl::THEMES.iter().fold(menu, |menu, t| {
-                                        let (page, id) = (page.clone(), t.id.to_string());
-                                        menu.item(PopupMenuItem::new(t.name).on_click(
-                                            move |_, _, cx| {
-                                                page.update(cx, |this, cx| {
-                                                    if let Some(l) = this.layout.as_mut() {
-                                                        l.theme = id.clone();
-                                                    }
-                                                    cx.notify();
-                                                })
-                                            },
-                                        ))
-                                    })
-                                }
-                            }),
-                    )
-                    .child(
-                        Button::new("sl-preset")
-                            .xsmall()
-                            .outline()
-                            .label("Start From…")
-                            .dropdown_menu({
-                                let page = cx.entity();
-                                move |menu, _, _| {
-                                    sl::presets()
-                                        .into_iter()
-                                        .fold(menu, |menu, (name, config)| {
-                                            let page = page.clone();
-                                            menu.item(PopupMenuItem::new(name).on_click(
-                                                move |_, _, cx| {
+                                        menu.item(
+                                            PopupMenuItem::new(k.title())
+                                                .icon(Lucide::Plus)
+                                                .on_click(move |_, _, cx| {
                                                     page.update(cx, |this, cx| {
-                                                        this.layout = Some(config.clone());
+                                                        if let Some(l) = this.layout.as_mut()
+                                                            && let Some(line) = l.lines.get_mut(li)
+                                                        {
+                                                            line.push(Widget::new(k));
+                                                        }
                                                         cx.notify();
                                                     })
-                                                },
-                                            ))
-                                        })
+                                                }),
+                                        )
+                                    })
                                 }
                             }),
                     )
-                    .child(
-                        Button::new("sl-powerline")
-                            .xsmall()
-                            .ghost()
-                            .label(if layout.powerline.enabled {
-                                "Powerline: On"
-                            } else {
-                                "Powerline: Off"
+            }));
+        let tools = h_flex()
+            .gap_2()
+            .flex_wrap()
+            .child(
+                Button::new("sl-add-line")
+                    .xsmall()
+                    .outline()
+                    .icon(Lucide::Plus)
+                    .label("Add Line")
+                    .disabled(layout.lines.len() >= sl::MAX_LINES)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(l) = this.layout.as_mut() {
+                            l.lines.push(Vec::new());
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("sl-theme")
+                    .xsmall()
+                    .outline()
+                    .icon(Lucide::Palette)
+                    .label(format!("Theme: {theme_name}"))
+                    .dropdown_menu({
+                        let page = cx.entity();
+                        move |menu, _, _| {
+                            sl::THEMES.iter().fold(menu, |menu, t| {
+                                let (page, id) = (page.clone(), t.id.to_string());
+                                menu.item(
+                                    PopupMenuItem::new(t.name).icon(Lucide::Palette).on_click(
+                                        move |_, _, cx| {
+                                            page.update(cx, |this, cx| {
+                                                if let Some(l) = this.layout.as_mut() {
+                                                    l.theme = id.clone();
+                                                }
+                                                cx.notify();
+                                            })
+                                        },
+                                    ),
+                                )
                             })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(l) = this.layout.as_mut() {
-                                    l.powerline.enabled = !l.powerline.enabled;
-                                }
-                                cx.notify();
-                            })),
-                    ),
+                        }
+                    }),
+            )
+            .child(
+                Button::new("sl-preset")
+                    .xsmall()
+                    .outline()
+                    .icon(Lucide::LayoutTemplate)
+                    .label("Start From…")
+                    .dropdown_menu({
+                        let page = cx.entity();
+                        move |menu, _, _| {
+                            sl::presets()
+                                .into_iter()
+                                .fold(menu, |menu, (name, config)| {
+                                    let page = page.clone();
+                                    menu.item(
+                                        PopupMenuItem::new(name)
+                                            .icon(Lucide::LayoutTemplate)
+                                            .on_click(move |_, _, cx| {
+                                                page.update(cx, |this, cx| {
+                                                    this.layout = Some(config.clone());
+                                                    cx.notify();
+                                                })
+                                            }),
+                                    )
+                                })
+                        }
+                    }),
+            )
+            .child(
+                Switch::new("sl-powerline")
+                    .checked(layout.powerline.enabled)
+                    .label("Powerline")
+                    .on_click(cx.listener(|this, on: &bool, _, cx| {
+                        if let Some(l) = this.layout.as_mut() {
+                            l.powerline.enabled = *on;
+                        }
+                        cx.notify();
+                    })),
             );
         let accounts: Vec<(String, String, bool, bool)> = m
             .list()
@@ -275,31 +313,70 @@ impl AccountsPage {
                 )
             })
             .collect();
-        v_flex()
-            .id("accounts-statusline")
-            .flex_1()
-            .overflow_y_scroll()
-            .p_6()
-            .gap_4()
-            .child(card("Preview").child(preview).child(div().text_xs().text_color(muted).child("With the first account's name, plan and usage; the session's values are made up.")))
-            .child(card("Layout").child(editor).when(!problems.is_empty(), |el| el.child(div().text_xs().text_color(cx.theme().danger).child(problems.join(" ")))))
+        let account_rows: Vec<AnyElement> = accounts
+            .into_iter()
+            .map(|(id, name, managed, tracked)| {
+                let control = Switch::new(SharedString::from(format!("sl-use-{id}")))
+                    .checked(managed)
+                    .disabled(!tracked)
+                    .accessibility_label(format!("{name}: Use Sawit's Status Line"))
+                    .on_click(cx.listener({
+                        let id = id.clone();
+                        move |this, on: &bool, _, cx| {
+                            this.model.update(cx, |m, cx| m.set_managed(&id, *on, cx))
+                        }
+                    }));
+                ui::setting_row(
+                    Lucide::SquareTerminal,
+                    name,
+                    if tracked {
+                        "Use Sawit's status line in this account's Claude Code"
+                    } else {
+                        "Turn on usage tracking on the Accounts tab first: it runs the status line"
+                    },
+                    control,
+                    !tracked,
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect();
+        let apply = h_flex()
+            .gap_2()
             .child(
-                h_flex()
-                    .gap_1()
-                    .child(Button::new("sl-apply").small().primary().label("Apply").disabled(!problems.is_empty()).on_click(cx.listener(|this, _, _, cx| {
+                Button::new("sl-apply")
+                    .small()
+                    .primary()
+                    .icon(Lucide::Check)
+                    .label("Apply")
+                    .disabled(!problems.is_empty())
+                    .on_click(cx.listener(|this, _, _, cx| {
                         let Some(l) = this.layout.clone() else { return };
                         this.model.update(cx, |m, cx| {
                             match sl::apply(&m.root, &l, sawit_core::github::now()) {
-                                Ok(()) => m.notice = Some("Applied. Claude Code shows it at the next status line update.".into()),
+                                Ok(()) => m.notice = Some(
+                                    "Applied. Claude Code shows it at the next status line update."
+                                        .into(),
+                                ),
                                 Err(e) => m.error = Some(e.to_string()),
                             }
                             cx.notify();
                         });
-                    })))
-                    .child(Button::new("sl-undo").small().ghost().label("Undo Last Apply").on_click(cx.listener(|this, _, _, cx| {
+                    })),
+            )
+            .child(
+                Button::new("sl-undo")
+                    .small()
+                    .ghost()
+                    .icon(Lucide::Undo2)
+                    .label("Undo Last Apply")
+                    .on_click(cx.listener(|this, _, _, cx| {
                         this.model.update(cx, |m, cx| {
                             match sl::undo(&m.root) {
-                                Ok(true) => m.notice = Some("The layout before the last Apply is back.".into()),
+                                Ok(true) => {
+                                    m.notice =
+                                        Some("The layout before the last Apply is back.".into())
+                                }
                                 Ok(false) => m.notice = Some("There is no earlier layout.".into()),
                                 Err(e) => m.error = Some(e.to_string()),
                             }
@@ -307,15 +384,70 @@ impl AccountsPage {
                         });
                         this.layout = None;
                         cx.notify();
-                    }))),
+                    })),
+            );
+        // The preview stays in view at the top while the layout below scrolls.
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(
+                v_flex()
+                    .flex_none()
+                    .w_full()
+                    .max_w(ui::CONTENT_MAX)
+                    .px_6()
+                    .pt_6()
+                    .pb_4()
+                    .child(ui::section_header(Lucide::Eye, "Preview", cx).child(
+                        div().text_xs().text_color(muted).child(
+                            "The first account's name, plan and usage, with a made-up session",
+                        ),
+                    ))
+                    .child(preview),
             )
-            .child(card("Accounts").children(accounts.into_iter().map(|(id, name, managed, tracked)| {
-                Switch::new(SharedString::from(format!("sl-use-{id}")))
-                    .checked(managed)
-                    .disabled(!tracked)
-                    .label(if tracked { format!("{name}: Use Sawit's Status Line") } else { format!("{name}: turn on usage tracking first") })
-                    .on_click(cx.listener(move |this, on: &bool, _, cx| this.model.update(cx, |m, cx| m.set_managed(&id, *on, cx))))
-            })))
+            .child(
+                div()
+                    .id("accounts-statusline")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .max_w(ui::CONTENT_MAX)
+                            .px_6()
+                            .pb_6()
+                            .gap_6()
+                            .child(
+                                v_flex()
+                                    .child(ui::section_header(Lucide::LayoutTemplate, "Layout", cx))
+                                    .child(
+                                        ui::group_box(cx)
+                                            .p_4()
+                                            .gap_3()
+                                            .child(editor)
+                                            .child(tools)
+                                            .when(!problems.is_empty(), |el| {
+                                                el.child(
+                                                    h_flex()
+                                                        .gap_1()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().danger)
+                                                        .child(Icon::new(Lucide::CircleX).xsmall())
+                                                        .child(problems.join(" ")),
+                                                )
+                                            }),
+                                    )
+                                    .child(div().pt_3().child(apply)),
+                            )
+                            .child(
+                                v_flex()
+                                    .child(ui::section_header(Lucide::Users, "Accounts", cx))
+                                    .child(ui::group_box(cx).children(ui::rows(account_rows, cx))),
+                            ),
+                    ),
+            )
             .into_any_element()
     }
 }

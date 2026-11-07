@@ -37,6 +37,34 @@ pub enum PaneAct {
     Close,
 }
 
+impl PaneAct {
+    /// The item's icon, from the app's one map of actions to icons (B16).
+    pub fn icon(self) -> gpui_kit::assets::IconName {
+        use crate::menu_icons as icon;
+        use gpui_kit::assets::IconName as Lucide;
+        match self {
+            PaneAct::Copy => icon::COPY,
+            PaneAct::Paste => icon::PASTE,
+            PaneAct::SelectAll => icon::SELECT_ALL,
+            PaneAct::Find => Lucide::Search,
+            PaneAct::CopyLastOutput => Lucide::ClipboardCopy,
+            PaneAct::CopyError => Lucide::TriangleAlert,
+            PaneAct::OpenLink => icon::OPEN_BROWSER,
+            PaneAct::CopyLink => icon::LINK,
+            PaneAct::OpenFile => icon::OPEN_FILE,
+            PaneAct::Clear => icon::ERASE,
+            PaneAct::Reset => icon::RESTART,
+            PaneAct::Rename => icon::RENAME,
+            PaneAct::SplitRight => icon::SPLIT_RIGHT,
+            PaneAct::SplitDown => icon::SPLIT_DOWN,
+            PaneAct::Zoom => Lucide::ZoomIn,
+            PaneAct::FullScreen => icon::MAXIMIZE,
+            PaneAct::SendRightClicks => Lucide::MousePointerClick,
+            PaneAct::Close => icon::CLOSE,
+        }
+    }
+}
+
 /// One entry of the pane menu.
 pub enum PaneEntry {
     Separator,
@@ -214,7 +242,8 @@ impl TerminalTab {
                 let tab = tab.clone();
                 // An item with an action shows the keys the keymap gives it in the pane (its
                 // action context), as the file tab menu shows its keys.
-                let mut item = PopupMenuItem::new(label);
+                let mut item = PopupMenuItem::new(label).icon(act.icon());
+                // A toggle shows its check in the icon's place.
                 if let Some(checked) = checked {
                     item = item.checked(checked);
                 }

@@ -43,30 +43,23 @@ impl Render for DragLabel {
     }
 }
 
-/// The tab's icon: a spinner while the page loads, then its favicon, or a globe when it has none,
-/// in a box of one size so the title doesn't move when it changes.
-fn tab_icon(loading: bool, favicon: Option<Arc<RenderImage>>, muted: Hsla) -> AnyElement {
+/// The tab's resting icon: the page's favicon, else the globe. While the page loads,
+/// [`crate::activity::tab_icon`] turns the loader in its place. One box size, so the title
+/// doesn't move when it changes.
+fn tab_icon(favicon: Option<Arc<RenderImage>>, muted: Hsla) -> AnyElement {
     let slot = div()
         .size(px(ICON_SIDE))
         .flex_none()
         .flex()
         .items_center()
         .justify_center();
-    match (loading, favicon) {
-        (false, Some(image)) => slot.child(
+    match favicon {
+        Some(image) => slot.child(
             img(image)
                 .size(px(ICON_SIDE))
                 .object_fit(ObjectFit::Contain),
         ),
-        (loading, _) => slot.child(
-            Icon::new(if loading {
-                Lucide::LoaderCircle
-            } else {
-                Lucide::Globe
-            })
-            .xsmall()
-            .text_color(muted),
-        ),
+        None => slot.child(Icon::new(Lucide::Globe).xsmall().text_color(muted)),
     }
     .into_any_element()
 }
@@ -97,6 +90,7 @@ impl BrowserTabs {
                 .debug_selector(move || format!("browser-tab-{ix}"))
                 .role(Role::Tab)
                 .aria_label(title.clone())
+                .when(loading, |el| el.aria_description("Loading"))
                 .aria_selected(active)
                 .flex_1()
                 .min_w(px(TAB_MIN))
@@ -116,7 +110,21 @@ impl BrowserTabs {
                 .when(!active, |el| {
                     el.bg(cx.theme().tab).text_color(cx.theme().tab_foreground)
                 })
-                .child(tab_icon(loading, favicon, muted))
+                .child({
+                    // Busy while the page loads (B2): the loader turns in place of the page's
+                    // icon (B7: its favicon, else the globe).
+                    let activity = sawit_core::activity::browser(loading, false);
+                    div()
+                        .flex_none()
+                        .debug_selector(move || format!("browser-activity-{ix}-{}", activity.id()))
+                        .text_color(muted)
+                        .child(crate::activity::tab_icon(
+                            activity,
+                            tab_icon(favicon, muted),
+                            ("browser-activity", tab.id as usize),
+                            cx,
+                        ))
+                })
                 .child(
                     div()
                         .flex_1()

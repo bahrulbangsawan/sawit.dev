@@ -3,6 +3,7 @@
 
 use gpui_kit::{Context, Task};
 use sawit_core::site_design::inspect::StyleInfo;
+use sawit_core::site_design::page::PageStyle;
 use serde_json::{Value, json};
 
 use super::{page_answer, parse};
@@ -23,8 +24,9 @@ impl BrowserView {
         cx.spawn(async move |_, cx| {
             parse(
                 "style",
-                serde_json::from_value(page_answer(answer, cx).await?),
+                serde_json::from_value::<PageStyle>(page_answer(answer, cx).await?),
             )
+            .map(StyleInfo::from)
         })
     }
 

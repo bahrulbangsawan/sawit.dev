@@ -1,0 +1,853 @@
+{
+ "snapshot": {
+  "snapshot": "- navigation [ref=e1]:\n  - link \"Pricing\" /url: #pricing [ref=e2]\n  - link \"Docs\" /url: #docs [ref=e3]\n- heading \"Create your account\" [level=1] [ref=e4]\n- form [ref=e5]:\n  - label \"Email\" [ref=e6]\n  - textbox \"Email\" value=\"\" [required] [ref=e7]\n  - label \"Plan\" [ref=e8]\n  - combobox \"Plan\" value=\"Free\" [ref=e9]\n  - label \"I accept the terms\" [ref=e10]\n    - checkbox \"I accept the terms\" [ref=e11]\n  - button \"Sign up\" [ref=e12]\n- status [ref=e13]",
+  "url": "http://fixture/form.html",
+  "title": "Sign up · fixture",
+  "ready": "complete",
+  "refs": 13,
+  "truncated": false
+ },
+ "design.summary": {
+  "url": "http://fixture/form.html",
+  "title": "Sign up · fixture",
+  "truncated": false,
+  "counts": {
+   "colors": 8,
+   "text_styles": 4,
+   "font_faces": 0,
+   "assets": 0,
+   "variables": 0,
+   "components": 3
+  },
+  "tokens": {
+   "site": "127.0.0.1",
+   "url": "http://fixture/form.html",
+   "date": "DATE",
+   "palette": [
+    {
+     "role": "primary",
+     "base": "#0000ee",
+     "steps": [
+      "#f2f5fc",
+      "#dee8fd",
+      "#c6d8fc",
+      "#9dbdfe",
+      "#729efd",
+      "#457cfe",
+      "#1c58fe",
+      "#0000ee",
+      "#0228b1",
+      "#001982",
+      "#000957"
+     ],
+     "uses": 2
+    },
+    {
+     "role": "neutral",
+     "base": "#000000",
+     "steps": [
+      "#f5f5f5",
+      "#e8e8e8",
+      "#d7d7d7",
+      "#bebebe",
+      "#a1a1a1",
+      "#868686",
+      "#6f6f6f",
+      "#585858",
+      "#424242",
+      "#2e2e2e",
+      "#000000"
+     ],
+     "uses": 4
+    }
+   ],
+   "semantic": [
+    [
+     "foreground",
+     "#000000"
+    ],
+    [
+     "primary",
+     "#0000ee"
+    ],
+    [
+     "primary-foreground",
+     "#ffffff"
+    ],
+    [
+     "muted",
+     "#c0c0c0"
+    ],
+    [
+     "border",
+     "#808080"
+    ],
+    [
+     "ring",
+     "#0000ee"
+    ]
+   ],
+   "families": [],
+   "type_roles": [
+    [
+     "display",
+     {
+      "family": "system-ui",
+      "size": 30,
+      "weight": 700,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ],
+    [
+     "label",
+     {
+      "family": "system-ui",
+      "size": 15,
+      "weight": 400,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ]
+   ],
+   "type_scale": [],
+   "spacing_base": 2,
+   "spacing": [
+    [
+     "xs",
+     2
+    ],
+    [
+     "sm",
+     3
+    ],
+    [
+     "md",
+     4
+    ],
+    [
+     "lg",
+     5
+    ],
+    [
+     "xl",
+     12
+    ],
+    [
+     "2xl",
+     20
+    ],
+    [
+     "3xl",
+     40
+    ]
+   ],
+   "radius": [
+    [
+     "sm",
+     "5px"
+    ]
+   ],
+   "shadows": [],
+   "breakpoints": [],
+   "variables": [],
+   "components": [
+    {
+     "name": "input",
+     "props": [
+      [
+       "backgroundColor",
+       "{colors.primary-foreground}"
+      ],
+      [
+       "textColor",
+       "{colors.foreground}"
+      ],
+      [
+       "rounded",
+       "0px"
+      ],
+      [
+       "padding",
+       "2px 5px"
+      ],
+      [
+       "height",
+       "20.88px"
+      ]
+     ]
+    },
+    {
+     "name": "nav-link",
+     "props": [
+      [
+       "textColor",
+       "{colors.primary}"
+      ],
+      [
+       "typography",
+       "{typography.label}"
+      ],
+      [
+       "rounded",
+       "0px"
+      ],
+      [
+       "height",
+       "17.67px"
+      ]
+     ]
+    }
+   ],
+   "facts": {
+    "primary_buttons": 0,
+    "primary_links": 2,
+    "smallest_text": 11,
+    "dark": false,
+    "colors_seen": 6,
+    "body": null
+   }
+  }
+ },
+ "design.colors": {
+  "colors": [
+   {
+    "value": "rgb(0, 0, 0)",
+    "role": "text",
+    "count": 4,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(0, 0, 238)",
+    "role": "text",
+    "count": 2,
+    "on_button": 0,
+    "on_link": 2
+   },
+   {
+    "value": "rgb(255, 255, 255)",
+    "role": "background",
+    "count": 2,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(128, 128, 128)",
+    "role": "border",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.847)",
+    "role": "border",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.847)",
+    "role": "text",
+    "count": 1,
+    "on_button": 1,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(192, 192, 192)",
+    "role": "background",
+    "count": 1,
+    "on_button": 1,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(192, 192, 192)",
+    "role": "border",
+    "count": 1,
+    "on_button": 1,
+    "on_link": 0
+   }
+  ]
+ },
+ "design.fonts": {
+  "families": [],
+  "font_faces": [],
+  "text_styles": [
+   {
+    "tag": "label",
+    "in_main": false,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 15,
+    "weight": 400,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgb(0, 0, 0)",
+    "chars": 27
+   },
+   {
+    "tag": "h1",
+    "in_main": false,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 30,
+    "weight": 700,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgb(0, 0, 0)",
+    "chars": 19
+   },
+   {
+    "tag": "a",
+    "in_main": false,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 15,
+    "weight": 400,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgb(0, 0, 238)",
+    "chars": 11
+   },
+   {
+    "tag": "button",
+    "in_main": false,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 11,
+    "weight": 400,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgba(0, 0, 0, 0.847)",
+    "chars": 7
+   }
+  ]
+ },
+ "design.assets": {
+  "assets": []
+ },
+ "design.tokens": {
+  "tokens": {
+   "site": "127.0.0.1",
+   "url": "http://fixture/form.html",
+   "date": "DATE",
+   "palette": [
+    {
+     "role": "primary",
+     "base": "#0000ee",
+     "steps": [
+      "#f2f5fc",
+      "#dee8fd",
+      "#c6d8fc",
+      "#9dbdfe",
+      "#729efd",
+      "#457cfe",
+      "#1c58fe",
+      "#0000ee",
+      "#0228b1",
+      "#001982",
+      "#000957"
+     ],
+     "uses": 2
+    },
+    {
+     "role": "neutral",
+     "base": "#000000",
+     "steps": [
+      "#f5f5f5",
+      "#e8e8e8",
+      "#d7d7d7",
+      "#bebebe",
+      "#a1a1a1",
+      "#868686",
+      "#6f6f6f",
+      "#585858",
+      "#424242",
+      "#2e2e2e",
+      "#000000"
+     ],
+     "uses": 4
+    }
+   ],
+   "semantic": [
+    [
+     "foreground",
+     "#000000"
+    ],
+    [
+     "primary",
+     "#0000ee"
+    ],
+    [
+     "primary-foreground",
+     "#ffffff"
+    ],
+    [
+     "muted",
+     "#c0c0c0"
+    ],
+    [
+     "border",
+     "#808080"
+    ],
+    [
+     "ring",
+     "#0000ee"
+    ]
+   ],
+   "families": [],
+   "type_roles": [
+    [
+     "display",
+     {
+      "family": "system-ui",
+      "size": 30,
+      "weight": 700,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ],
+    [
+     "label",
+     {
+      "family": "system-ui",
+      "size": 15,
+      "weight": 400,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ]
+   ],
+   "type_scale": [],
+   "spacing_base": 2,
+   "spacing": [
+    [
+     "xs",
+     2
+    ],
+    [
+     "sm",
+     3
+    ],
+    [
+     "md",
+     4
+    ],
+    [
+     "lg",
+     5
+    ],
+    [
+     "xl",
+     12
+    ],
+    [
+     "2xl",
+     20
+    ],
+    [
+     "3xl",
+     40
+    ]
+   ],
+   "radius": [
+    [
+     "sm",
+     "5px"
+    ]
+   ],
+   "shadows": [],
+   "breakpoints": [],
+   "variables": [],
+   "components": [
+    {
+     "name": "input",
+     "props": [
+      [
+       "backgroundColor",
+       "{colors.primary-foreground}"
+      ],
+      [
+       "textColor",
+       "{colors.foreground}"
+      ],
+      [
+       "rounded",
+       "0px"
+      ],
+      [
+       "padding",
+       "2px 5px"
+      ],
+      [
+       "height",
+       "20.88px"
+      ]
+     ]
+    },
+    {
+     "name": "nav-link",
+     "props": [
+      [
+       "textColor",
+       "{colors.primary}"
+      ],
+      [
+       "typography",
+       "{typography.label}"
+      ],
+      [
+       "rounded",
+       "0px"
+      ],
+      [
+       "height",
+       "17.67px"
+      ]
+     ]
+    }
+   ],
+   "facts": {
+    "primary_buttons": 0,
+    "primary_links": 2,
+    "smallest_text": 11,
+    "dark": false,
+    "colors_seen": 6,
+    "body": null
+   }
+  }
+ },
+ "design.variables": {
+  "variables": []
+ },
+ "inspect body": {
+  "selector": "body",
+  "label": "body",
+  "rect": {
+   "x": 40,
+   "y": 40,
+   "width": 1201,
+   "height": 246.69
+  },
+  "box": {
+   "margin": [
+    40,
+    40,
+    40,
+    40
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui",
+   "used_family": "system-ui",
+   "size": 15,
+   "weight": 400,
+   "line_height": null,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 0)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgba(0, 0, 0, 0)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(0, 0, 0)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "block",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 21,
+   "large": false,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect h1": {
+  "selector": "body > h1",
+  "label": "h1",
+  "rect": {
+   "x": 40,
+   "y": 78.09,
+   "width": 1201,
+   "height": 35
+  },
+  "box": {
+   "margin": [
+    20.09375,
+    0,
+    20.09375,
+    0
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui",
+   "used_family": "system-ui",
+   "size": 30,
+   "weight": 700,
+   "line_height": null,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 0)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgba(0, 0, 0, 0)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(0, 0, 0)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "block",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 21,
+   "large": true,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect #buy": {
+  "error": "Nothing on the page matches “#buy”."
+ },
+ "inspect .ghost": {
+  "error": "Nothing on the page matches “.ghost”."
+ },
+ "inspect #deep": {
+  "error": "Nothing on the page matches “#deep”."
+ },
+ "inspect .card": {
+  "error": "Nothing on the page matches “.card”."
+ },
+ "inspect a": {
+  "selector": "a[href=\"#pricing\"]",
+  "label": "a",
+  "rect": {
+   "x": 40,
+   "y": 40.17,
+   "width": 47.3,
+   "height": 17.67
+  },
+  "box": {
+   "margin": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui",
+   "used_family": "system-ui",
+   "size": 15,
+   "weight": 400,
+   "line_height": null,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 238)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgba(0, 0, 0, 0)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(0, 0, 238)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "inline",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 9.4,
+   "large": false,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect input": {
+  "selector": "#email",
+  "label": "input#email",
+  "rect": {
+   "x": 40,
+   "y": 155.25,
+   "width": 155.75,
+   "height": 20.88
+  },
+  "box": {
+   "margin": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "border": [
+    1.949619,
+    1.949619,
+    1.949619,
+    1.949619
+   ],
+   "padding": [
+    2,
+    5,
+    2,
+    5
+   ]
+  },
+  "typography": {
+   "family": "system-ui",
+   "used_family": "system-ui",
+   "size": 11,
+   "weight": 400,
+   "line_height": null,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 0)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgb(255, 255, 255)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(128, 128, 128)",
+   "style": "inset",
+   "width": [
+    1.949619,
+    1.949619,
+    1.949619,
+    1.949619
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "inline-block",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 21,
+   "large": false,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect #nope": {
+  "error": "Nothing on the page matches “#nope”."
+ },
+ "inspect html #buy": {
+  "error": "Nothing on the page matches “#buy”."
+ }
+}

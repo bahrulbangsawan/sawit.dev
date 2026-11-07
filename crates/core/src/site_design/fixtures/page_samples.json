@@ -1,0 +1,36 @@
+{
+  "components": [
+    {
+      "kind": "button",
+      "selector": "button.btn-primary",
+      "html": "<button class=\"btn-primary\" style=\"display: inline-flex; padding: 8px 16px; border-radius: 8px; background-color: rgb(37, 99, 235); color: rgb(255, 255, 255); font-family: Inter; font-size: 14px; font-weight: 600;\">Start</button>",
+      "style": {
+        "background": "rgb(37, 99, 235)",
+        "color": "rgb(255, 255, 255)",
+        "radius": "8px",
+        "padding": "8px 16px",
+        "font_family": "Inter, \"Helvetica Neue\", sans-serif",
+        "font_size": 14,
+        "font_weight": 600,
+        "height": 36,
+        "border": "0px none rgb(255, 255, 255)"
+      }
+    },
+    {
+      "kind": "link",
+      "selector": "main a:nth-of-type(2)",
+      "html": "<a href=\"/docs\" style=\"color: rgb(37, 99, 235);\">Docs</a>",
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "color": "rgb(37, 99, 235)",
+        "radius": "0px",
+        "padding": "0px",
+        "font_family": "Inter, \"Helvetica Neue\", sans-serif",
+        "font_size": 16,
+        "font_weight": 400,
+        "height": 24,
+        "border": "0px none rgb(37, 99, 235)"
+      }
+    }
+  ]
+}

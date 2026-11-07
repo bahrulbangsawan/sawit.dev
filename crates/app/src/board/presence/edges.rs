@@ -214,9 +214,14 @@ fn edge_chip(edge: Edge, view: WeakEntity<BoardView>, cx: &Context<BoardView>) -
             for (look, spot, doing) in &agents {
                 let (view, spot) = (view.clone(), *spot);
                 let label = format!("{} · {doing}", look.label);
-                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                    let _ = view.update(cx, |view, cx| view.go_to(spot.page, spot.point, cx));
-                }));
+                menu = menu.item(
+                    PopupMenuItem::new(label)
+                        .icon(crate::menu_icons::AGENT)
+                        .on_click(move |_, _, cx| {
+                            let _ =
+                                view.update(cx, |view, cx| view.go_to(spot.page, spot.point, cx));
+                        }),
+                );
             }
             menu
         });

@@ -308,12 +308,23 @@ pub(super) fn chrome_canvas_at(
     cx: &mut TestAppContext,
     path: &Path,
 ) -> (Entity<BoardView>, VisualTestContext) {
+    chrome_canvas_sized(cx, path, (800., 600.))
+}
+
+/// [`chrome_canvas_at`] in a window `window` (width, height) px.
+pub(super) fn chrome_canvas_sized(
+    cx: &mut TestAppContext,
+    path: &Path,
+    window: (f32, f32),
+) -> (Entity<BoardView>, VisualTestContext) {
     cx.update(gpui_kit::init);
     // The canvas's shortcuts are key bindings.
     cx.update(init_keys);
     cx.executor().allow_parking();
     let path = path.to_path_buf();
-    let window = cx.open_window(size(px(800.), px(600.)), |_, cx| BoardView::open(path, cx));
+    let window = cx.open_window(size(px(window.0), px(window.1)), |_, cx| {
+        BoardView::open(path, cx)
+    });
     let view = window.root(cx).unwrap();
     next_frame(cx, &view, None);
     (view, VisualTestContext::from_window(window.into(), cx))

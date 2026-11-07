@@ -4,6 +4,7 @@
 
 mod card;
 mod chip;
+mod detail;
 mod list;
 mod login;
 mod ops;
@@ -12,6 +13,7 @@ mod pool_ui;
 mod rows;
 mod settings_tab;
 mod statusline_tab;
+mod ui;
 mod usage_tab;
 
 use std::collections::HashMap;

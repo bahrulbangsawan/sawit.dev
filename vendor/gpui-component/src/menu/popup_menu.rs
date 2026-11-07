@@ -42,6 +42,13 @@ pub enum PopupMenuItem {
         disabled: bool,
         checked: bool,
         is_link: bool,
+        /// Sawit patch: a destructive item, drawn in the danger colour.
+        danger: bool,
+        /// Sawit patch: a picture drawn in the icon's slot in place of an icon (an agent's
+        /// colour logo, say), the label staying the item's name.
+        leading: Option<Leading>,
+        /// Sawit patch: what the item's tooltip says (a folder's path), shown on hover.
+        tooltip: Option<SharedString>,
         action: Option<Box<dyn Action>>,
         // For link item
         handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -51,6 +58,10 @@ pub enum PopupMenuItem {
         icon: Option<Icon>,
         disabled: bool,
         checked: bool,
+        /// Sawit patch: see [`PopupMenuItem::danger`].
+        danger: bool,
+        /// Sawit patch: see [`PopupMenuItem::leading`].
+        leading: Option<Leading>,
         action: Option<Box<dyn Action>>,
         render: Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>,
         handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -64,6 +75,15 @@ pub enum PopupMenuItem {
     },
 }
 
+/// Sawit patch: what draws an item's [`PopupMenuItem::leading`] picture.
+pub type Leading = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+
+/// Sawit patch: the side of an item's icon, and of the slot it sits in (a logo fills the slot).
+pub const MENU_ICON_SIZE: Pixels = px(14.);
+pub const MENU_ICON_SLOT: Pixels = px(16.);
+/// Sawit patch: the height of an item's row.
+pub const MENU_ROW_HEIGHT: Pixels = px(28.);
+
 impl FluentBuilder for PopupMenuItem {}
 impl PopupMenuItem {
     /// Create a new menu item with the given label.
@@ -76,6 +96,9 @@ impl PopupMenuItem {
             checked: false,
             action: None,
             is_link: false,
+            danger: false,
+            leading: None,
+            tooltip: None,
             handler: None,
         }
     }
@@ -91,6 +114,8 @@ impl PopupMenuItem {
             icon: None,
             disabled: false,
             checked: false,
+            danger: false,
+            leading: None,
             action: None,
             render: Box::new(move |window, cx| builder(window, cx).into_any_element()),
             handler: None,
@@ -190,6 +215,67 @@ impl PopupMenuItem {
         self
     }
 
+    /// Sawit patch: mark the item destructive (Delete, Force Close All, End Session…): its icon
+    /// and label take the danger colour. Only works for [`PopupMenuItem::Item`] and
+    /// [`PopupMenuItem::ElementItem`].
+    pub fn danger(mut self, danger: bool) -> Self {
+        match &mut self {
+            PopupMenuItem::Item { danger: d, .. } | PopupMenuItem::ElementItem { danger: d, .. } => {
+                *d = danger;
+            }
+            _ => {}
+        }
+        self
+    }
+
+    /// Sawit patch: draw `picture` in the icon's slot instead of an icon, such as an agent's
+    /// colour logo, which an [`Icon`] would tint one colour. Only works for
+    /// [`PopupMenuItem::Item`] and [`PopupMenuItem::ElementItem`].
+    pub fn leading<F, E>(mut self, picture: F) -> Self
+    where
+        F: Fn(&mut Window, &mut App) -> E + 'static,
+        E: IntoElement,
+    {
+        let picture: Leading = Rc::new(move |window, cx| picture(window, cx).into_any_element());
+        match &mut self {
+            PopupMenuItem::Item { leading, .. } | PopupMenuItem::ElementItem { leading, .. } => {
+                *leading = Some(picture);
+            }
+            _ => {}
+        }
+        self
+    }
+
+    /// Sawit patch: the item's tooltip, shown on hover over its label (a path, say). Only works
+    /// for [`PopupMenuItem::Item`].
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        if let PopupMenuItem::Item { tooltip, .. } = &mut self {
+            *tooltip = Some(text.into());
+        }
+        self
+    }
+
+    /// Sawit patch: whether the item shows a picture before its label (an icon, a logo, or its
+    /// check), for tests that every item has one.
+    pub fn has_picture(&self) -> bool {
+        match self {
+            PopupMenuItem::Item {
+                icon,
+                leading,
+                checked,
+                ..
+            } => icon.is_some() || leading.is_some() || *checked,
+            PopupMenuItem::ElementItem {
+                icon,
+                checked,
+                leading,
+                ..
+            } => icon.is_some() || leading.is_some() || *checked,
+            PopupMenuItem::Submenu { icon, .. } => icon.is_some(),
+            PopupMenuItem::Separator | PopupMenuItem::Label(_) => true,
+        }
+    }
+
     /// Add a click handler for the menu item.
     ///
     /// Only works for [`PopupMenuItem::Item`] and [`PopupMenuItem::ElementItem`].
@@ -220,6 +306,9 @@ impl PopupMenuItem {
             checked: false,
             action: None,
             is_link: true,
+            danger: false,
+            leading: None,
+            tooltip: None,
             handler: Some(Rc::new(move |_, _, cx| cx.open_url(&href))),
         }
     }
@@ -249,12 +338,18 @@ impl PopupMenuItem {
 
     fn has_left_icon(&self, check_side: Side) -> bool {
         match self {
-            PopupMenuItem::Item { icon, checked, .. } => {
-                icon.is_some() || (check_side.is_left() && *checked)
-            }
-            PopupMenuItem::ElementItem { icon, checked, .. } => {
-                icon.is_some() || (check_side.is_left() && *checked)
-            }
+            PopupMenuItem::Item {
+                icon,
+                checked,
+                leading,
+                ..
+            } => icon.is_some() || leading.is_some() || (check_side.is_left() && *checked),
+            PopupMenuItem::ElementItem {
+                icon,
+                checked,
+                leading,
+                ..
+            } => icon.is_some() || leading.is_some() || (check_side.is_left() && *checked),
             PopupMenuItem::Submenu { icon, .. } => icon.is_some(),
             _ => false,
         }
@@ -844,6 +939,11 @@ impl PopupMenu {
         self.menu_items.is_empty()
     }
 
+    /// Sawit patch: the menu's items, for tests of what a menu lists and how.
+    pub fn items(&self) -> &[PopupMenuItem] {
+        &self.menu_items
+    }
+
     fn clickable_menu_items(&self) -> impl Iterator<Item = (usize, &PopupMenuItem)> {
         self.menu_items
             .iter()
@@ -1163,33 +1263,61 @@ impl PopupMenu {
         .find_map(|handle| Kbd::binding_for_action_in(action.as_ref(), handle, window))
         .or_else(|| Kbd::global_binding_for_action(action.as_ref(), window))
         .map(|this| {
+            // Sawit patch: shortcuts read as secondary, muted.
             this.p_0()
                 .flex_nowrap()
                 .border_0()
                 .bg(gpui::transparent_white())
+                .text_color(cx.theme().muted_foreground)
         })
     }
 
+    /// Sawit patch: the item's picture in a slot of its own, [`MENU_ICON_SLOT`] square, so every
+    /// label in the menu starts at the same place: its icon at [`MENU_ICON_SIZE`] in the menu's
+    /// muted icon colour (the danger colour on a destructive item), its `leading` picture (a
+    /// logo), or nothing; a checked item's check in their place.
     fn render_icon(
         has_icon: bool,
         checked: bool,
         icon: Option<Icon>,
-        _: &mut Window,
-        _: &mut Context<Self>,
+        leading: Option<&Leading>,
+        danger: bool,
+        disabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         if !has_icon {
             return None;
         }
-
-        let icon = if let Some(icon) = icon {
-            icon.clone()
-        } else if checked {
-            Icon::new(IconName::Check)
+        // A disabled item's icon dims with its label, so the state shows on both.
+        let tint = if disabled {
+            cx.theme().muted_foreground.opacity(0.5)
+        } else if danger {
+            cx.theme().danger
         } else {
-            Icon::empty()
+            cx.theme().muted_foreground
         };
-
-        Some(icon.xsmall())
+        let slot = div()
+            .flex_none()
+            .size(MENU_ICON_SLOT)
+            .flex()
+            .items_center()
+            .justify_center();
+        // A checked item shows its check in the slot, over its icon: the state wins.
+        let slot = if checked {
+            slot.child(
+                Icon::new(IconName::Check)
+                    .with_size(MENU_ICON_SIZE)
+                    .text_color(cx.theme().foreground),
+            )
+        } else if let Some(leading) = leading {
+            slot.child(leading(window, cx))
+        } else if let Some(icon) = icon {
+            slot.child(icon.with_size(MENU_ICON_SIZE).text_color(tint))
+        } else {
+            slot
+        };
+        Some(slot)
     }
 
     /// Sawit patch: the widest the menu may be. Its content sets its width up to its `max_w`
@@ -1243,7 +1371,8 @@ impl PopupMenu {
 
         let (item_height, radius) = match self.size {
             Size::Small => (px(20.), options.radius.half()),
-            _ => (px(26.), options.radius),
+            // Sawit patch: the app's one menu row height.
+            _ => (MENU_ROW_HEIGHT, options.radius),
         };
 
         let this = MenuItemElement::new(ix)
@@ -1281,26 +1410,38 @@ impl PopupMenu {
             .when_some(item.a11y_label(), |this, label| this.aria_label(label));
 
         match item {
+            // Sawit patch: a 1 px line across the menu, 4 px above and below it.
             PopupMenuItem::Separator => this
-                .h_auto()
+                .h(px(1.))
                 .p_0()
-                .my_0p5()
+                .my_1()
                 .mx_neg_1()
-                .border_b(px(2.))
-                .border_color(cx.theme().border)
+                .bg(cx.theme().border)
                 .disabled(true),
-            PopupMenuItem::Label(label) => this.disabled(true).cursor_default().child(
-                h_flex()
-                    .cursor_default()
-                    .items_center()
-                    .gap_x_1()
-                    .children(Self::render_icon(has_left_icon, false, None, window, cx))
-                    .child(render_label(ix, label, options.label_room, window)),
-            ),
+            // Sawit patch: a section header, small, semibold and muted, with room above it (but
+            // at the top), so it never reads as a disabled item. Its text lines up with the
+            // items' labels.
+            PopupMenuItem::Label(label) => this
+                .disabled(true)
+                .cursor_default()
+                .h(if ix == 0 { px(20.) } else { px(24.) })
+                .items_end()
+                .pb_1()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(cx.theme().muted_foreground)
+                .child(
+                    h_flex()
+                        .debug_selector(move || format!("popup-menu-header-{ix}"))
+                        .min_w_0()
+                        .child(render_label(ix, label, options.label_room, window)),
+                ),
             PopupMenuItem::ElementItem {
                 render,
                 icon,
                 disabled,
+                danger,
+                leading,
                 ..
             } => this
                 .when(!disabled, |this| {
@@ -1317,15 +1458,26 @@ impl PopupMenu {
                         .min_w_0()
                         .min_h(item_height)
                         .items_center()
-                        .gap_x_1()
+                        .gap_x_2()
                         .children(Self::render_icon(
                             has_left_icon,
                             is_left_check,
                             icon.clone(),
+                            leading.as_ref(),
+                            *danger && !*disabled,
+                            *disabled,
                             window,
                             cx,
                         ))
-                        .child(div().flex_1().min_w_0().child((render)(window, cx)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .when(*danger && !*disabled, |this| {
+                                    this.text_color(cx.theme().danger)
+                                })
+                                .child((render)(window, cx)),
+                        )
                         .children(right_check_icon.map(|icon| icon.ml_3())),
                 ),
             PopupMenuItem::Item {
@@ -1334,11 +1486,16 @@ impl PopupMenu {
                 action,
                 disabled,
                 is_link,
+                danger,
+                leading,
+                tooltip,
                 ..
             } => {
+                let tip = tooltip.clone();
                 let show_link_icon = *is_link && self.external_link_icon;
                 let action = action.as_ref().map(|action| action.boxed_clone());
                 let key = self.render_key_binding(action, window, cx);
+                let danger = *danger && !*disabled;
 
                 this.when(!disabled, |this| {
                     this.on_click(cx.listener(move |this, event, window, cx| {
@@ -1347,11 +1504,14 @@ impl PopupMenu {
                 })
                 .disabled(*disabled)
                 .h(item_height)
-                .gap_x_1()
+                .gap_x_2()
                 .children(Self::render_icon(
                     has_left_icon,
                     is_left_check,
                     icon.clone(),
+                    leading.as_ref(),
+                    danger,
+                    *disabled,
                     window,
                     cx,
                 ))
@@ -1359,11 +1519,13 @@ impl PopupMenu {
                     h_flex()
                         .w_full()
                         .min_w_0()
-                        .gap_3()
+                        .gap_6()
+                        // Sawit patch: on hover too, a destructive item's label keeps its colour.
+                        .when(danger, |this| this.text_color(cx.theme().danger))
                         .items_center()
                         .justify_between()
                         .when(!show_link_icon, |this| {
-                            this.child(render_label(ix, label, options.label_room, window))
+                            this.child(render_label_with(ix, label, options.label_room, tip.clone(), window))
                         })
                         .children(right_check_icon)
                         .when(show_link_icon, |this| {
@@ -1373,7 +1535,7 @@ impl PopupMenu {
                                     .min_w_0()
                                     .justify_between()
                                     .gap_1p5()
-                                    .child(render_label(ix, label, options.label_room, window))
+                                    .child(render_label_with(ix, label, options.label_room, tip.clone(), window))
                                     .child(
                                         Icon::new(IconName::ExternalLink)
                                             .xsmall()
@@ -1398,11 +1560,14 @@ impl PopupMenu {
                         .min_h(item_height)
                         .size_full()
                         .items_center()
-                        .gap_x_1()
+                        .gap_x_2()
                         .children(Self::render_icon(
                             has_left_icon,
                             false,
                             icon.clone(),
+                            None,
+                            false,
+                            *disabled,
                             window,
                             cx,
                         ))
@@ -1454,7 +1619,11 @@ const WINDOW_MARGIN: Pixels = px(8.);
 /// Sawit patch: how wide an item's label can be in a menu `max_width` wide before it is cut: the
 /// menu's padding, the item's, the left icon's slot and room for a trailing shortcut taken off.
 fn label_room(max_width: Pixels, has_left_icon: bool) -> Pixels {
-    let icon = if has_left_icon { px(20.) } else { px(0.) };
+    let icon = if has_left_icon {
+        MENU_ICON_SLOT + px(8.)
+    } else {
+        px(0.)
+    };
     (max_width - px(8.) - px(16.) - icon - px(56.)).max(px(0.))
 }
 
@@ -1467,8 +1636,19 @@ fn render_label(
     room: Pixels,
     window: &mut Window,
 ) -> impl IntoElement + use<> {
-    let cut = label_width(label, window) > room;
-    let full = label.clone();
+    render_label_with(ix, label, room, None, window)
+}
+
+/// Sawit patch: [`render_label`], its tooltip `tip` when given (shown whether or not it is cut).
+fn render_label_with(
+    ix: usize,
+    label: &SharedString,
+    room: Pixels,
+    tip: Option<SharedString>,
+    window: &mut Window,
+) -> impl IntoElement + use<> {
+    let cut = tip.is_some() || label_width(label, window) > room;
+    let full = tip.unwrap_or_else(|| label.clone());
     div()
         .id(("popup-menu-label", ix))
         .debug_selector(move || format!("popup-menu-label-{ix}"))
@@ -1579,8 +1759,8 @@ impl Render for PopupMenu {
             .child(
                 v_flex()
                     .id("items")
+                    // Sawit patch: 4 px padding; rows sit flush, separators carry the space.
                     .p_1()
-                    .gap_y_0p5()
                     .min_w(rems(8.))
                     .when_some(self.min_width, |this, min_width| this.min_w(min_width))
                     .max_w(max_width)

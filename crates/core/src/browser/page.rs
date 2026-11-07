@@ -48,7 +48,6 @@ pub const DESIGN_JS: &str = concat!(
     "{\n",
     include_str!("page/design/limits.js"),
     include_str!("page/design/helpers.js"),
-    include_str!("page/design/color_math.js"),
     include_str!("page/design/colors.js"),
     include_str!("page/design/boxes.js"),
     include_str!("page/design/fonts.js"),

@@ -9,6 +9,7 @@ use gpui_kit::*;
 /// `muted`; no keys, nothing there. A long label is cut short with an ellipsis.
 pub fn keyed(label: impl Into<SharedString>, keys: SharedString, muted: Hsla) -> PopupMenuItem {
     let label = label.into();
+    // no icon: the caller gives the item its icon (`.icon(…)`).
     PopupMenuItem::element(move |_, _| {
         h_flex()
             .w_full()

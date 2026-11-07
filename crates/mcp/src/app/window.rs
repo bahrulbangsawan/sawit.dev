@@ -64,7 +64,7 @@ pub struct MaximizeArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PageArgs {
     #[schemars(
-        description = "canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap or new_project"
+        description = "canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap, new_project, permissions or accounts"
     )]
     pub page: String,
     pub project: Option<String>,
