@@ -30,9 +30,11 @@ impl Workspace {
             let weak = weak.clone();
             let close = close.clone();
             menu.item(
-                PopupMenuItem::new("Close Tabs in Group").on_click(move |_, _, cx| {
-                    let _ = weak.update(cx, |ws, cx| ws.close_group(&close, cx));
-                }),
+                PopupMenuItem::new("Close Tabs in Group")
+                    .icon(crate::menu_icons::CLOSE_ALL)
+                    .on_click(move |_, _, cx| {
+                        let _ = weak.update(cx, |ws, cx| ws.close_group(&close, cx));
+                    }),
             )
         })
         .into_any_element()
@@ -287,8 +289,9 @@ impl Workspace {
             &TogglePinTab,
         ]
         .map(keys);
-        let item =
-            |label: &'static str, keys: SharedString| crate::menus::keyed(label, keys, muted);
+        let item = |label: &'static str, keys: SharedString, glyph: Lucide| {
+            crate::menus::keyed(label, keys, muted).icon(glyph)
+        };
         let close = |op: CloseOp| {
             let this = this.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -298,31 +301,55 @@ impl Workspace {
         let this_pin = this.clone();
         let this_ro = this.clone();
         let menu = Self::group_menu(this.clone(), ix, group, projects, menu, window, cx);
-        menu.item(item("Close", close_keys).on_click(close(CloseOp::This)))
-            .item(item("Close Others", others_keys).on_click(close(CloseOp::Others)))
+        use crate::menu_icons as icon;
+        menu.item(item("Close", close_keys, icon::CLOSE).on_click(close(CloseOp::This)))
+            .item(
+                item("Close Others", others_keys, icon::CLOSE_OTHERS)
+                    .on_click(close(CloseOp::Others)),
+            )
             .separator()
-            .item(item("Close Left", left_keys).on_click(close(CloseOp::Left)))
-            .item(item("Close Right", right_keys).on_click(close(CloseOp::Right)))
+            .item(
+                item("Close Left", left_keys, Lucide::ArrowLeftToLine)
+                    .on_click(close(CloseOp::Left)),
+            )
+            .item(
+                item("Close Right", right_keys, Lucide::ArrowRightToLine)
+                    .on_click(close(CloseOp::Right)),
+            )
             .separator()
-            .item(item("Close Clean", clean_keys).on_click(close(CloseOp::Clean)))
-            .item(item("Safe Close All", all_keys).on_click({
-                let this = this.clone();
-                move |_, window, cx| {
-                    let _ = this.update(cx, |ws, cx| ws.safe_close_all(window, cx));
-                }
-            }))
-            .item(item("Force Close All", force_keys).on_click({
-                let this = this.clone();
-                move |_, window, cx| {
-                    let _ = this.update(cx, |ws, cx| ws.force_close_all(window, cx));
-                }
-            }))
+            .item(
+                item("Close Clean", clean_keys, Lucide::CircleCheck)
+                    .on_click(close(CloseOp::Clean)),
+            )
+            .item(
+                item("Safe Close All", all_keys, Lucide::CircleCheck).on_click({
+                    let this = this.clone();
+                    move |_, window, cx| {
+                        let _ = this.update(cx, |ws, cx| ws.safe_close_all(window, cx));
+                    }
+                }),
+            )
+            .item(
+                item("Force Close All", force_keys, icon::CLOSE_ALL)
+                    .danger(true)
+                    .on_click({
+                        let this = this.clone();
+                        move |_, window, cx| {
+                            let _ = this.update(cx, |ws, cx| ws.force_close_all(window, cx));
+                        }
+                    }),
+            )
             .when(is_file, |menu| {
                 menu.separator().item(
                     PopupMenuItem::new(if read_only {
                         "Make Tab Editable"
                     } else {
                         "Make Tab Read-Only"
+                    })
+                    .icon(if read_only {
+                        Lucide::LockOpen
+                    } else {
+                        Lucide::Lock
                     })
                     .on_click(move |_, _, cx| {
                         let _ = this_ro.update(cx, |ws, cx| ws.toggle_read_only(ix, cx));
@@ -331,11 +358,18 @@ impl Workspace {
             })
             .separator()
             .item(
-                item(if pinned { "Unpin Tab" } else { "Pin Tab" }, pin_keys).on_click(
-                    move |_, _, cx| {
-                        let _ = this_pin.update(cx, |ws, cx| ws.toggle_pin(ix, cx));
+                item(
+                    if pinned { "Unpin Tab" } else { "Pin Tab" },
+                    pin_keys,
+                    if pinned {
+                        crate::menu_icons::UNPIN
+                    } else {
+                        crate::menu_icons::PIN
                     },
-                ),
+                )
+                .on_click(move |_, _, cx| {
+                    let _ = this_pin.update(cx, |ws, cx| ws.toggle_pin(ix, cx));
+                }),
             )
     }
 
@@ -352,23 +386,32 @@ impl Workspace {
         let own = file == sawit_core::nyawit::board_file(&root);
         let (new, rename, delete) = (this.clone(), this.clone(), this);
         let (rename_file, delete_file) = (file.clone(), file);
-        menu.item(PopupMenuItem::new("New Canvas").on_click(move |_, _, cx| {
-            let _ = new.update(cx, |ws, cx| ws.new_canvas(root.clone(), cx));
-        }))
+        menu.item(
+            PopupMenuItem::new("New Canvas")
+                .icon(crate::menu_icons::NEW)
+                .on_click(move |_, _, cx| {
+                    let _ = new.update(cx, |ws, cx| ws.new_canvas(root.clone(), cx));
+                }),
+        )
         .when(!own, |menu| {
             menu.item(
-                PopupMenuItem::new("Rename Canvas…").on_click(move |_, window, cx| {
-                    let _ = rename.update(cx, |ws, cx| {
-                        ws.begin_canvas_rename(rename_file.clone(), window, cx)
-                    });
-                }),
+                PopupMenuItem::new("Rename Canvas…")
+                    .icon(crate::menu_icons::RENAME)
+                    .on_click(move |_, window, cx| {
+                        let _ = rename.update(cx, |ws, cx| {
+                            ws.begin_canvas_rename(rename_file.clone(), window, cx)
+                        });
+                    }),
             )
             .item(
-                PopupMenuItem::new("Delete Canvas…").on_click(move |_, window, cx| {
-                    let _ = delete.update(cx, |ws, cx| {
-                        ws.delete_canvas(delete_file.clone(), window, cx)
-                    });
-                }),
+                PopupMenuItem::new("Delete Canvas…")
+                    .icon(crate::menu_icons::DELETE)
+                    .danger(true)
+                    .on_click(move |_, window, cx| {
+                        let _ = delete.update(cx, |ws, cx| {
+                            ws.delete_canvas(delete_file.clone(), window, cx)
+                        });
+                    }),
             )
         })
         .separator()
@@ -393,25 +436,36 @@ impl Workspace {
         }
         let this_move = this.clone();
         menu.when(!others.is_empty(), |menu| {
-            menu.submenu("Move to Project", window, cx, move |mut menu, _, _| {
-                for root in &others {
-                    let this = this_move.clone();
-                    let to = root.clone();
-                    menu = menu.item(PopupMenuItem::new(project_name(root)).on_click(
-                        move |_, _, cx| {
-                            let _ = this
-                                .update(cx, |ws, cx| ws.move_to_group(ix, Some(to.clone()), cx));
-                        },
-                    ));
-                }
-                menu
-            })
+            menu.submenu_with_icon(
+                Some(Icon::new(crate::menu_icons::MOVE)),
+                "Move to Project",
+                window,
+                cx,
+                move |mut menu, _, _| {
+                    for root in &others {
+                        let this = this_move.clone();
+                        let to = root.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(project_name(root))
+                                .icon(crate::menu_icons::OPEN)
+                                .on_click(move |_, _, cx| {
+                                    let _ = this.update(cx, |ws, cx| {
+                                        ws.move_to_group(ix, Some(to.clone()), cx)
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                },
+            )
         })
         .when(group.is_some(), |menu| {
             menu.item(
-                PopupMenuItem::new("Remove from Group").on_click(move |_, _, cx| {
-                    let _ = this.update(cx, |ws, cx| ws.move_to_group(ix, None, cx));
-                }),
+                PopupMenuItem::new("Remove from Group")
+                    .icon(Lucide::SquareMinus)
+                    .on_click(move |_, _, cx| {
+                        let _ = this.update(cx, |ws, cx| ws.move_to_group(ix, None, cx));
+                    }),
             )
         })
         .separator()

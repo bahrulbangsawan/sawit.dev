@@ -63,3 +63,16 @@ sawitTest("menus look: the route bar and the canvas's main menu", { timeout: 180
   await win.openMenu({ role: "button", name: "Main menu" });
   await shotOpenMenu(ctx, dir, "menu-canvas-main.png");
 });
+
+sawitTest("menus look: the file tree and the terminal's menus", { timeout: 120_000 }, async (ctx) => {
+  const { win, world } = ctx;
+  const dir = await shotsDir(ctx);
+  await writeFile(path.join(world.project, "notes.md"), "# Notes\n");
+  await win.rightClick({ role: "treeitem", name: "notes.md", within: "Files" });
+  const fileItems = await shotOpenMenu(ctx, dir, "menu-file-tree.png");
+  for (const name of ["New File", "Reveal in Finder", "Move to Trash", "Delete"]) {
+    assert.ok(fileItems.includes(name), `${name} in ${fileItems}`);
+  }
+  await win.rightClick({ role: "radiobutton", within: "Terminals", value: true });
+  await shotOpenMenu(ctx, dir, "menu-terminal-tab.png");
+});

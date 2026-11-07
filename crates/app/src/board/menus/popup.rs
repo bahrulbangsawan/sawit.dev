@@ -2,12 +2,12 @@
 //! items run their command ([`BoardView::run_menu`]) and whose submenus open beside their item.
 
 use gpui_kit::base::POPUP_PRIORITY;
-use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{MENU_ICON_SLOT, PopupMenu, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::*;
 use sawit_board::menu::{self, MenuNode};
 
-use super::{ContextPopup, SCROLLS_PAST, guarded};
+use super::{ContextPopup, SCROLLS_PAST, guarded, icons};
 use crate::board::BoardView;
 
 impl BoardView {
@@ -136,7 +136,9 @@ fn add_items(
             }
             MenuNode::Submenu { label, children } => {
                 let submenu = to_popup(children, view.clone(), window, cx);
-                menu.item(PopupMenuItem::submenu(label.clone(), submenu))
+                menu.item(
+                    PopupMenuItem::submenu(label.clone(), submenu).icon(icons::submenu(label)),
+                )
             }
             MenuNode::Separator => menu.separator(),
         };
@@ -156,6 +158,7 @@ fn menu_item(
         Some(keys) => {
             let label = SharedString::from(label.to_owned());
             let keys = SharedString::from(keys.to_owned());
+            // no icon: the item's icon is given below, from its command.
             PopupMenuItem::element(move |_, cx| {
                 h_flex()
                     .debug_selector(move || format!("board-menu-{id}"))
@@ -174,7 +177,17 @@ fn menu_item(
                     )
             })
         }
+        // no icon: given below, from its command.
         None => PopupMenuItem::new(label.to_owned()),
+    };
+    // Each command's icon, as the toolbar and the app's menus picture it; an agent's logo on
+    // Send to Agent's items.
+    let item = match icons::agent(id) {
+        Some(kind) => item.leading(move |window, cx| {
+            let tint = cx.theme().popover_foreground;
+            crate::terminal::agent_logo(kind, MENU_ICON_SLOT, tint, window, cx)
+        }),
+        None => item.icon(icons::command(id)),
     };
     item.on_click(move |_, window, cx| {
         let _ = view.update(cx, |view, cx| view.run_menu(id, window, cx));

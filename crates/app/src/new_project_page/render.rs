@@ -69,7 +69,7 @@ impl NewProjectPage {
                             .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
                                 for preset in PRESETS {
                                     let page = page.clone();
-                                    menu = menu.item(PopupMenuItem::new(preset.name).on_click(
+                                    menu = menu.item(PopupMenuItem::new(preset.name).icon(Lucide::LayoutTemplate).on_click(
                                         move |_, _, cx| {
                                             let _ = page.update(cx, |this, cx| {
                                                 this.apply_preset(preset, cx)

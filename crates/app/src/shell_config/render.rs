@@ -6,7 +6,7 @@ use std::path::Path;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -183,18 +183,42 @@ impl ShellConfigPanel {
 }
 
 fn config_menu(menu: PopupMenu, focus: FocusHandle, writable: bool) -> PopupMenu {
+    use crate::menu_icons as icon;
+    let item = |label: &'static str, glyph: Lucide, action: Box<dyn Action>| {
+        PopupMenuItem::new(label).icon(glyph).action(action)
+    };
     menu.action_context(focus)
-        .menu("Open", Box::new(OpenConfig))
+        .item(item("Open", icon::OPEN_FILE, Box::new(OpenConfig)))
         .separator()
-        .menu("Reveal in Finder", Box::new(RevealInFinder))
-        .menu("Open in Default App", Box::new(OpenInDefaultApp))
-        .menu("Open in Terminal", Box::new(OpenInTerminal))
+        .item(item(
+            "Reveal in Finder",
+            icon::REVEAL,
+            Box::new(RevealInFinder),
+        ))
+        .item(item(
+            "Open in Default App",
+            icon::OPEN_EXTERNAL,
+            Box::new(OpenInDefaultApp),
+        ))
+        .item(item(
+            "Open in Terminal",
+            icon::OPEN_TERMINAL,
+            Box::new(OpenInTerminal),
+        ))
         .separator()
-        .menu_with_disabled("Duplicate", Box::new(Duplicate), !writable)
-        .menu("Copy Path", Box::new(CopyPath))
+        .item(item("Duplicate", icon::DUPLICATE, Box::new(Duplicate)).disabled(!writable))
+        .item(item("Copy Path", icon::LINK, Box::new(CopyPath)))
         .separator()
-        .menu_with_disabled("Trash", Box::new(Trash), !writable)
-        .menu_with_disabled("Delete", Box::new(Delete), !writable)
+        .item(
+            item("Move to Trash", icon::DELETE, Box::new(Trash))
+                .danger(true)
+                .disabled(!writable),
+        )
+        .item(
+            item("Delete", Lucide::Delete, Box::new(Delete))
+                .danger(true)
+                .disabled(!writable),
+        )
 }
 
 impl Render for ShellConfigPanel {

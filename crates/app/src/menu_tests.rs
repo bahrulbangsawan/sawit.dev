@@ -178,30 +178,7 @@ const ICONLESS_BUILDERS: &[&str] = &[
 ];
 
 /// Files whose menus haven't been given their icons yet (B16 goes through them area by area).
-const PENDING: &[&str] = &[
-    "accounts/chip.rs",
-    "accounts/list.rs",
-    "accounts/page.rs",
-    "accounts/statusline_tab.rs",
-    "accounts/usage_tab.rs",
-    "board/menus/popup.rs",
-    "board/presence/edges.rs",
-    "board/presence/roster.rs",
-    "board/screens/bar.rs",
-    "browser/device.rs",
-    "db/panel/add.rs",
-    "files/render.rs",
-    "git/account/controls.rs",
-    "git/panel/branches.rs",
-    "menus.rs",
-    "new_project_page/render.rs",
-    "permissions_page/sections.rs",
-    "shell_config/render.rs",
-    "ssh/panel/host.rs",
-    "terminal/panel/tab_menu.rs",
-    "terminal/tab/menu.rs",
-    "workspace/tab_bar.rs",
-];
+const PENDING: &[&str] = &["board/screens/bar.rs"];
 
 /// `text` from byte `at` (an opening parenthesis) to just past its matching close.
 fn balanced(text: &str, at: usize) -> usize {

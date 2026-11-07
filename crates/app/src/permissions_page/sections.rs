@@ -179,8 +179,9 @@ impl PermissionsPage {
                 for to in Bucket::ALL.into_iter().filter(|b| *b != bucket) {
                     let (page, path, rule) = (page.clone(), path.clone(), rule.clone());
                     menu = menu.item(
-                        PopupMenuItem::new(format!("Move to {}…", to.title())).on_click(
-                            move |_, _, cx| {
+                        PopupMenuItem::new(format!("Move to {}…", to.title()))
+                            .icon(crate::menu_icons::MOVE)
+                            .on_click(move |_, _, cx| {
                                 let _ = page.update(cx, |this, cx| {
                                     this.propose(
                                         path.clone(),
@@ -191,14 +192,15 @@ impl PermissionsPage {
                                         cx,
                                     )
                                 });
-                            },
-                        ),
+                            }),
                     );
                 }
                 let (page, path, rule) = (page.clone(), path.clone(), rule.clone());
-                menu.separator()
-                    .item(
-                        PopupMenuItem::new("Remove Rule…").on_click(move |_, _, cx| {
+                menu.separator().item(
+                    PopupMenuItem::new("Remove Rule…")
+                        .icon(crate::menu_icons::DELETE)
+                        .danger(true)
+                        .on_click(move |_, _, cx| {
                             let _ = page.update(cx, |this, cx| {
                                 this.propose(
                                     path.clone(),
@@ -207,7 +209,7 @@ impl PermissionsPage {
                                 )
                             });
                         }),
-                    )
+                )
             })
             .into_any_element()
     }
