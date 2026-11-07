@@ -3,7 +3,7 @@ export const REPO = 'https://github.com/bahrulbangsawan/sawit.dev'
 export const DMG = `${REPO}/releases/latest/download/Sawit.dmg`
 export const INSTALL = 'curl -fsSL https://sawit.dev/install.sh | sh'
 // The release binary, as README's Size & memory measured it: change both together.
-export const SIZE = '80 MiB'
+export const SIZE = '89 MiB'
 // The site's address, for the absolute URLs link previews and canonical links need.
 export const SITE = 'https://sawit.dev'
 export const DESCRIPTION = 'One native app for local development: Postgres without Docker, an editor, terminals, a browser, a canvas and dev tools, ready for AI agents.'
