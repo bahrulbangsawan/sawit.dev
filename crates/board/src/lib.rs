@@ -13,6 +13,7 @@ pub mod frame_code;
 pub mod handoff;
 pub mod input;
 pub mod layers;
+pub mod mcp_paths;
 pub mod menu;
 pub mod mermaid;
 pub mod ops;
