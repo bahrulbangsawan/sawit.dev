@@ -68,7 +68,14 @@ async function answers(ctx, url, origin) {
   );
   await settle(1500);
   const out = {};
-  const ask = async (op) => browser(ctx, op).catch((e) => ({ error: e.message }));
+  // The control socket now and then closes with no reply under load (the previous build's too):
+  // that one is asked again.
+  const ask = async (op) => {
+    for (let i = 0; ; i++) {
+      const got = await browser(ctx, op).catch((e) => ({ error: e.message }));
+      if (i >= 2 || got?.error !== 'unexpected reply to browser: ""') return got;
+    }
+  };
   out.snapshot = await ask({ op: "snapshot" });
   for (const part of PARTS) out[`design.${part}`] = await ask({ op: "design", part });
   for (const selector of INSPECT) out[`inspect ${selector}`] = await ask({ op: "inspect", selector, format: "json" });

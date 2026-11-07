@@ -98,6 +98,7 @@
     return el.localName + (el.id ? "#" + el.id : "") + cls;
   };
   const style = (op) => {
+    useLimits(op);
     const el = resolve(op);
     if (!el) throw new Error("Give a ref (from browser_snapshot) or a CSS selector.");
     resetFonts();
