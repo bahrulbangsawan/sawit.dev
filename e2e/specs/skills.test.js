@@ -33,23 +33,31 @@ sawitTest("skills: the page lists Sawit Skills and fourteen packs, and an instal
   // Interface Skills installs through the skills CLI, which runs with a package manager.
   await win.click({ role: "button", name: "Install Interface Skills…" });
   const sheet = await win.waitFor({ role: "dialog", name: "Interface Skills" });
-  const menu = await win.waitFor({ role: "button", name: /^Run with \w+$/, within: sheet.name });
-  await win.openMenu({ role: "button", name: menu.name, within: sheet.name });
-  await win.waitFor({ role: "menuitem", name: MANAGERS });
-  const items = (await win.findAll({ role: "menuitem" })).filter((i) => i.name);
-  for (const item of items) assert.match(item.name, MANAGERS, "only npm, pnpm, bun or yarn");
-  assert.ok(items.length >= 1 && items.length <= 4, items.map((i) => i.name).join(", "));
-
-  // Picking another manager, when this Mac has another, renames the button after it.
-  const current = menu.name.replace("Run with ", "");
-  const other = items.find((i) => i.name.split(" ")[0] !== current);
-  if (other) {
-    await win.click({ role: "menuitem", name: other.name });
-    await win.waitFor({ role: "button", name: `Run with ${other.name.split(" ")[0]}`, within: sheet.name });
+  // The run's PATH is the system's alone: with no npm, pnpm, bun or yarn on it, the sheet has no
+  // package manager to pick and says what to install instead.
+  const menu = await win
+    .waitFor({ role: "button", name: /^Run with \w+$/, within: sheet.name }, { timeoutMs: 5_000 })
+    .catch(() => null);
+  if (!menu) {
+    await win.waitFor({ role: "status", name: /none is installed: install Node\.js, Bun or pnpm/ });
   } else {
-    await win.press("escape");
+    await win.openMenu({ role: "button", name: menu.name, within: sheet.name });
+    await win.waitFor({ role: "menuitem", name: MANAGERS });
+    const items = (await win.findAll({ role: "menuitem" })).filter((i) => i.name);
+    for (const item of items) assert.match(item.name, MANAGERS, "only npm, pnpm, bun or yarn");
+    assert.ok(items.length >= 1 && items.length <= 4, items.map((i) => i.name).join(", "));
+
+    // Picking another manager, when this Mac has another, renames the button after it.
+    const current = menu.name.replace("Run with ", "");
+    const other = items.find((i) => i.name.split(" ")[0] !== current);
+    if (other) {
+      await win.click({ role: "menuitem", name: other.name });
+      await win.waitFor({ role: "button", name: `Run with ${other.name.split(" ")[0]}`, within: sheet.name });
+    } else {
+      await win.press("escape");
+    }
+    await win.waitForGone({ role: "menuitem", name: MANAGERS });
   }
-  await win.waitForGone({ role: "menuitem", name: MANAGERS });
   await win.click({ role: "button", name: "Close", within: sheet.name });
   await win.waitForGone({ role: "dialog", name: sheet.name });
 });

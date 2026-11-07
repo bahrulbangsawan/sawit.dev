@@ -278,6 +278,10 @@ impl SkillsPage {
                     .when_some(blocked.clone(), |el, why| {
                         el.child(
                             h_flex()
+                                // Read out as one note: why the install can't run here.
+                                .id("skills-blocked")
+                                .role(Role::Status)
+                                .aria_label(SharedString::from(why.clone()))
                                 .gap_1p5()
                                 .items_start()
                                 .text_xs()
