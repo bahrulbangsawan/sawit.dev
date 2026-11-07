@@ -41,6 +41,7 @@ mod design_panel;
 mod events;
 mod facilitation;
 mod find;
+mod float_bar;
 mod frames;
 mod keymap;
 mod keys;

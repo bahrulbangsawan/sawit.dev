@@ -122,7 +122,7 @@ impl BoardView {
             .then(|| screens::render_screen_bar(self, cx))
             .flatten();
         let route_bar = (chrome && screen_bar.is_none())
-            .then(|| routes::render_route_bar(self, cx))
+            .then(|| routes::render_route_bar(self, window, cx))
             .flatten();
         // An artboard selected alone has Export HTML and Export React.
         let frame_bar = (chrome && screen_bar.is_none() && route_bar.is_none())
@@ -140,7 +140,7 @@ impl BoardView {
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);
         let facilitation = chrome
-            .then(|| facilitation::render_facilitation(self, cx))
+            .then(|| facilitation::render_facilitation(self, window, cx))
             .flatten();
         let agents = self.render_agents(cx);
         // Last, so the canvas's own chrome is under it: only what is drawn over the whole canvas

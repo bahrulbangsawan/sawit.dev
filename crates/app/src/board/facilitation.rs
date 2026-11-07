@@ -7,12 +7,13 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use figcraft_doc::BoardTimer;
-use gpui_kit::component::button::*;
-use gpui_kit::component::*;
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::*;
 use serde_json::{Value, json};
 
 use super::BoardView;
+use super::float_bar::{BarButton, FloatBar};
+use crate::menu_icons;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -85,9 +86,11 @@ impl BoardView {
     }
 }
 
-/// The pill, on a board.
+/// The pill, on a board: the canvas's one floating bar ([`FloatBar`]), at its top right, its
+/// buttons collapsing to icons when the canvas is narrow.
 pub(super) fn render_facilitation(
     view: &mut BoardView,
+    window: &mut Window,
     cx: &mut Context<BoardView>,
 ) -> Option<AnyElement> {
     let board = view.board()?;
@@ -98,106 +101,106 @@ pub(super) fn render_facilitation(
     let timer = ds.doc.timer;
     let voting = ds.doc.vote.as_ref().map(|v| !v.ended);
     let has_selection = !ds.selection.is_empty();
-    let theme = cx.theme().clone();
+    // Half the canvas at most: the pill shares the top edge with the bars over frames.
+    let room = (ds.view.vw / 2.0) as f32;
     let now = now_ms();
-    let button = |id: &'static str, label: String| Button::new(id).ghost().xsmall().label(label);
-    let mut pill = h_flex()
-        .id("board-facilitation")
-        .debug_selector(|| "board-facilitation".into())
-        .occlude()
-        .absolute()
-        .top(px(8.))
-        .right(px(8.))
-        .gap_1()
-        .px_2()
-        .py_1()
-        .items_center()
-        .rounded(px(10.))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.popover)
-        .text_color(theme.popover_foreground)
-        .shadow_md()
-        .text_xs();
+    let this = cx.entity().downgrade();
+    let act = |command: &'static str, params: Value| {
+        let this = this.clone();
+        move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            let _ = this.update(cx, |view, cx| view.facilitate(command, params.clone(), cx));
+        }
+    };
+    let mut pill = FloatBar::new("board-facilitation");
     match timer {
         None => {
-            pill = pill.child(
-                button("timer-start", "Timer 5:00".into()).on_click(cx.listener(
-                    |view, _, _, cx| {
-                        view.facilitate("board.timer", json!({"action": "start", "minutes": 5}), cx)
-                    },
-                )),
+            pill = pill.button(
+                BarButton::new("timer-start", Lucide::Timer, "Timer 5:00")
+                    .tooltip("Start a 5-minute timer for everyone on the board")
+                    .on_click(act("board.timer", json!({"action": "start", "minutes": 5}))),
             );
         }
         Some(t) => {
             let left = t.left(now);
             let running = matches!(t, BoardTimer::Running { .. });
+            let (icon, label, action) = match running {
+                true => (Lucide::Pause, "Pause", "pause"),
+                false => (Lucide::Play, "Resume", "resume"),
+            };
             pill = pill
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(if left == 0 {
-                            theme.danger
-                        } else {
-                            theme.popover_foreground
-                        })
-                        .child(clock(left)),
+                .text("timer-left", clock(left), left == 0)
+                .button(
+                    BarButton::new("timer-pause", icon, label)
+                        .on_click(act("board.timer", json!({"action": action}))),
                 )
-                .child(
-                    button(
-                        "timer-pause",
-                        if running { "Pause" } else { "Resume" }.into(),
-                    )
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        let action = if running { "pause" } else { "resume" };
-                        view.facilitate("board.timer", json!({"action": action}), cx)
-                    })),
+                .button(
+                    BarButton::new("timer-add", Lucide::Plus, "1 Min")
+                        .tooltip("Add a minute")
+                        .on_click(act("board.timer", json!({"action": "add", "minutes": 1}))),
                 )
-                .child(
-                    button("timer-add", "+1".into()).on_click(cx.listener(|view, _, _, cx| {
-                        view.facilitate("board.timer", json!({"action": "add", "minutes": 1}), cx)
-                    })),
-                )
-                .child(button("timer-stop", "Stop".into()).on_click(cx.listener(
-                    |view, _, _, cx| view.facilitate("board.timer", json!({"action": "stop"}), cx),
-                )));
+                .button(
+                    BarButton::new("timer-stop", menu_icons::STOP, "Stop")
+                        .on_click(act("board.timer", json!({"action": "stop"}))),
+                );
             if running {
                 view.tick_timer(cx);
             }
         }
     }
-    pill = pill.child(div().w(px(1.)).h(px(16.)).bg(theme.border));
+    pill = pill.divider();
     pill = match voting {
-        Some(true) => pill
-            .child(
-                button("vote-cast", "Vote on selection".into())
-                    .disabled(!has_selection)
-                    .on_click(cx.listener(|view, _, _, cx| {
+        Some(true) => {
+            let cast = {
+                let this = this.clone();
+                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    let _ = this.update(cx, |view, cx| {
                         let ids = view
                             .board()
                             .map(|b| b.session.selection().to_vec())
                             .unwrap_or_default();
                         view.facilitate("board.vote", json!({"action": "cast", "ids": ids}), cx)
-                    })),
+                    });
+                }
+            };
+            let end = {
+                let this = this.clone();
+                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    let _ = this.update(cx, |view, cx| {
+                        view.facilitate("board.vote", json!({"action": "end"}), cx);
+                        view.show_vote_results(cx);
+                    });
+                }
+            };
+            pill.button(
+                BarButton::new("vote-cast", Lucide::Vote, "Vote on Selection")
+                    .disabled(!has_selection)
+                    .on_click(cast),
             )
-            .child(button("vote-end", "End vote".into()).on_click(cx.listener(
-                |view, _, _, cx| {
-                    view.facilitate("board.vote", json!({"action": "end"}), cx);
-                    view.show_vote_results(cx);
-                },
-            ))),
-        _ => pill
-            .child(
-                button("vote-start", "Start vote".into()).on_click(cx.listener(
-                    |view, _, _, cx| {
-                        view.facilitate("board.vote", json!({"action": "start", "votes": 3}), cx)
-                    },
-                )),
+            .button(BarButton::new("vote-end", Lucide::SquareCheck, "End Vote").on_click(end))
+        }
+        _ => {
+            let results = {
+                let this = this.clone();
+                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    let _ = this.update(cx, |view, cx| view.show_vote_results(cx));
+                }
+            };
+            pill.button(
+                BarButton::new("vote-start", Lucide::Vote, "Start Vote")
+                    .tooltip("Start a vote, 3 votes each")
+                    .on_click(act("board.vote", json!({"action": "start", "votes": 3}))),
             )
-            .child(
-                button("vote-results", "Results".into())
-                    .on_click(cx.listener(|view, _, _, cx| view.show_vote_results(cx))),
-            ),
+            .button(
+                BarButton::new("vote-results", Lucide::ChartColumn, "Results").on_click(results),
+            )
+        }
     };
-    Some(pill.into_any_element())
+    Some(
+        div()
+            .absolute()
+            .top(px(8.))
+            .right(px(8.))
+            .child(pill.render_in_place(room, window, cx))
+            .into_any_element(),
+    )
 }
