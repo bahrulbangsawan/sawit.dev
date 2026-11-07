@@ -19,6 +19,52 @@ fn resize_args_need_a_device_or_size() {
 }
 
 #[test]
+fn screenshot_options_ask_for_a_sized_capture() {
+    let plain: ScreenshotArgs = serde_json::from_value(json!({"selector": "#a"})).unwrap();
+    assert!(!plain.sized(), "the plain screenshot stays as it was");
+    for args in [
+        json!({"full_page": true}),
+        json!({"device": "iPhone 15"}),
+        json!({"devices": ["iPhone 15", "Desktop"]}),
+        json!({"width": 500, "height": 400}),
+        json!({"scale": 3}),
+        json!({"format": "pdf"}),
+        json!({"clip": [0, 0, 10, 10]}),
+    ] {
+        let a: ScreenshotArgs = serde_json::from_value(args.clone()).unwrap();
+        assert!(a.sized(), "{args}");
+    }
+}
+
+#[test]
+fn record_args_become_the_record_op() {
+    let a: RecordArgs = serde_json::from_value(json!({
+        "mode": "element", "selector": "#hero", "resolution": "720p", "fps": 60, "format": "mov", "max_seconds": 12
+    }))
+    .unwrap();
+    match record_op(a).unwrap() {
+        BrowserOp::RecordStart {
+            target,
+            mode,
+            resolution,
+            fps,
+            format,
+            max_seconds,
+            ..
+        } => {
+            assert_eq!(target.selector.as_deref(), Some("#hero"));
+            assert_eq!(mode.as_deref(), Some("element"));
+            assert_eq!(resolution.as_deref(), Some("720p"));
+            assert_eq!((fps, max_seconds), (Some(60), Some(12)));
+            assert_eq!(format.as_deref(), Some("mov"));
+        }
+        other => panic!("{other:?}"),
+    }
+    let relative: RecordArgs = serde_json::from_value(json!({"output_path": "clip.mp4"})).unwrap();
+    assert!(record_op(relative).is_err(), "output_path must be absolute");
+}
+
+#[test]
 fn navigation_ops() {
     assert_eq!(navigate_op(None, Some("back")), Ok(Some(BrowserOp::Back)));
     assert_eq!(
@@ -90,6 +136,7 @@ async fn a_screenshot_path_is_read_as_every_tool_reads_one() {
             output_path: Some(output),
             mesurer: None,
             at: Default::default(),
+            ..Default::default()
         })
     };
     let said = |result: &CallToolResult| {
@@ -283,6 +330,7 @@ async fn a_screenshot_never_replaces_a_canvas_file() {
             output_path: Some(output.display().to_string()),
             mesurer: None,
             at: Default::default(),
+            ..Default::default()
         })
     };
     let said = |result: &CallToolResult| {

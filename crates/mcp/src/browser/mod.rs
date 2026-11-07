@@ -26,8 +26,8 @@ mod tests_mesurer;
 
 pub use args::{
     AnnotationsArgs, At, ClickArgs, ConsoleArgs, ElementArgs, EvaluateArgs, GuideArg, KeyArgs,
-    LayoutGuideArg, MesurerArgs, NavigateArgs, NetworkArgs, PageArgs, ResizeArgs, ScreenshotArgs,
-    ScrollArgs, SelectArgs, TypeArgs, WaitArgs,
+    LayoutGuideArg, MesurerArgs, NavigateArgs, NetworkArgs, PageArgs, RecordArgs, ResizeArgs,
+    ScreenshotArgs, ScrollArgs, SelectArgs, TypeArgs, WaitArgs,
 };
 use mesurer::{mesurer_op, screenshot_mesurer};
 use page::{navigate_op, screenshot_path, timeout, waits_out};
@@ -223,12 +223,15 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Screenshot the browser tab's visible page (or one element by ref/selector) as PNG: returned as an image and written to a file. Annotate's page tools (mesurer) are left out unless mesurer is drawings or show"
+        description = "Screenshot the browser tab's page as PNG: returned as an image and written to a file. The visible page by default, or one element (ref/selector) or a clip; full_page for the whole scrollable page (pdf too); device or width × height lays the page out at that size for the shot (the tab's own size comes back), devices takes several sizes in one call, scale sets pixels per CSS px (default the device's own), format png, jpeg or pdf. Large images come back as a smaller preview, the full file on disk. Annotate's page tools (mesurer) are left out unless mesurer is drawings or show"
     )]
     async fn browser_screenshot(
         &self,
         Parameters(a): Parameters<ScreenshotArgs>,
     ) -> CallToolResult {
+        if a.sized() {
+            return self.sized_screenshot(a).await;
+        }
         let named = tri!(crate::output_path(
             "browser_screenshot",
             a.output_path.as_deref()
@@ -261,6 +264,66 @@ impl Sawit {
                 path.display()
             )),
         ])
+    }
+
+    #[tool(
+        description = "Start recording the browser tab natively (Apple's hardware encoder): the view, the full page scrolled through top to bottom, an element or a region; at a device or width × height, a resolution (360p to 2160p) or max_width, 15 to 60 fps, as mp4 (H.264), mov (HEVC) or gif. Stops on its own at max_seconds (default 30) or when the tab closes. browser_record_stop finishes it"
+    )]
+    async fn browser_record_start(&self, Parameters(a): Parameters<RecordArgs>) -> CallToolResult {
+        let at = a.at.clone();
+        let op = tri!(record_op(a));
+        let v = tri!(self.browser(&at, op).await);
+        ok(pretty(&v))
+    }
+
+    #[tool(
+        description = "Stop the browser tab's recording and wait for its file: answers the path, duration, pixel size, frames, fps achieved, codec and file size"
+    )]
+    async fn browser_record_stop(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
+        let v = tri!(self.browser(&a.at, BrowserOp::RecordStop).await);
+        ok(pretty(&v))
+    }
+
+    #[tool(
+        description = "Whether the browser tab is recording, for how long and to which file, and how the last recording ended"
+    )]
+    async fn browser_record_status(&self, Parameters(a): Parameters<PageArgs>) -> CallToolResult {
+        let v = tri!(self.browser(&a.at, BrowserOp::RecordStatus).await);
+        ok(pretty(&v))
+    }
+
+    #[tool(
+        description = "Record the browser tab in one call: starts like browser_record_start (mode full_page by default: a scroll through the whole page) and returns when the recording ends (the scroll is over, or max_seconds), with its file, duration, size, fps achieved and codec"
+    )]
+    async fn browser_record(&self, Parameters(mut a): Parameters<RecordArgs>) -> CallToolResult {
+        if a.mode.is_none() {
+            a.mode = Some("full_page".into());
+        }
+        let at = a.at.clone();
+        let cap = Duration::from_secs(u64::from(a.max_seconds.unwrap_or(30).min(300)) + 120);
+        let op = tri!(record_op(a));
+        tri!(self.browser(&at, op).await);
+        let deadline = Instant::now() + cap;
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let s = tri!(self.browser(&at, BrowserOp::RecordStatus).await);
+            if s["recording"] == false {
+                return match &s["last"] {
+                    serde_json::Value::Null => fail("The recording ended without a result."),
+                    last if last.get("error").is_some() => fail(
+                        last["error"]
+                            .as_str()
+                            .unwrap_or("The recording failed.")
+                            .to_string(),
+                    ),
+                    last => ok(pretty(last)),
+                };
+            }
+            if Instant::now() >= deadline {
+                let v = tri!(self.browser(&at, BrowserOp::RecordStop).await);
+                return ok(pretty(&v));
+            }
+        }
     }
 
     #[tool(
@@ -370,5 +433,93 @@ impl Sawit {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+}
+
+/// The record op from the agent's arguments.
+fn record_op(a: RecordArgs) -> Result<BrowserOp, String> {
+    let output_path = match a.output_path.as_deref() {
+        Some(p) => {
+            crate::output_path("browser_record_start", Some(p))?.map(|p| p.display().to_string())
+        }
+        None => None,
+    };
+    Ok(BrowserOp::RecordStart {
+        target: target(a.reference, a.selector),
+        mode: a.mode,
+        device: a.device,
+        width: a.width,
+        height: a.height,
+        resolution: a.resolution,
+        max_width: a.max_width,
+        fps: a.fps,
+        format: a.format,
+        clip: a.clip,
+        scroll_speed: a.scroll_speed,
+        duration: a.duration,
+        max_seconds: a.max_seconds,
+        output_path,
+    })
+}
+
+impl Sawit {
+    /// `browser_screenshot` with sizes: one Capture per device (or one for the size asked),
+    /// each answered as a preview image and a line with its file and sizes.
+    async fn sized_screenshot(&self, a: ScreenshotArgs) -> CallToolResult {
+        let output = tri!(crate::output_path(
+            "browser_screenshot",
+            a.output_path.as_deref()
+        ));
+        let devices: Vec<Option<String>> = if a.devices.is_empty() {
+            vec![a.device.clone()]
+        } else {
+            a.devices.iter().cloned().map(Some).collect()
+        };
+        if devices.len() > 1 && output.is_some() {
+            return fail(
+                "output_path names one file: leave it out with devices (each gets its own name).",
+            );
+        }
+        let mesurer = tri!(screenshot_mesurer(a.mesurer.as_deref()));
+        let mut content = Vec::new();
+        let mut lines = Vec::new();
+        for device in devices {
+            let op = BrowserOp::Capture {
+                target: target(a.reference.clone(), a.selector.clone()),
+                full_page: a.full_page,
+                device: device.clone(),
+                width: a.width,
+                height: a.height,
+                scale: a.scale,
+                format: a.format.clone(),
+                quality: a.quality,
+                clip: a.clip,
+                output_path: output.as_ref().map(|p| p.display().to_string()),
+                mesurer: mesurer.clone(),
+            };
+            let v = tri!(self.browser(&a.at, op).await);
+            if let Some(preview) = v["preview_png_base64"].as_str() {
+                content.push(Content::image(preview.to_string(), "image/png"));
+            }
+            let mut line = format!(
+                "{}: {}×{} px ({}×{} CSS px at {}×) written to {}",
+                v["device"].as_str().unwrap_or("page"),
+                v["width"],
+                v["height"],
+                v["css_width"],
+                v["css_height"],
+                v["scale"],
+                v["path"].as_str().unwrap_or_default()
+            );
+            if v["width"].as_u64().unwrap_or(0) > 1568 {
+                line.push_str(" (the image above is a smaller preview)");
+            }
+            for note in v["notes"].as_array().into_iter().flatten() {
+                line.push_str(&format!(". {}", note.as_str().unwrap_or_default()));
+            }
+            lines.push(line);
+        }
+        content.push(Content::text(lines.join("\n")));
+        CallToolResult::success(content)
     }
 }
