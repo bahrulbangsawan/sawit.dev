@@ -198,6 +198,7 @@ opt-level = "s"
 opt-level = "s"
 [profile.release.package.tar]
 opt-level = "s"
+
 [profile.release.package.flate2]
 opt-level = "s"
 [profile.release.package.lsp-types]
@@ -220,3 +221,8 @@ opt-level = "s"
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }
 gpui-component = { path = "vendor/gpui-component" }
+
+# FigCraft's text crate, with system font files mapped instead of read (B6: 200-300 MB less memory
+# with the canvas open); see vendor/figcraft-text/SAWIT_PATCH.md.
+[patch."https://github.com/storytold/figcraft"]
+figcraft-text = { path = "vendor/figcraft-text" }

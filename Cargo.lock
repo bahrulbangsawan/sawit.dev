@@ -2275,7 +2275,6 @@ dependencies = [
 [[package]]
 name = "figcraft-text"
 version = "0.15.0"
-source = "git+https://github.com/storytold/figcraft?rev=8eb0b87646c5aef712326d6c431ccde5408630de#8eb0b87646c5aef712326d6c431ccde5408630de"
 dependencies = [
  "core-text 22.0.0",
  "craft-font-catalog",
@@ -2284,6 +2283,7 @@ dependencies = [
  "harfrust 0.13.3",
  "icu_segmenter",
  "log",
+ "memmap2",
  "objc2 0.6.5",
  "png 0.18.1",
  "skrifa 0.47.0",
@@ -4125,7 +4125,6 @@ version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61b195dc605f81aa181bec9b3bd14e26cc71b903e4644f6af578ca9772c7a710"
 dependencies = [
- "core_maths",
  "icu_collections",
  "icu_locale_fallback",
  "icu_provider",
