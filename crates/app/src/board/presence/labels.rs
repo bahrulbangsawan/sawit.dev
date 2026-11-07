@@ -1,5 +1,5 @@
-//! A free pointer's name: a pill in the agent's colour beside the pointer's tip, the name only, in
-//! 11 px semibold white, at most [`PILL_MAX`] wide with an ellipsis. A pill that would cover the
+//! A free pointer's name: a pill in the agent's colour beside the pointer's tip, its client's logo
+//! on a white disc then the name, in 11 px semibold white, at most [`PILL_MAX`] wide with an ellipsis. A pill that would cover the
 //! pill of an agent at work more recently is left out, and its pointer shows alone.
 
 use gpui_kit::*;
@@ -13,6 +13,12 @@ pub(super) const PILL_PAD: f32 = 7.0;
 const PILL_TEXT: f32 = 11.0;
 /// The widest a pill may be (px).
 pub(super) const PILL_MAX: f32 = 120.0;
+/// The client's logo badge at the pill's start (B4.2): a white disc this wide, inset this much
+/// from the pill's left and top, with the name after it.
+pub(super) const BADGE: f32 = 14.0;
+pub(super) const BADGE_INSET: f32 = 2.0;
+/// The room the badge takes before the name: inset, disc and a gap.
+pub(super) const BADGE_ROOM: f32 = BADGE_INSET + BADGE + 5.0;
 
 /// A pill's name, shaped to fit.
 pub(in crate::board) type Shaped = Box<ShapedLine>;
@@ -21,7 +27,7 @@ pub(in crate::board) type Shaped = Box<ShapedLine>;
 pub(super) fn pill_rect(tip: (f64, f64), width: f32) -> [f64; 4] {
     let x0 = tip.0 + f64::from(PILL_AT.0);
     let y0 = tip.1 + f64::from(PILL_AT.1);
-    let w = (width + PILL_PAD * 2.0).min(PILL_MAX);
+    let w = (width + BADGE_ROOM + PILL_PAD).min(PILL_MAX);
     [x0, y0, x0 + f64::from(w), y0 + f64::from(PILL_HEIGHT)]
 }
 
@@ -74,7 +80,8 @@ pub(super) fn shape(marks: Vec<Mark>, family: &SharedString, window: &Window) ->
     Painted(painted)
 }
 
-/// An agent's name in semibold white, cut with an ellipsis to fit a pill of [`PILL_MAX`].
+/// An agent's name in semibold white, cut with an ellipsis to fit a pill of [`PILL_MAX`] after its
+/// badge.
 fn name(label: &SharedString, alpha: f32, family: &SharedString, window: &Window) -> ShapedLine {
     let mut bold = font(family.clone());
     bold.weight = FontWeight::SEMIBOLD;
@@ -91,7 +98,7 @@ fn name(label: &SharedString, alpha: f32, family: &SharedString, window: &Window
             .text_system()
             .shape_line(text, px(PILL_TEXT), &runs, None)
     };
-    let room = px(PILL_MAX - PILL_PAD * 2.0);
+    let room = px(PILL_MAX - BADGE_ROOM - PILL_PAD);
     let whole = shape(label.clone());
     if whole.width <= room {
         return whole;

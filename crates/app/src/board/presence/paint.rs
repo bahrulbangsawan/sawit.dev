@@ -2,7 +2,7 @@
 
 use gpui_kit::*;
 
-use super::labels::{PILL_HEIGHT, PILL_PAD, pill_rect};
+use super::labels::{BADGE, BADGE_INSET, BADGE_ROOM, PILL_HEIGHT, pill_rect};
 use super::marks::{Mark, Painted};
 
 /// The colour of failure: a failed work's frame, its "!" and its reason.
@@ -144,14 +144,26 @@ pub(in crate::board) fn paint(
                 color,
             } => paint_badge(at(spot), &text, color, window, cx),
             Mark::Pill {
-                tip, color, alpha, ..
+                tip,
+                color,
+                alpha,
+                logo,
+                ..
             } => {
                 let Some(line) = line else { continue };
                 let pill = rect_bounds(pill_rect(tip, f32::from(line.width)));
                 window.paint_quad(
                     fill(pill, color.opacity(alpha)).corner_radii(px(PILL_HEIGHT / 2.0)),
                 );
-                let text_at = point(pill.origin.x + px(PILL_PAD), pill.origin.y + px(1.0));
+                let disc = Bounds::new(
+                    point(
+                        pill.origin.x + px(BADGE_INSET),
+                        pill.origin.y + px(BADGE_INSET),
+                    ),
+                    size(px(BADGE), px(BADGE)),
+                );
+                badge(disc, logo, alpha, window, cx);
+                let text_at = point(pill.origin.x + px(BADGE_ROOM), pill.origin.y + px(1.0));
                 let clip = ContentMask { bounds: pill };
                 window.with_content_mask(Some(clip), |window| {
                     if let Err(err) =
@@ -275,4 +287,57 @@ fn paint_badge(at: Point<Pixels>, text: &str, color: Hsla, window: &mut Window, 
         window,
         cx,
     );
+}
+
+/// A client's logo badge (B4.2) in `disc`: a white disc, legible on light and dark pages and on
+/// every agent colour, with the logo inset in it; a colour logo keeps its colours, a one-colour
+/// logo and the generic agent mark (`logo` `None`) are drawn in near-black.
+fn badge(
+    disc: Bounds<Pixels>,
+    logo: Option<&'static str>,
+    alpha: f32,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.paint_quad(fill(disc, hsla(0.0, 0.0, 1.0, alpha)).corner_radii(disc.size.width / 2.0));
+    let inset = px(2.5);
+    let mark = Bounds::new(
+        point(disc.origin.x + inset, disc.origin.y + inset),
+        size(
+            disc.size.width - inset * 2.0,
+            disc.size.height - inset * 2.0,
+        ),
+    );
+    let ink = hsla(0.0, 0.0, 0.1, alpha);
+    let device = (f32::from(mark.size.width) * window.scale_factor()).ceil() as u32;
+    match logo {
+        Some(name) if name.ends_with("-color") => {
+            if let Some(image) = crate::terminal::agents::raster(name, device, cx) {
+                let _ = window.paint_image(mark, mark, Corners::default(), image, 0, false);
+                return;
+            }
+            let _ = window.paint_svg(
+                mark,
+                format!("agent_logos/{name}.svg").into(),
+                None,
+                TransformationMatrix::unit(),
+                ink,
+                cx,
+            );
+        }
+        Some(name) => {
+            let _ = window.paint_svg(
+                mark,
+                format!("agent_logos/{name}.svg").into(),
+                None,
+                TransformationMatrix::unit(),
+                ink,
+                cx,
+            );
+        }
+        None => {
+            let path = gpui_kit::assets::IconName::Bot.path();
+            let _ = window.paint_svg(mark, path, None, TransformationMatrix::unit(), ink, cx);
+        }
+    }
 }
