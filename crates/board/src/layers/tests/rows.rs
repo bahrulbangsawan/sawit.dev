@@ -142,15 +142,12 @@ fn sticky_has_no_children_rows() {
         assert!(!rows[0].has_children);
         assert!(!rows[0].expanded);
     }
-    // Nor does the filter go inside it: its text is not a layer to find, and the note
-    // itself is not listed as the ancestor of one.
-    let inside = doc.node(sticky).unwrap().children[0];
-    let name = doc.node(inside).unwrap().name.clone();
-    assert!(!name.is_empty());
-    assert!(rows(&doc, page, &HashSet::new(), &[], &name).is_empty());
-    let by_name = rows(&doc, page, &HashSet::new(), &[], "sticky");
-    assert_eq!(ids(&by_name), [sticky]);
-    assert!(!by_name[0].has_children);
+    // Nor does the filter go inside it: its text is not a layer of its own, but the note is
+    // called by its words (B15), so they find the note itself, one row.
+    let by_words = rows(&doc, page, &HashSet::new(), &[], "needle");
+    assert_eq!(ids(&by_words), [sticky]);
+    assert_eq!(by_words[0].name, "needle");
+    assert!(!by_words[0].has_children);
 }
 
 #[test]

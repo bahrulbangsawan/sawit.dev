@@ -1,4 +1,5 @@
-//! A board's timer and voting, in a pill at the canvas's top right (`board.timer`, `board.vote`,
+//! A board's timer and voting, in a pill at the canvas's bottom right, above the toolbar, shown only
+//! while one runs or a vote has results (`board.timer`, `board.vote`,
 //! `board.voteResults`): the countdown with Start 5 min, Pause or Resume, +1 min and Stop; and
 //! Start vote (3 votes each), Vote on the selection, End vote and the results, most votes first.
 //! The countdown is the board's own, the same for everyone in a live session; the pill draws
@@ -56,6 +57,22 @@ impl BoardView {
         .detach();
     }
 
+    /// The main menu's Start Timer (5 min) or Start Vote (3 votes each): on a board only.
+    pub(super) fn start_facilitation(&mut self, what: &str, cx: &mut Context<Self>) {
+        let board = self
+            .board()
+            .is_some_and(|b| b.kind() == sawit_board::DocKind::Board);
+        if !board {
+            self.show_toast("Timers and votes are for boards", cx);
+            return;
+        }
+        match what {
+            "timer" => self.facilitate("board.timer", json!({"action": "start", "minutes": 5}), cx),
+            _ => self.facilitate("board.vote", json!({"action": "start", "votes": 3}), cx),
+        }
+        cx.notify();
+    }
+
     fn show_vote_results(&mut self, cx: &mut Context<Self>) {
         let Some(board) = self.board_mut() else {
             return;
@@ -86,13 +103,18 @@ impl BoardView {
     }
 }
 
-/// The pill, on a board: the canvas's one floating bar ([`FloatBar`]), at its top right, its
+/// The pill, on a board, while a timer or a vote is on: the canvas's one floating bar
+/// ([`FloatBar`]), at its bottom right above the toolbar, its
 /// buttons collapsing to icons when the canvas is narrow.
 pub(super) fn render_facilitation(
     view: &mut BoardView,
     window: &mut Window,
     cx: &mut Context<BoardView>,
 ) -> Option<AnyElement> {
+    // Never over Preview or Present.
+    if view.preview_open() || view.player.is_some() {
+        return None;
+    }
     let board = view.board()?;
     if board.kind() != sawit_board::DocKind::Board {
         return None;
@@ -100,8 +122,13 @@ pub(super) fn render_facilitation(
     let ds = board.session.ds().ok()?;
     let timer = ds.doc.timer;
     let voting = ds.doc.vote.as_ref().map(|v| !v.ended);
+    // Only while a timer or a vote is on, or a vote has results (B15): the main menu's View ›
+    // Start Timer and Start Vote begin them.
+    if timer.is_none() && voting.is_none() {
+        return None;
+    }
     let has_selection = !ds.selection.is_empty();
-    // Half the canvas at most: the pill shares the top edge with the bars over frames.
+    // Half the canvas at most.
     let room = (ds.view.vw / 2.0) as f32;
     let now = now_ms();
     let this = cx.entity().downgrade();
@@ -198,7 +225,9 @@ pub(super) fn render_facilitation(
     Some(
         div()
             .absolute()
-            .top(px(8.))
+            // Above the toolbar's band at the bottom right, clear of the screen and context bars
+            // at the canvas's top (B15).
+            .bottom(px(super::toolbar::BOTTOM + super::toolbar::HEIGHT + 8.))
             .right(px(8.))
             .child(pill.render_in_place(room, window, cx))
             .into_any_element(),

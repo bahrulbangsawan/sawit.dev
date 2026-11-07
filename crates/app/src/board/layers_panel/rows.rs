@@ -140,8 +140,11 @@ impl BoardView {
             Some(input) => rename_field(&input, cx),
             None => {
                 // Frames and sections on the page stand out, as in FigCraft.
-                let top =
-                    row.depth == 0 && matches!(row.icon, LayerIcon::Frame | LayerIcon::Section);
+                let top = row.depth == 0
+                    && matches!(
+                        row.icon,
+                        LayerIcon::Frame | LayerIcon::Section | LayerIcon::Screen
+                    );
                 div()
                     .flex_1()
                     .min_w_0()
@@ -225,6 +228,27 @@ impl BoardView {
             .child(arrow)
             .child(Icon::new(layer_icon(row.icon)).xsmall().text_color(muted))
             .child(name)
+            // A screen's layers are its page's HTML: the row says so (B15).
+            .when(row.icon == LayerIcon::Screen, |el| {
+                el.child(
+                    div()
+                        .id(("layer-html", id.0))
+                        .flex_none()
+                        .px_1()
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .text_xs()
+                        .text_color(muted)
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(
+                                "An HTML screen: its content is a web page, not layers. Ask an agent to change it, or export it as HTML or React",
+                            )
+                            .build(window, cx)
+                        })
+                        .child("HTML"),
+                )
+            })
             .child(toggles)
             .children(landing)
             .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {

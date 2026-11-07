@@ -175,3 +175,43 @@ fn icons_follow_the_kind() {
         assert_eq!(row(&rows, id).icon, icon, "{kind}");
     }
 }
+
+/// B15: a screen has its own icon and so does a route frame; stickies are told apart by their
+/// text, not all called "Sticky".
+#[test]
+fn screens_have_their_icon_and_stickies_their_words() {
+    let mut board = BoardDoc::new_board("Canvas").unwrap();
+    let one = make(
+        &mut board,
+        "board.sticky",
+        json!({"x": 0, "y": 0, "text": "Ship the onboarding flow by Friday afternoon"}),
+    );
+    let two = make(
+        &mut board,
+        "board.sticky",
+        json!({"x": 300, "y": 0, "text": "Ask legal"}),
+    );
+    let screen = make(
+        &mut board,
+        "frame.create",
+        json!({"x": 0, "y": 400, "width": 393, "height": 852, "name": "Today"}),
+    );
+    board
+        .session
+        .doc_mut()
+        .unwrap()
+        .node_mut(screen)
+        .unwrap()
+        .plugin_data
+        .insert(
+            crate::screens::SCREEN_KEY.into(),
+            r#"{"screen":"today","viewport":{"w":393,"h":852}}"#.into(),
+        );
+    let doc = board.doc().unwrap();
+    let page = board.session.ds().unwrap().page;
+    let rows = rows(&doc, page, &HashSet::new(), &[], "");
+    let row = |id: NodeId| rows.iter().find(|r| r.id == id).unwrap().clone();
+    assert_eq!(row(screen).icon, LayerIcon::Screen);
+    assert_eq!(row(one).name, "Ship the onboarding flow by Frid…");
+    assert_eq!(row(two).name, "Ask legal");
+}

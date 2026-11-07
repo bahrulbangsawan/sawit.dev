@@ -314,6 +314,8 @@ pub(super) struct WebFrames {
     pub window_width: f32,
     /// The canvas's zoom at the last prepaint, and whether a zoom gesture is on.
     pub zoom: f64,
+    /// Present shows screens: their snapshots are taken at least at this scale meanwhile.
+    pub presenting: Option<f64>,
     pub zooming: bool,
     pub space: Option<CFRetained<CGColorSpace>>,
     pub bench: Option<bench::Bench>,
@@ -368,6 +370,7 @@ impl WebFrames {
             canvas: Bounds::default(),
             window_width: 0.0,
             zoom: 1.0,
+            presenting: None,
             zooming: false,
             bench: None,
             last_bench: None,
