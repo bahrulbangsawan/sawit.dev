@@ -97,6 +97,7 @@ pub use work::{PROGRESS_UNSHOWN, WORK_SIZE, agent_refusal, work_frame, work_of, 
 // ids): the files File ▸ Export and Import from file… make and read, and what Edit ▸ Copy as
 // copies. The canvas's view (crates/app/src/board/commands/) asks for files and writes them, and
 // puts what is copied on the system clipboard.
+pub use command::{agent_can_run, is_document_command};
 pub use copy_as::{COPY_PNG_MAX_SIDE, Copied, copy_as, copy_png_scale};
 pub use export::{export_page, frames_pdf};
 pub use files::import_file;

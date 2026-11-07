@@ -466,7 +466,8 @@ impl Sawit {
     #[tool(description = concat!(
         "List the commands canvas_command runs: the id and label of each. The parameters each \
          takes make the full list too long to return at once, so pass `filter` (board., align, \
-         sticky, ...) to get the matching commands with theirs. ",
+         sticky, ...) to get the matching commands with theirs. `app_controls` lists the app's \
+         own controls (Preview, Present, the panels) with the tool or command doing each. ",
         design_guide_first!()
     ))]
     async fn canvas_commands(
