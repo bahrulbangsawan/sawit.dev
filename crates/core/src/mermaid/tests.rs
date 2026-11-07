@@ -205,3 +205,14 @@ fn edges_take() {
         );
     }
 }
+
+/// The engine gives Pele up when idle, and the next diagram loads it again and draws the same.
+#[test]
+fn a_diagram_after_the_engine_went_idle_draws_the_same() {
+    let source = "flowchart LR\n  A[Idle] --> B[Again]";
+    let first = render(source, &Palette::default()).unwrap();
+    // Past the test build's idle time (1 s): the worker has dropped the engine.
+    std::thread::sleep(std::time::Duration::from_millis(1_600));
+    let again = render(source, &Palette::default()).unwrap();
+    assert_eq!(first.svg, again.svg);
+}

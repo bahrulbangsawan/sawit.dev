@@ -1,8 +1,9 @@
-//! Pele on its own thread, in an embedded QuickJS engine that loads the bundle once.
+//! Pele on its own thread, in an embedded QuickJS engine that loads the bundle on first use and
+//! gives it back when idle ([`IDLE`]).
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{
     MAX_EDGES, MEMORY_LIMIT, OUTPUT_LIMIT, RENDER_TIMEOUT, Raw, SOURCE_LIMIT, TOOK_TOO_LONG,
@@ -31,34 +32,33 @@ pub(super) fn run(source: String) -> Result<Raw, String> {
     result.recv().map_err(|_| stopped())?
 }
 
-fn worker(jobs: mpsc::Receiver<Job>) {
-    use rquickjs::{Context, Runtime};
+/// How long the engine stays loaded after its last diagram. Pele loaded holds several MB of
+/// QuickJS heap; a while after the last diagram it is given back, and the next diagram loads Pele
+/// again (as the first one of the session does).
+const IDLE: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(120)
+};
 
+fn worker(jobs: mpsc::Receiver<Job>) {
     let deadline: Arc<Mutex<Option<Instant>>> = Arc::default();
-    let engine = (|| {
-        let rt = Runtime::new().map_err(|e| e.to_string())?;
-        rt.set_memory_limit(MEMORY_LIMIT);
-        let d = deadline.clone();
-        rt.set_interrupt_handler(Some(Box::new(move || {
-            d.lock()
-                .ok()
-                .and_then(|d| *d)
-                .is_some_and(|d| Instant::now() > d)
-        })));
-        let cx = Context::full(&rt).map_err(|e| e.to_string())?;
-        cx.with(|cx| {
-            cx.eval::<(), _>(super::pele_js())
-                .map_err(|e| exception(&cx, e, "Pele failed to load", ""))
-        })?;
-        Ok::<_, String>((rt, cx))
-    })();
     let set_deadline = |at| {
         if let Ok(mut d) = deadline.lock() {
             *d = at;
         }
     };
-    for job in jobs {
-        let result = match &engine {
+    let mut engine = None;
+    loop {
+        let job = match jobs.recv_timeout(IDLE) {
+            Ok(job) => job,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                engine = None;
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        let result = match engine.get_or_insert_with(|| load(&deadline)) {
             Ok((_, cx)) => {
                 set_deadline(Some(Instant::now() + RENDER_TIMEOUT));
                 let result = cx.with(|cx| call_render(&cx, &job.source));
@@ -69,6 +69,29 @@ fn worker(jobs: mpsc::Receiver<Job>) {
         };
         let _ = job.reply.send(result);
     }
+}
+
+/// A QuickJS engine with Pele loaded, stopped by its interrupt handler once `deadline` passes.
+fn load(
+    deadline: &Arc<Mutex<Option<Instant>>>,
+) -> Result<(rquickjs::Runtime, rquickjs::Context), String> {
+    use rquickjs::{Context, Runtime};
+
+    let rt = Runtime::new().map_err(|e| e.to_string())?;
+    rt.set_memory_limit(MEMORY_LIMIT);
+    let d = deadline.clone();
+    rt.set_interrupt_handler(Some(Box::new(move || {
+        d.lock()
+            .ok()
+            .and_then(|d| *d)
+            .is_some_and(|d| Instant::now() > d)
+    })));
+    let cx = Context::full(&rt).map_err(|e| e.to_string())?;
+    cx.with(|cx| {
+        cx.eval::<(), _>(super::pele_js())
+            .map_err(|e| exception(&cx, e, "Pele failed to load", ""))
+    })?;
+    Ok((rt, cx))
 }
 
 fn call_render(cx: &rquickjs::Ctx<'_>, source: &str) -> Result<Raw, String> {

@@ -186,8 +186,9 @@ pub struct Diagram {
 }
 
 /// Renders Mermaid `source`. Blocks until done (well under a millisecond for
-/// typical diagrams; the first call also loads Pele, about 60 ms), so call it
-/// off the UI thread. The error is Pele's message, which quotes the source.
+/// typical diagrams; the first call also loads Pele, about 60 ms, as does the
+/// first after two idle minutes, when the engine gives its memory back), so call
+/// it off the UI thread. The error is Pele's message, which quotes the source.
 pub fn render(source: &str, palette: &Palette) -> Result<Diagram, String> {
     let raw = run(source.to_owned())?;
     Ok(Diagram {
