@@ -17,6 +17,7 @@
 pub(in crate::board) mod blueprint;
 mod covers;
 #[cfg(test)]
+#[cfg(test)]
 pub(in crate::board) use covers::COVER_LIMIT;
 pub(in crate::board) use covers::cover_expired;
 pub(in crate::board) mod marks;
