@@ -216,6 +216,26 @@ opt-level = "s"
 [profile.release.package.objc2-av-foundation]
 opt-level = "s"
 
+# More cold paths, measured in docs/notes/2026-11-07-size-and-ram.md: the MCP server (its own
+# process, waiting on the agent and the socket, never on its own code), a WebAssembly plugin's
+# validation (wasmi itself keeps opt-level 3: it runs the plugin), the font download, and the
+# TOML parser under toml and toml_edit (both above). The PDF export (krilla) and the HTML parser
+# (html5ever) came out bigger at "s" under fat LTO, so they stay at 3.
+[profile.release.package.sawit-mcp]
+opt-level = "s"
+[profile.release.package.rmcp]
+opt-level = "s"
+[profile.release.package.schemars]
+opt-level = "s"
+[profile.release.package.wasmparser]
+opt-level = "s"
+[profile.release.package.ureq]
+opt-level = "s"
+[profile.release.package.toml_parser]
+opt-level = "s"
+[profile.release.package.winnow]
+opt-level = "s"
+
 # Left-aligned, compact editor line numbers; see vendor/gpui-base/SAWIT_PATCH.md. Menu items that
 # fit their menu; see vendor/gpui-component/SAWIT_PATCH.md.
 [patch.crates-io]
