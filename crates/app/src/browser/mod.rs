@@ -199,6 +199,8 @@ pub struct BrowserView {
     seo_generation: u64,
     /// The recording under way, and how the last one ended ([`capture::record`]).
     recorder: capture::record::Recorder,
+    /// The capture menu's settings and the capture bar ([`capture::ui`]).
+    capture_ui: capture::ui::CaptureUi,
     /// Shots take turns: the overlay has one hidden flag.
     shots: ShotGate,
     pick: PickMode,
@@ -361,6 +363,7 @@ impl BrowserView {
             seo_ask: Default::default(),
             seo_generation: 0,
             recorder: Default::default(),
+            capture_ui: Default::default(),
             shots: ShotGate::default(),
             pick: PickMode::Off,
             pick_waiting: false,
@@ -508,6 +511,7 @@ impl Render for BrowserView {
             .map(|el| Self::with_mesurer_keys(el, cx))
             .size_full()
             .child(self.toolbar(&url, window, cx))
+            .children(self.capture_bar(cx))
             .map(|el| self.with_find(el, cx))
             .child(
                 h_flex()

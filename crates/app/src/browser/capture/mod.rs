@@ -6,6 +6,7 @@
 
 mod full;
 pub mod record;
+pub mod ui;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

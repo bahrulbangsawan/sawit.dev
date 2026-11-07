@@ -242,6 +242,27 @@ impl BrowserTabs {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
+        if tab.view.read(cx).is_recording() {
+            let view = tab.view.clone();
+            let answer = crate::confirm::Confirm::new(
+                "Stop the recording and close the tab?",
+                "Stop and Close",
+            )
+            .detail("The video so far is saved to the captures folder.")
+            .ask(window, cx);
+            cx.spawn(async move |this, cx| {
+                if answer.await {
+                    let _ = this.update(cx, |this, cx| {
+                        view.update(cx, |v, cx| v.stop_recording(cx));
+                        if let Some(ix) = this.tabs.iter().position(|t| t.view == view) {
+                            this.remove(ix, cx);
+                        }
+                    });
+                }
+            })
+            .detach();
+            return;
+        }
         let notes = tab.view.read(cx).unsent_notes(cx);
         if notes == 0 {
             self.remove(ix, cx);
