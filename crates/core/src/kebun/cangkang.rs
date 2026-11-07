@@ -201,6 +201,7 @@ pub async fn cangkang(args: CangkangArgs, paths: &AppPaths) -> i32 {
         }
         Direction::Download => {
             let owned: Vec<FileSync> = files.into_iter().cloned().collect();
+            let deletes = deleted_on_github(&owned);
             let contents = match shell_config::fetch_remote(&token, backup, &owned).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -209,9 +210,10 @@ pub async fn cangkang(args: CangkangArgs, paths: &AppPaths) -> i32 {
                 }
             };
             let known = shell_config::known_files_here();
-            match shell_config::apply_download(
+            match shell_config::apply_download_with(
                 &known,
                 &contents,
+                &deletes,
                 &state,
                 &backup.tree.commit,
                 crate::github::now(),
@@ -242,4 +244,13 @@ pub async fn cangkang(args: CangkangArgs, paths: &AppPaths) -> i32 {
             }
         }
     }
+}
+
+/// The files among `files` deleted on GitHub since the last sync, which a download deletes here.
+fn deleted_on_github(files: &[FileSync]) -> Vec<String> {
+    files
+        .iter()
+        .filter(|f| f.state == crate::github::FileState::DeletedOnGitHub)
+        .map(|f| f.rel.clone())
+        .collect()
 }

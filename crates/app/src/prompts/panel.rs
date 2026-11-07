@@ -39,21 +39,26 @@ impl PromptsPanel {
                 this.library_changed(cx);
                 cx.notify()
             }),
-            cx.observe(&account, |_, _, cx| cx.notify()),
+            cx.observe(&account, |this, _, cx| {
+                this.on_launch(cx);
+                cx.notify()
+            }),
             cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
             }),
         ];
-        Self {
+        let mut panel = Self {
             github: super::github::PromptsGitHub::new(window, cx),
             store,
             search,
             scroll: UniformListScrollHandle::new(),
             copied: None,
             _subscriptions: subscriptions,
-        }
+        };
+        panel.on_launch(cx);
+        panel
     }
 
     fn results(&self, cx: &App) -> Vec<String> {
@@ -265,6 +270,7 @@ impl Render for PromptsPanel {
                                         .label("New Prompt")
                                         .on_click(cx.listener(|this, _, _, cx| this.new_prompt(cx))),
                                 )
+                                .when_some(self.restore_offer(cx), |el, restore| el.action(restore))
                         } else {
                             Placeholder::new(IconName::Search, "No matching prompts")
                                 .compact()
