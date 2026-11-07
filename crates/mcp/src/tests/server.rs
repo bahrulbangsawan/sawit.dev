@@ -195,6 +195,7 @@ fn every_tool_is_routed() {
         "browser_mesurer",
         "browser_inspect",
         "browser_design",
+        "browser_seo",
         "browser_export_design",
         "browser_tabs",
         // keymap

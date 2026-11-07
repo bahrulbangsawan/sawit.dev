@@ -8,6 +8,7 @@
 
 pub mod favicon;
 pub mod head;
+pub mod seo;
 
 #[cfg(test)]
 mod tests;
