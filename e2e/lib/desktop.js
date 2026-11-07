@@ -304,10 +304,12 @@ export class Window {
   /**
    * Presses the element matching `query` through its accessibility action (no pointer, no
    * focus change). Refuses buttons that install, update or remove anything, and nameless ones.
+   * `stoodIn`: the test stands in for what such a button would reach (Sawit's test hooks answer
+   * instead of npm or the internet), so this one press is allowed; say which hook in the test.
    */
-  async click(query, { timeoutMs = 15_000 } = {}) {
+  async click(query, { timeoutMs = 15_000, stoodIn = false } = {}) {
     const node = await this.waitFor(query, { timeoutMs });
-    guard(node);
+    guard(node, { stoodIn });
     if (!node.ref) throw new Error(`${describe(query)} has no ref to act on (${node.role})`);
     return this.desktop.call(["click", node.ref]);
   }
@@ -418,7 +420,7 @@ export class Window {
 /** The window's own buttons, beside its content: a click on "Close" must never close the window. */
 const WINDOW_CONTROLS = new Set(["Close", "Minimize", "Full Screen", "Zoom"]);
 
-function guard(node) {
+function guard(node, { stoodIn = false } = {}) {
   const name = node.name ?? "";
   if (node.depth === 1 && WINDOW_CONTROLS.has(name)) {
     throw new Error(`refusing to press the window's own “${name}” button: scope the query with within`);
@@ -428,7 +430,7 @@ function guard(node) {
   }
   // A name ending in an ellipsis opens a sheet or dialog that asks first, as on any Mac
   // ("Install Figma…" opens the install sheet): pressing it changes nothing yet.
-  if (NEVER_PRESS.test(name) && !name.endsWith("…")) {
+  if (NEVER_PRESS.test(name) && !name.endsWith("…") && !stoodIn) {
     throw new Error(`refusing to press “${name}”: the tests never install, update or remove`);
   }
 }

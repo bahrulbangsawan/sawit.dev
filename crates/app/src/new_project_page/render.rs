@@ -7,7 +7,7 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::*;
-use sawit_core::stack_builder::{self, CLI_VERSION, PRESETS};
+use sawit_core::stack_builder::{self, PRESETS};
 
 use super::{CARD_GAP, CARD_MIN, COLUMN_GAP, INSET, LEFT_W, NewProjectPage, WIDE};
 use crate::catalog;
@@ -43,16 +43,11 @@ impl NewProjectPage {
                     .min_w(px(260.))
                     .gap_1()
                     .child(div().text_xl().font_semibold().child("New Project"))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .whitespace_normal()
-                            .child(format!(
-                                "Pick a TypeScript stack from Better-T-Stack's builder. Sawit runs \
-                                 create-better-t-stack {CLI_VERSION} in its terminal and opens the project."
-                            )),
-                    ),
+                    .child(div().text_sm().text_color(muted).whitespace_normal().child(
+                        "Pick a TypeScript stack from Better-T-Stack's builder. Sawit runs \
+                                 create-better-t-stack in its terminal and opens the project.",
+                    ))
+                    .child(self.render_cli_row(cx)),
             )
             .child(
                 h_flex()

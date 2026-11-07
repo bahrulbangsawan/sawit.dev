@@ -201,7 +201,10 @@ pub fn semai(
             return 1;
         }
     };
-    let command = stack_builder::run_command(&resolved.stack);
+    // The version the New Project page uses: the pinned one, or the one the user upgraded to.
+    let version =
+        stack_builder::version::CliVersions::load(&crate::instances::AppPaths::default_macos());
+    let command = stack_builder::run_command_at(&resolved.stack, version.in_use());
     eprintln!(
         "{} {}\n$ {command}",
         ink.paint("32", "🌱 Menyemai"),

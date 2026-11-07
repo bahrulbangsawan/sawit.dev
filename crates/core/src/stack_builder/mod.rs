@@ -17,6 +17,7 @@
 
 mod catalog;
 mod choices;
+pub mod cli_help;
 mod command;
 mod picks;
 mod presets;
@@ -24,13 +25,17 @@ mod rules;
 mod stack;
 #[cfg(test)]
 mod tests;
+pub mod version;
 
 use serde::{Deserialize, Serialize};
 
 pub use catalog::{StackOption, option, options};
 pub use choices::Choices;
 pub(crate) use command::frontends;
-pub use command::{command, format_project_name, quiet_flags, run_command, validate_project_name};
+pub use command::{
+    command, command_at, format_project_name, quiet_flags, run_command, run_command_at,
+    validate_project_name,
+};
 pub use picks::{disabled, remove, select, selected};
 pub use presets::{PRESETS, Preset};
 pub use rules::{disabled_reason, resolve};
@@ -302,12 +307,12 @@ impl Pm {
         Pm::parse(pm.id())
     }
 
-    /// What starts the CLI with this package manager, pinned to [`CLI_VERSION`].
-    fn runner(self) -> String {
+    /// What starts the CLI's `version` with this package manager.
+    fn runner(self, version: &str) -> String {
         match self {
-            Pm::Npm => format!("npx create-better-t-stack@{CLI_VERSION}"),
-            Pm::Pnpm => format!("pnpm create better-t-stack@{CLI_VERSION}"),
-            Pm::Bun => format!("bun create better-t-stack@{CLI_VERSION}"),
+            Pm::Npm => format!("npx create-better-t-stack@{version}"),
+            Pm::Pnpm => format!("pnpm create better-t-stack@{version}"),
+            Pm::Bun => format!("bun create better-t-stack@{version}"),
         }
     }
 }
