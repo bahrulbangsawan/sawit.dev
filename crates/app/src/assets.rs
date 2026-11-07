@@ -176,7 +176,9 @@ gpui_kit::assets::icon_assets!(
         Clapperboard,
         // The New Project page (src/new_project_page/).
         FolderPlus,
-        ListChecks
+        ListChecks,
+        // Activity icons on the tabs: needs attention.
+        BellDot,
     ]
 );
 

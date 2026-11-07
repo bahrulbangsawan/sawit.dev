@@ -23,6 +23,11 @@ impl Render for TerminalView {
         let focused = self.focus.is_focused(window);
         if focused {
             self.keyboard_at = Some(Instant::now());
+            // The user is looking: the bell has been heard.
+            if self.bell {
+                self.bell = false;
+                self.refresh_activity(cx);
+            }
         }
         let exited = self.exited;
         let selection = cx.theme().selection;

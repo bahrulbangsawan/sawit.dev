@@ -1,4 +1,5 @@
 mod accounts;
+mod activity;
 mod agents;
 mod assets;
 mod board;
