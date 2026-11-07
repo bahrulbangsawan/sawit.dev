@@ -25,6 +25,11 @@ pub struct Pixels(Retained<CGImage>);
 unsafe impl Send for Pixels {}
 
 impl Pixels {
+    /// The picture itself, for Core Graphics and AVFoundation.
+    pub fn image(&self) -> &CGImage {
+        &self.0
+    }
+
     /// Its pixels as RGBA rows (premultiplied, sRGB as WebKit drew them), for stitching tiles.
     pub fn rgba(&self) -> Option<Vec<u8>> {
         use objc2_core_foundation::{CGPoint, CGRect};
@@ -49,6 +54,41 @@ impl Pixels {
         CGContext::draw_image(Some(&context), rect, Some(&self.0));
         drop(context);
         Some(out)
+    }
+
+    /// The picture redrawn at exactly `width` × `height` pixels (high-quality interpolation): a
+    /// snapshot can come out a few pixels off the size asked for, as WebKit rounds to its own
+    /// pixel grid.
+    pub fn resized(&self, width: u32, height: u32) -> Option<Pixels> {
+        use objc2_core_foundation::{CGPoint, CGRect};
+        use objc2_core_graphics::{
+            CGBitmapContextCreate, CGBitmapContextCreateImage, CGColorSpace, CGContext,
+            CGInterpolationQuality,
+        };
+        if self.size() == (width, height) {
+            return Some(Pixels(self.0.clone()));
+        }
+        let space = CGImage::color_space(Some(&self.0)).or_else(CGColorSpace::new_device_rgb)?;
+        // SAFETY: Core Graphics allocates the bitmap (null data).
+        let context = unsafe {
+            CGBitmapContextCreate(
+                std::ptr::null_mut(),
+                width as usize,
+                height as usize,
+                8,
+                0,
+                Some(&space),
+                1, /* PremultipliedLast */
+            )
+        }?;
+        CGContext::set_interpolation_quality(Some(&context), CGInterpolationQuality::High);
+        let rect = CGRect::new(
+            CGPoint::ZERO,
+            CGSize::new(f64::from(width), f64::from(height)),
+        );
+        CGContext::draw_image(Some(&context), rect, Some(&self.0));
+        let image = CGBitmapContextCreateImage(Some(&context))?;
+        Some(Pixels(image.into()))
     }
 
     /// Its size in pixels.
@@ -91,20 +131,24 @@ impl Pixels {
 }
 
 impl Engine {
-    /// Holds the CSS viewport units (`vh`, `vw`) at `size` CSS px while the view is made taller
-    /// for a full-page capture, so `100vh` sections don't grow with it; `None` lets them follow
-    /// the view again. Private WebKit API, skipped where WebKit lacks it.
-    pub fn hold_viewport_units(&self, size: Option<(f64, f64)>) {
+    /// Holds the CSS viewport units (`vh`, `vw`) at `width` × `height` CSS px (WebKit's
+    /// viewport-units override, private, skipped where WebKit lacks it). The browser keeps it at
+    /// the page's viewport ([`super::super::BrowserView::relayout`]), and a full-page capture
+    /// keeps it there while the view is made as tall as the page, so `100vh` sections don't grow.
+    /// WebKit takes no empty size, so it is never cleared, only set.
+    pub fn hold_viewport_units(&self, width: f64, height: f64) {
         use objc2::{msg_send, sel};
         use objc2_foundation::NSObjectProtocol as _;
+        if !(width >= 1. && height >= 1.) {
+            return;
+        }
         let wk = self.webview.webview();
         if !wk.respondsToSelector(sel!(_setViewportSizeForCSSViewportUnits:)) {
             return;
         }
-        // A zero size goes back to the view's own.
-        let (w, h) = size.unwrap_or((0., 0.));
         unsafe {
-            let _: () = msg_send![&*wk, _setViewportSizeForCSSViewportUnits: CGSize::new(w, h)];
+            let _: () =
+                msg_send![&*wk, _setViewportSizeForCSSViewportUnits: CGSize::new(width, height)];
         }
     }
 
@@ -171,6 +215,17 @@ impl Engine {
         reply: oneshot::Sender<Result<Pixels, String>>,
     ) {
         self.snapshot_pixels_in(rect, Some(width), true, reply);
+    }
+
+    /// A recording's frame at a chosen size: `rect` of the view (its points; all of it when
+    /// `None`), `width` points wide, from WebKit's last drawing (fast).
+    pub fn record_frame(
+        &self,
+        rect: Option<(f64, f64, f64, f64)>,
+        width: f64,
+        reply: oneshot::Sender<Result<Pixels, String>>,
+    ) {
+        self.snapshot_pixels_in(rect, Some(width), false, reply);
     }
 
     /// Snapshots the whole view, `width` points wide (the view's own width when `None`).

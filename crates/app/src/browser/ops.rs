@@ -210,6 +210,53 @@ impl BrowserView {
                     }
                 }
             }
+            BrowserOp::RecordStart {
+                target,
+                mode,
+                device,
+                width,
+                height,
+                resolution,
+                max_width,
+                fps,
+                format,
+                clip,
+                scroll_speed,
+                duration,
+                max_seconds,
+                output_path,
+            } => {
+                use super::capture::record::{DEFAULT_SECONDS, RecordAsk, RecordMode};
+                let ask = (|| {
+                    Ok::<_, String>(RecordAsk {
+                        device,
+                        width,
+                        height,
+                        resolution,
+                        max_width,
+                        fps: fps.unwrap_or(30),
+                        format: sawit_core::browser::capture::VideoFormat::parse(
+                            format.as_deref().unwrap_or("mp4"),
+                        )?,
+                        mode: RecordMode::parse(mode.as_deref().unwrap_or("view"))?,
+                        target,
+                        clip,
+                        scroll_speed,
+                        duration,
+                        max_seconds: max_seconds.unwrap_or(DEFAULT_SECONDS),
+                        output_path,
+                    })
+                })();
+                match ask {
+                    Ok(ask) => return self.record_start(ask, reply, cx),
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                }
+            }
+            BrowserOp::RecordStop => return self.record_stop(reply, cx),
+            BrowserOp::RecordStatus => self.record_status(),
             BrowserOp::Screenshot { target, mesurer } => {
                 let mode = match MesurerShot::named(mesurer.as_deref()) {
                     Ok(mode) => mode,

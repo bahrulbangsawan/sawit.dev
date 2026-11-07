@@ -31,6 +31,8 @@ tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# GIF recordings (already in the tree through image).
+gif = "0.14"
 sawit-core = { path = "../core" }
 # `sawit-mcp` is built into this binary; see `invoked_as_mcp` in main.rs.
 sawit-mcp = { path = "../mcp" }
@@ -45,12 +47,12 @@ log = "0.4"
 env_logger = { version = "0.11", default-features = false }
 # In-app video: AVPlayer frames painted through GPUI's surface().
 objc2 = "0.6"
-objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "objc2-core-foundation", "objc2-core-media", "objc2-core-video"] }
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "AVAssetWriter", "AVAssetWriterInput", "AVMediaFormat", "AVVideoSettings", "objc2-core-foundation", "objc2-core-media", "objc2-core-video"] }
 # CFNotificationCenter (and CFDictionary, which its callbacks name): the Design panel hears when
 # fonts are installed or removed (browser::engine::font_changes).
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFString", "CFCGTypes", "CFDictionary", "CFNotificationCenter"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
-objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBuffer", "CVImageBuffer", "CVPixelBuffer"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "NSValue", "NSObject", "NSData", "NSGeometry", "NSRange", "NSArray"] }
 tokio.workspace = true
 tokio-postgres.workspace = true

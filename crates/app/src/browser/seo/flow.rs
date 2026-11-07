@@ -45,8 +45,15 @@ impl BrowserView {
         reply: Option<oneshot::Sender<OpResult>>,
         cx: &mut Context<Self>,
     ) {
-        let url = self.current_url();
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
+        let web = |u: &str| u.starts_with("http://") || u.starts_with("https://");
+        // A page that never loaded leaves WebKit at about:blank: the address asked for is
+        // scanned, so the panel says why it didn't answer.
+        let url = match self.current_url() {
+            u if web(&u) => u,
+            _ if web(&self.url) => self.url.clone(),
+            u => u,
+        };
+        if !web(&url) {
             self.seo_panel.update(cx, |p, cx| p.set_idle(cx));
             if let Some(reply) = reply {
                 let _ = reply.send(Err(format!(

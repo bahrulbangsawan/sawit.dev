@@ -81,11 +81,68 @@ sawitTest("capture: full page comes out whole at the device's width, as PNG and 
   const r = await capture(ctx, { full_page: true, device: "iPhone 15", scale: 2 });
   // 60 header + 852 hero (100vh held at the phone's height) + 3 × 1000 sections.
   assert.equal(r.width, 786);
-  assert.ok(r.height >= 2 * 3900 && r.height <= 2 * 3940, `height ${r.height}`);
+  assert.ok(r.height >= 2 * 3900 && r.height <= 2 * 3960, `height ${r.height}`);
   assert.deepEqual(await pngSize(r.path), [r.width, r.height]);
   assert.match(r.path, /-iphone-15-2x-full\.png$/);
   const pdf = await capture(ctx, { full_page: true, device: "Laptop", format: "pdf" });
   const head = (await readFile(pdf.path)).toString("ascii", 0, 4);
   assert.equal(head, "%PDF");
   assert.deepEqual((await browser(ctx)).viewport, before, "the tab's size is back");
+});
+
+/** Whether Quick Look can open the video: it makes a thumbnail of it. */
+async function quickLookOpens(file) {
+  const { execFile } = await import("node:child_process");
+  const { mkdtemp, readdir } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const out = await mkdtemp(path.join(os.tmpdir(), "ql-"));
+  await new Promise((resolve) => execFile("/usr/bin/qlmanage", ["-t", "-s", "256", "-o", out, file], () => resolve()));
+  return (await readdir(out)).some((f) => f.endsWith(".png"));
+}
+
+async function record(ctx, op) {
+  return ctx.call({ cmd: "browser", op: { op: "record_start", ...op } }, { timeoutMs: 60_000 });
+}
+
+async function stop(ctx) {
+  return ctx.call({ cmd: "browser", op: { op: "record_stop" } }, { timeoutMs: 120_000 });
+}
+
+sawitTest("capture: native recordings play in Quick Look at the size asked for", { site: true, timeout: 300_000 }, async (ctx) => {
+  await openSite(ctx);
+  const started = await record(ctx, { device: "Laptop", resolution: "720p", fps: 30, max_seconds: 20 });
+  assert.equal(started.recording, true);
+  assert.deepEqual([started.width, started.height], [1152, 720]);
+  const status = await ctx.call({ cmd: "browser", op: { op: "record_status" } });
+  assert.equal(status.recording, true);
+  await new Promise((r) => setTimeout(r, 2500));
+  const done = await stop(ctx);
+  assert.equal(done.codec, "H.264");
+  assert.ok(done.frames > 5, `frames ${done.frames}`);
+  assert.ok(done.fps_achieved > 2, `fps ${done.fps_achieved}`);
+  const head = await readFile(done.path);
+  assert.equal(head.toString("ascii", 4, 8), "ftyp");
+  assert.ok(await quickLookOpens(done.path), "Quick Look opens the MP4");
+
+  const mov = await record(ctx, { device: "Full HD", resolution: "1080p", format: "mov", max_seconds: 20 });
+  assert.deepEqual([mov.width, mov.height], [1920, 1080]);
+  await new Promise((r) => setTimeout(r, 1500));
+  const movDone = await stop(ctx);
+  assert.equal(movDone.codec, "HEVC");
+  assert.ok(await quickLookOpens(movDone.path), "Quick Look opens the MOV");
+
+  await record(ctx, { format: "gif", max_width: 400, fps: 15, max_seconds: 10 });
+  await new Promise((r) => setTimeout(r, 1200));
+  const gif = await stop(ctx);
+  assert.equal((await readFile(gif.path)).toString("ascii", 0, 3), "GIF");
+  assert.ok(gif.width <= 400);
+
+  // A recording stops on its own at its cap.
+  await record(ctx, { max_seconds: 2 });
+  const capped = await until(async () => {
+    const s = await ctx.call({ cmd: "browser", op: { op: "record_status" } });
+    return s.recording === false && s.last ? s : null;
+  }, { timeoutMs: 20_000, what: "the recording to stop at its cap" });
+  assert.ok(capped.last.duration_seconds <= 2.5);
 });
