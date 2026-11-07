@@ -15,6 +15,7 @@
 //!   pagezoom) from now on.
 //! - `bench`: `kind` pan, zoom or still, for `frames` frames at `speed`; `textures` false paints
 //!   the canvas alone; `marker` paints a bar beside the live view.
+//! - `present` / `close_present`: Present from frame `id` / closed (for the e2e specs).
 //! - `routes`: Add Routes from Dev Server's dialog: `do` open (as its menu item does), add (as its
 //!   Add button does), close, or nothing (its state); `untick` leaves those routes out.
 
@@ -50,6 +51,18 @@ impl BoardView {
             ("settle", Some(id)) => self.web_settle_op(op, id, cx),
             ("probe", Some(id)) => self.web_probe(id, op),
             ("reload", Some(id)) => self.web_reload(id),
+            // The e2e specs' way into Preview and Present, which no agent tool opens: they are
+            // the user's (B15).
+            ("present", Some(id)) => {
+                self.open_player(Some(id), cx);
+                Ok(json!(self.player.is_some()))
+            }
+            ("close_present", _) => {
+                self.player = None;
+                self.web_present(&[], None, cx);
+                cx.notify();
+                Ok(json!("closed"))
+            }
             (other, _) => Err(format!("unknown web action {other}")),
         };
         match reply {
