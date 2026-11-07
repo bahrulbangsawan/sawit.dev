@@ -7529,6 +7529,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre",
  "image",
+ "libc",
  "log",
  "notify",
  "objc2 0.6.5",
