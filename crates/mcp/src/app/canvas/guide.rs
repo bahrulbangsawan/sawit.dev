@@ -21,6 +21,40 @@ pub(super) fn text() -> Result<&'static str, String> {
         .ok_or_else(|| "This Sawit was built without its design guide.".to_string())
 }
 
+/// [`answer`], with the design lint's rules (B12) after the whole guide; `section` "lint" gives
+/// the rules alone.
+pub(super) fn with_lint(text: &str, section: Option<&str>) -> Result<String, String> {
+    let rules = lint_rules();
+    match section.map(str::trim) {
+        Some(s) if s.eq_ignore_ascii_case("lint") || s.eq_ignore_ascii_case("design lint") => {
+            Ok(rules)
+        }
+        None | Some("") => Ok(format!("{text}\n\n{rules}")),
+        Some(_) => answer(text, section),
+    }
+}
+
+/// The design lint's rules as a Markdown table: each rule, what it checks, its severity, and the
+/// guide section it comes from.
+fn lint_rules() -> String {
+    let mut out = String::from(
+        "## Design lint\n\ncanvas_lint runs these on a frame or the page; each write of a UI work \
+         answers a short summary. Fix every error before you say a design is done.\n\n\
+         | Rule | Checks | Severity | Guide section |\n|---|---|---|---|\n",
+    );
+    for rule in sawit_board::checks::lint::RULES {
+        let severity = match rule.severity {
+            sawit_board::checks::lint::Severity::Error => "error",
+            sawit_board::checks::lint::Severity::Warning => "warning",
+        };
+        out.push_str(&format!(
+            "| `{}` | {} | {severity} | {} |\n",
+            rule.id, rule.checks, rule.guide
+        ));
+    }
+    out
+}
+
 /// What a section's name finds among the headings.
 enum Found {
     One(usize),

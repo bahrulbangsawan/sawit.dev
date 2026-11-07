@@ -51,4 +51,6 @@ canvas_tab!(
     CanvasScreenGetArgs,
     CanvasScreenExportArgs,
     CanvasAddRoutesArgs,
+    CanvasLintArgs,
+    CanvasStarterArgs,
 );

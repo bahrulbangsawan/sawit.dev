@@ -177,6 +177,8 @@ fn every_tool_is_routed() {
         "canvas_handoff",
         "canvas_tabs",
         "canvas_settings",
+        "canvas_lint",
+        "canvas_starter_system",
         // browser
         "browser_navigate",
         "browser_snapshot",

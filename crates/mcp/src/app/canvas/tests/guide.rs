@@ -45,9 +45,16 @@ fn heading_line(name: &str) -> &'static str {
 async fn the_guide_is_the_skill_sawit_ships() {
     let whole = guide(None).await;
     assert_ne!(whole.is_error, Some(true), "{}", said(&whole));
-    assert_eq!(said(&whole), skill_md());
+    // The skill whole, then the design lint's rules (B12).
+    let text = said(&whole);
+    assert!(text.starts_with(skill_md()), "the guide is the skill");
+    assert!(
+        text.ends_with(&said(&guide(Some("lint")).await)),
+        "then the lint's rules"
+    );
+    assert!(text.contains("| `col.6` |"));
     // A blank section is none.
-    assert_eq!(said(&guide(Some("  ")).await), skill_md());
+    assert_eq!(said(&guide(Some("  ")).await), text);
 }
 
 /// A section is the one its heading names, in any case or form, with the Checklist section after

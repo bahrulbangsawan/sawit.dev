@@ -78,6 +78,7 @@ impl Sawit {
             + Self::terminal_router()
             + Self::panels_router()
             + Self::canvas_router()
+            + Self::canvas_lint_router()
     }
 
     /// Sends `command` to the running app; the reply's JSON or its error.

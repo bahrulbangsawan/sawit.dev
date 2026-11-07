@@ -24,7 +24,7 @@ export function Binary() {
           </div>
           <div>
             <dt>Tools for agents</dt>
-            <dd>170</dd>
+            <dd>172</dd>
           </div>
           <div>
             <dt>Editor languages</dt>
