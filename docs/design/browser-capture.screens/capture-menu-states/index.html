@@ -1,0 +1,60 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+:root{--bg:#282c34;--fg:#dcdfe4;--muted:#8b919c;--line:#3a3f4b;--soft:#2f343e;--pop:#21252b;--accent:#61afef;--danger:#e06c75;--page:#1e2127}
+*{box-sizing:border-box}body{margin:0;background:var(--page);font:12px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--fg);padding:24px}
+.cap{font-size:11px;color:var(--muted);margin:0 0 6px}
+.row{display:flex;gap:24px;align-items:flex-start;margin-bottom:24px}
+.win{width:700px;background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.tabs{height:30px;display:flex;border-bottom:1px solid var(--line);background:#21252b}
+.tab{display:flex;align-items:center;gap:6px;padding:0 6px 0 8px;width:200px;border-right:1px solid var(--line)}
+.tab.on{background:var(--bg)}.fav{width:14px;height:14px;border-radius:3px;background:#e11d48;flex:none}
+.rec{width:8px;height:8px;border-radius:50%;background:var(--danger);flex:none}
+.t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mono{font-variant-numeric:tabular-nums;color:var(--danger)}
+.tb{height:36px;display:flex;align-items:center;gap:4px;padding:0 8px;border-bottom:1px solid var(--line)}
+.ib{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;color:var(--muted)}.ib.on{background:var(--soft);color:var(--fg)}
+.addr{flex:1;height:24px;border:1px solid var(--line);border-radius:6px;padding:0 8px;display:flex;align-items:center;color:var(--fg)}
+.strip{height:44px;display:flex;align-items:center;gap:8px;padding:0 8px 0 12px;border-bottom:1px solid var(--line);background:var(--soft)}
+.thumb{width:48px;height:30px;border-radius:4px;background:linear-gradient(#fde68a,#e11d48);flex:none;outline:1px solid rgba(255,255,255,.1);outline-offset:-1px}
+.meta{flex:1;min-width:0}.meta b{font-weight:500;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.meta span{color:var(--muted)}
+.btn{height:28px;padding:0 8px;border-radius:6px;display:inline-flex;align-items:center;gap:6px;color:var(--fg)}
+.btn.out{border:1px solid var(--line)}.btn.stop{background:var(--danger);color:#fff}
+.page{height:260px;background:#fff}
+.menu{width:260px;background:var(--pop);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.h{font-size:11px;font-weight:600;color:var(--muted);padding:8px 8px 4px}
+.it{height:28px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:6px}.it:first-of-type{}
+.it .i{width:16px;text-align:center;color:var(--muted)}.it .k{margin-left:auto;color:var(--muted)}.it.hov{background:var(--soft)}
+.sep{height:1px;background:var(--line);margin:4px 0}
+</style></head><body>
+<div class="row">
+ <div><p class="cap">Capture menu (toolbar camera button)</p>
+  <div class="menu">
+   <div class="h">Screenshot</div>
+   <div class="it hov"><span class="i">◫</span>Visible area<span class="k">⇧⌘5</span></div>
+   <div class="it"><span class="i">⇣</span>Full page</div>
+   <div class="it"><span class="i">⌖</span>Element…</div>
+   <div class="it"><span class="i">▦</span>Phone, tablet, laptop, desktop</div>
+   <div class="sep"></div>
+   <div class="h">Record</div>
+   <div class="it"><span class="i">●</span>Record visible area</div>
+   <div class="it"><span class="i">▶</span>Record full page</div>
+   <div class="sep"></div>
+   <div class="it"><span class="i">▭</span>Size: This tab<span class="k">›</span></div>
+   <div class="it"><span class="i">⎚</span>Video: 1080p MP4<span class="k">›</span></div>
+   <div class="it"><span class="i">📁</span>Open captures folder</div>
+  </div></div>
+ <div><p class="cap">After a capture: the capture bar under the toolbar</p>
+  <div class="win"><div class="tabs"><div class="tab on"><span class="fav"></span><span class="t">Search fixture page</span>✕</div></div>
+   <div class="tb"><span class="ib">‹</span><span class="ib">›</span><span class="ib">↻</span><span class="addr">localhost:3000/pricing</span><span class="ib on">◉</span><span class="ib">✎</span></div>
+   <div class="strip"><span class="thumb"></span><div class="meta"><b>localhost-3000-iphone-15-3x-full.png</b><span>1179 × 7884 px · 2.1 MB · iPhone 15, full page</span></div>
+    <span class="btn out">⧉ Copy</span><span class="btn out">⌕ Reveal in Finder</span><span class="btn out">↗ Open</span><span class="ib">✕</span></div>
+   <div class="page"></div></div></div>
+</div>
+<div class="row">
+ <div><p class="cap">While recording: timer on the tab, the bar says what and how to stop</p>
+  <div class="win"><div class="tabs"><div class="tab on"><span class="rec"></span><span class="t">Search fixture page</span><span class="mono">0:12</span></div></div>
+   <div class="tb"><span class="ib">‹</span><span class="ib">›</span><span class="ib">↻</span><span class="addr">localhost:3000/pricing</span><span class="ib on" style="color:var(--danger)">■</span><span class="ib">✎</span></div>
+   <div class="strip"><span class="rec"></span><div class="meta"><b>Recording the full page · 0:12</b><span>1080 × 1920 MP4 · stops by itself at 0:30</span></div><span class="btn stop">■ Stop recording</span></div>
+   <div class="page"></div></div></div>
+ <div><p class="cap">Closing a recording tab asks first</p>
+  <div class="menu" style="width:320px;padding:16px"><b style="font-size:14px">Stop the recording and close the tab?</b><p style="color:var(--muted);margin:6px 0 12px">The video so far is saved to the captures folder.</p><div style="display:flex;justify-content:flex-end;gap:8px"><span class="btn out">Keep recording</span><span class="btn stop">Stop and close</span></div></div></div>
+</div>
+</body></html>

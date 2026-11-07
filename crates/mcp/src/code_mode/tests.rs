@@ -111,7 +111,10 @@ fn search_finds_functions_by_what_they_do() {
 fn areas_group_names_by_their_noun() {
     use super::api::area_of;
     assert_eq!(area_of("git_status"), "git");
-    assert_eq!(area_of("list_prompts"), "prompts");
+    assert_eq!(area_of("list_prompts"), "prompt");
+    assert_eq!(area_of("create_prompt"), "prompt");
+    assert_eq!(area_of("stop_processes"), "process");
+    assert_eq!(area_of("list_instances"), "instance");
     assert_eq!(area_of("list_ssh_hosts"), "ssh");
     assert_eq!(area_of("canvas_screen_write"), "canvas");
     assert_eq!(area_of("query"), "query");

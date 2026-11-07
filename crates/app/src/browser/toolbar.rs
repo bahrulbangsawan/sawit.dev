@@ -99,6 +99,7 @@ impl BrowserView {
             })
             .child(device_button(&self.viewport, weak.clone()))
             .children(responsive_button(&self.viewport, weak))
+            .child(self.capture_button(cx))
             .child(
                 Button::new("browser-annotate")
                     .ghost()

@@ -15,6 +15,11 @@ Before you design, build, restyle or review any UI on the canvas, call `canvas_d
 
 A screen, page or app view is a screen on the canvas: `canvas_begin {kind: "screen", name, frame, steps}`, then `canvas_screen_write` with its HTML (the whole page, or edits) and files. Each write renders on the canvas, and its answer lists the design standard's machine checks (contrast, target and text sizes, spacing, alt text, labels, focus, overflow), each failure with its rule and the fix: fix them before you finish with `canvas_progress {status: "done"}`. `canvas_screen_get` reads a screen back with a PNG; `canvas_screen_export` writes it as HTML or React. The first UI work of a session answers with the standard's digest; name parts in `steps` (Form, Table, States) to get their sections. Vector frames (`canvas_command`, `canvas_add_elements`) are for components, diagrams, sketches the user asked for and illustrations.
 
+## Systems and lint
+
+- `canvas_starter_system` lays out a starter design system (tokens as variables, Light and Dark, and Button, Input and Card components) so a design never starts from nothing; build screens from its components.
+- `canvas_lint` checks a frame (`id`), a work's frame (`work`) or the page against the design standard: off-token values, copies that should be components, uneven spacing, placeholder copy, generic generated looks and the machine checks, each with its fix. Its `status` says where the file is in the workflow and the next step. Run it before you call a design done, and fix every error.
+
 ## Diagrams
 
 - `canvas_add_diagram` draws Mermaid syntax (`source`: flowchart, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, architecture-beta, C4Context, gantt, mindmap and more) as shapes the user can edit; `x` and `y` place it. It lays out offline.
@@ -32,6 +37,13 @@ A screen, page or app view is a screen on the canvas: `canvas_begin {kind: "scre
 - `canvas_export` writes the page on show as SVG or PNG.
 - `file` works on another `.sawit` file (a design file) or an `.excalidraw` file instead of the project's canvas.
 - `canvas_clear` and `canvas_load` replace a whole page or canvas (a `.bak` is kept): only when asked.
+
+## Canvases, routes, settings and handoff
+
+- `canvas_tabs` lists the project's canvases (each a `.sawit` file in `.nyawit/` with a tab of its own), and opens (a new one by `tab` name), closes, activates or renames one. `show` brings it forward; without it the canvas opens behind the user's tab.
+- `canvas_add_routes` lays a dev server's routes out as live frames, a row per route and a frame per viewport (`url`, `routes`, `viewports`), each showing the page as WebKit renders it.
+- `canvas_settings` reads or changes how builds play (`build_animation` full, fast or off; `sound`; `subagent_cursors`): turn the animation down for a long batch, and only when the user agrees, since they are the user's View settings.
+- `canvas_handoff` hands frames or screens to code (`id`, `work` or `screen`): it writes the files and a prompt, and with `agent` (claude-code, codex, gemini, opencode) starts that agent in a new terminal tab with the prompt.
 
 Show the canvas to the user with `app_open_page` (`page`: canvas).
 

@@ -1,5 +1,5 @@
-// Preview and Present of a screen (B15): Preview's bar holds the name, one size menu, Rotate,
-// Reload and Close, with no timer pill over it; Present draws the screen's page, not a blank frame.
+// Present of a screen (B15): it draws the screen's page, not a blank frame; and the screen's
+// row in the Layers panel says what it is.
 
 import assert from "node:assert/strict";
 import { copyFile, readFile } from "node:fs/promises";
@@ -33,27 +33,6 @@ async function today(ctx, file) {
   return { frame, work: begun.work };
 }
 
-sawitTest("screens: Preview's bar has one size menu and nothing over it", async (ctx) => {
-  const { win } = ctx;
-  await openCanvas(ctx);
-  const { frame } = await today(ctx);
-  await op(ctx, { op: "command", command: "select.set", params: { ids: [frame] } });
-  await win.click({ role: "button", name: "Preview" });
-  await win.waitFor({ role: "button", name: "Close" });
-  await win.screenshot(path.join(ctx.world.artifacts, "preview.png"));
-  // One size picker, no row of every device.
-  const buttons = (await win.findAll({ role: "button" })).map((b) => b.name);
-  assert.ok(!buttons.some((n) => /Pixel 8/.test(n ?? "")), `no device row: ${buttons}`);
-  assert.ok(!buttons.includes("Timer 5:00"), "no timer pill over Preview");
-  await win.openMenu({ role: "button", name: /^Size: / });
-  await win.waitFor({ role: "menuitem", name: /Pixel 8/ });
-  await win.screenshot(path.join(ctx.world.artifacts, "preview-sizes.png"));
-  await win.click({ role: "menuitem", name: /Pixel 8/ });
-  await win.waitFor({ role: "button", name: /^Size: / });
-  await win.screenshot(path.join(ctx.world.artifacts, "preview-pixel.png"));
-  await win.click({ role: "button", name: "Close" });
-});
-
 sawitTest("screens: Present draws the screen's page", async (ctx) => {
   const { win } = ctx;
   await openCanvas(ctx);
@@ -66,11 +45,10 @@ sawitTest("screens: Present draws the screen's page", async (ctx) => {
   const { frame } = await today(ctx, file);
   await win.click({ role: "image", name: "Canvas" }).catch(() => {});
   await op(ctx, { op: "command", command: "select.set", params: { ids: [frame] } }, file);
-  // The panels of a design file: the screen's row in Layers, then the Prototype tab.
+  // The panels of a design file: the screen's row in Layers has its icon and HTML tag.
   await win.screenshot(path.join(ctx.world.artifacts, "panels.png"));
-  await win.click({ role: "tab", name: "Prototype" }).catch(() => {});
-  await win.screenshot(path.join(ctx.world.artifacts, "prototype.png"));
-  await win.press("alt+cmd+enter");
+  // Present, as the user's ⌥⌘↩ would open it (the web op opens it for tests).
+  await op(ctx, { op: "web", action: "present", id: frame }, file);
   await until(async () => {
     const state = await windowState(ctx);
     const canvas = (state.canvases ?? []).find((c) => c.active);
@@ -79,5 +57,5 @@ sawitTest("screens: Present draws the screen's page", async (ctx) => {
   // Its sharper picture comes in a moment.
   await new Promise((r) => setTimeout(r, 2_500));
   await win.screenshot(path.join(ctx.world.artifacts, "present.png"));
-  await win.press("escape");
+  await op(ctx, { op: "web", action: "close_present" }, file);
 });

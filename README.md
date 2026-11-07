@@ -486,21 +486,26 @@ explained. A conflict on the same address can't be forced.
 
 #### Sawit Skills
 
-Sawit Skills teach the coding agents on your Mac to use Sawit: local PostgreSQL through Sawit's instances instead of
-Docker, Sawit's browser instead of Chrome, Playwright or Puppeteer for testing, the canvas for designs and diagrams,
-and Sawit's terminals and Run panel for dev servers, ports and SSH, all through Sawit's MCP server. **Install Skills**
-in the footer, beside **Install CLI**, does it in one click:
+Sawit Skills teach the coding agents on your Mac to use all of Sawit, through Sawit's MCP server: local PostgreSQL
+instead of Docker, terminals and the Run panel for dev servers and ports, SSH, git, Sawit's browser instead of Chrome,
+Playwright or Puppeteer, the canvas for designs and diagrams, new projects, dev tools, MCP servers and skills, the
+prompt library, and the app itself. **Install Skills** in the footer, beside **Install CLI**, does it in one click:
 
-- **The Sawit pack**, Built In like Canvas Design, into every agent's skills folder: `sawit` (an overview that sends
-  each job to the right skill), `sawit-databases` (`create_instance`, `start_instance`, `query`, `execute_sql`,
-  `write_env` for `DATABASE_URL`, `detect_databases`, D1 and SQLite targets), `sawit-browser-testing` (the
-  `browser_*` tools: navigate, snapshot, click, type, screenshot, console, network, resize, annotations),
-  `sawit-canvas` (`canvas_design_guide` first, diagrams with `canvas_add_diagram`) and `sawit-terminal`
-  (`terminal_run`, `app_run_script`, `list_ports`, `stop_processes`, SSH). Each says what to do when the sawit MCP
-  server isn't connected. Their sources are in [skills/](https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills).
+- **The Sawit pack** (v2), Built In like Canvas Design, into every agent's skills folder: `sawit` (sends each job to
+  the right skill, the ground rules, code mode, and the `sawit` command when the MCP server isn't connected),
+  `sawit-databases` (instances, SQL, `DATABASE_URL`, D1 and SQLite, exports, backups, connections),
+  `sawit-terminal` (`terminal_run` and terminal reuse, the Run panel, ports, the network, Workers dev servers),
+  `sawit-ssh` (hosts, `ssh_exec`, sessions), `sawit-git` (status to push, the GitHub page), `sawit-browser-testing`
+  (the `browser_*` tools, tabs, SEO, design, Annotate), `sawit-canvas` (`canvas_design_guide` first, screens, lint,
+  diagrams, handoff), `sawit-project` (New Project, dev tools, MCP servers, skill packs, config files and shell
+  sync), `sawit-prompts` (the library and its GitHub sync) and `sawit-app` (windows, pages, tabs, keys, file
+  search, agent accounts, permissions). Every tool the server has is taught by one of them (a test holds them to
+  it), and each says what works without the app and what to do when the sawit MCP server isn't connected. Their
+  sources are in [skills/](https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills); the map of tools and
+  commands to skills is in `docs/notes/2026-11-07-skills-map.md`. A v1 install shows an update.
 - **A short block** in each agent's own instruction file, the one it reads for every project, between
   `<!-- sawit:start -->` and `<!-- sawit:end -->`, with its version on the line after the start (`<!-- Sawit Skills
-  v1: … -->`): prefer Sawit for these jobs, which skill to load for each, and that the sawit MCP server has the tools.
+  v2: … -->`): prefer Sawit for these jobs, which skill to load for each, and that the sawit MCP server has the tools.
   The files, from each agent's docs: Claude Code's `~/.claude/CLAUDE.md` and each profile's
   (`CLAUDE_CONFIG_DIR/CLAUDE.md`), Codex's `~/.codex/AGENTS.md` (its `AGENTS.override.md` when that's the one Codex
   reads), Gemini CLI's and Antigravity's `~/.gemini/GEMINI.md`, Qwen Code's `~/.qwen/QWEN.md`, Amp's
@@ -795,9 +800,26 @@ Sawit, without a menu bar app.
     `.nyawit/design/<host>/` (with no project, to `~/Downloads/sawit-design/<host>/`); a dev server's folder keeps its
     port, as `localhost-5173`. Exporting again replaces that folder, a `DESIGN.md` you edited included; an agent's
     export does that only when it passes `replace: true`.
+- Each tab shows its page's **favicon** (the page's own icon links, else `/favicon.ico`, fetched in Rust and
+  cached per site), the globe when it has none.
+- **SEO**, the toolbar's magnifier with a check, scans the page for search engines, link previews and agents:
+  an **Overview** (the search and sharing score, what to fix, what the page says about itself), **Previews** of the
+  link as a search result and on WhatsApp, LinkedIn, Facebook and X, every **Check** with its evidence, fix and
+  spec, and **Agents**: the agent-readiness checks (discovery files, Markdown for agents, AI crawler rules, the MCP
+  server, OAuth metadata, page tools, the accessibility tree…) scored per layer with a grade and an Essentials
+  score, for a content site, an API or app, or both. **Copy fix prompt** hands a check to an agent. The site's
+  files are fetched by Sawit, not the page, so local dev servers work the same as live sites; an optional
+  external score asks an outside scanner, for public addresses only.
+- **Capture**, the camera button: a screenshot of the visible area or the full page (lazy images loaded, sticky
+  headers once), the page at a phone, tablet, laptop and desktop size at once, or a recording of the visible area
+  or a scroll through the full page (MP4, MOV or GIF, 720p to 4K), at the tab's size or any of twenty device
+  presets. Pixels follow the device and scale picked, not the window or the screen. The bar under the toolbar
+  shows the capture with **Copy**, **Reveal in Finder** and **Open**; while a recording runs the tab shows a red
+  dot and the time, and closing it asks first. Files go to the project's `.nyawit/annotations/<date>/`, named
+  with the site, device and scale (`example.com-iphone-15-3x-full.png`).
 - AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
   click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
-  requests and screenshots. They can also set a device size, read your annotations, and inspect, read or export
+  requests and screenshots (any device size, full page, PDF) and recordings. They can also set a device size, read your annotations, and inspect, read or export
   the page's design. An agent uses its own project's browser (the project it names, else the one it runs in),
   even while you look at another project of the window, and in the background: only opening a page, a
   screenshot or a device size brings it forward.

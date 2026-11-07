@@ -1,6 +1,6 @@
 ---
 name: sawit-browser-testing
-description: Test and debug web apps in Sawit's browser instead of Chrome, Playwright or Puppeteer. Use it to check that a page or flow works after a change, reproduce a UI bug, fill and submit a form, read console errors and failed requests, try a phone or tablet size, take a screenshot, or act on the notes the user left on a page, through the sawit MCP server's browser tools (browser_navigate, browser_snapshot, browser_click, browser_console).
+description: Test and debug web apps in Sawit's browser instead of Chrome, Playwright or Puppeteer. Use it to check that a page or flow works after a change, reproduce a UI bug, fill and submit a form, read console errors and failed requests, try a phone or tablet size, take a screenshot, check SEO and agent readiness, or act on the notes the user left on a page, through the sawit MCP server's browser tools (browser_navigate, browser_snapshot, browser_click, browser_console).
 ---
 
 # Testing web apps in Sawit's browser
@@ -21,9 +21,11 @@ Sawit has a WebKit browser tab for each project that you drive and the user sees
 
 - `browser_resize` with a `device` (iPhone 15, Pixel 8, iPad mini, Laptop, Desktop), or a `width` and `height`; responsive fills the tab again.
 - `browser_annotations` reads the notes the user drew on the page: what to change, with each element's selector, source file and styles. Read them when the user says they left notes, and pass `clear` once you have dealt with them.
-- `browser_inspect` gives one element's box, type, colors and contrast; `browser_design` the page's colors, fonts and tokens.
-- `browser_screenshot` takes `full_page`, a `device` (or `devices` for several sizes in one call), `width`/`height`, `scale`, `format` (png, jpeg, pdf) and `clip`; `browser_record` records a full-page scroll-through in one call, `browser_record_start`/`browser_record_stop` record the view, an element or a region as MP4, MOV or GIF.
-- `browser_seo` scans a page (the tab's, or any `url`, local ones too) for SEO and agent readiness: each check with pass, warning or fail, the evidence and a fix; `scan_type` and `checks` narrow it.
+- `browser_inspect` gives one element's box, type, colors and contrast; `browser_design` the page's colors, fonts and tokens (`part`); `browser_export_design` writes the site's design system (DESIGN.md, tokens, theme CSS) to `.nyawit/design/<host>/`; a folder with an earlier export needs `replace`: ask first.
+- `browser_screenshot` takes `full_page`, a `device` (or `devices` for several sizes in one call), `width`/`height`, `scale`, `format` (png, jpeg, pdf) and `clip`; `browser_record` records a full-page scroll-through in one call, `browser_record_start`/`browser_record_stop` record the view, an element or a region as MP4, MOV or GIF, and `browser_record_status` says whether a recording runs, for how long and to which file.
+- `browser_tabs` lists the project's browser tabs and opens, closes or activates one. Work in a tab of your own (`tab`: its id on every browser tool) to leave the user's page alone; `show` brings it forward. A tab not on show is woken off screen when you use it.
+- `browser_seo` scans a page for SEO and agent readiness (`url`, by default the page on show; `scan_type` all, content or api; `checks`; `format`): each check passes, warns or fails with evidence and a fix, scored with a grade. `external` also asks an outside scanner, only for public addresses: ask the user first.
+- `browser_mesurer` is Annotate's page tools (inspect, guides, rulers, X-ray, comments): `action` state reads what the user left there, open or close turns it on or off, set and clear change it. Change the user's notes only when asked.
 - What is typed into password fields reads as [redacted] in `browser_network`; don't look for it another way.
 - Report what you checked and what failed, with the console and network lines.
 

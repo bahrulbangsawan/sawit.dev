@@ -221,7 +221,9 @@ impl Workspace {
                 files.push(file.clone());
             }
         }
-        let boards: Vec<_> = self.boards.iter().filter_map(|b| b.upgrade()).collect();
+        let boards: Vec<_> = (0..self.tabs.len())
+            .filter_map(|ix| self.board_at(ix))
+            .collect();
         json!(
             files
                 .iter()
@@ -233,7 +235,10 @@ impl Workspace {
                         "active": active.as_ref() == Some(f),
                     });
                     // An open canvas's view: Follow agent, Present and Preview (B4.1, B15).
-                    if let Some(board) = boards.iter().find(|b| b.read(cx).path() == f.as_path()) {
+                    let same = |a: &Path, b: &Path| {
+                        a == b || std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok()
+                    };
+                    if let Some(board) = boards.iter().find(|b| same(b.read(cx).path(), f)) {
                         entry["view"] = board.read(cx).describe_view();
                     }
                     entry

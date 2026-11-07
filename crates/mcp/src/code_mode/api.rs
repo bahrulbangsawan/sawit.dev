@@ -267,14 +267,29 @@ pub fn area_of(name: &str) -> &str {
     let first = parts.next().unwrap_or(name);
     if VERBS.contains(&first) {
         let rest = &name[first.len()..].trim_start_matches('_');
-        // `list_ssh_hosts` → `ssh`, `install_dev_tools` → `dev`: the noun's first word.
-        return rest
+        // `list_ssh_hosts` → `ssh`, `install_dev_tools` → `dev`: the noun's first word, one
+        // area for `list_prompts` and `create_prompt`.
+        let noun = rest
             .split('_')
             .next()
             .filter(|s| !s.is_empty())
             .unwrap_or(first);
+        return singular(noun);
     }
     first
+}
+
+/// `prompts` → `prompt`, `processes` → `process`, `instances` → `instance`.
+fn singular(noun: &str) -> &str {
+    if let Some(stem) = noun.strip_suffix("es")
+        && stem.ends_with("ss")
+    {
+        return stem;
+    }
+    match noun.strip_suffix('s') {
+        Some(stem) if stem.len() > 2 && !stem.ends_with('s') => stem,
+        _ => noun,
+    }
 }
 
 fn required(schema: &Map<String, Value>) -> Vec<&str> {
