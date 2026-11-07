@@ -15,7 +15,7 @@ export function Trio() {
         <div>
           <h2>Agents welcome</h2>
           <p>
-            <code>sawit-mcp</code> gives AI agents 169 tools. Destructive ones ask for the name again.
+            <code>sawit-mcp</code> gives AI agents 170 tools. Destructive ones ask for the name again.
           </p>
         </div>
       </div>

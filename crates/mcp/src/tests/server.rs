@@ -114,6 +114,7 @@ fn every_tool_is_routed() {
         "use_agent_account",
         "open_agent_account",
         "agent_account_sessions",
+        "account_pool",
         "sync_agent_settings",
         "backup_prompts",
         "restore_prompts",
