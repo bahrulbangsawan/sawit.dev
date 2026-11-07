@@ -7,6 +7,7 @@
 const READ_ONLY: &[&str] = &[
     "list_agent_accounts",
     "agent_account_sessions",
+    "account_pool",
     "list_instances",
     "instance_logs",
     "check_port",

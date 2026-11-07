@@ -71,7 +71,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🎨 **Canvas to code** | A whiteboard and design canvas in tabs. Export an artboard as HTML or React, send it to your coding agent, and watch agents build on it live, each with its own cursor. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps, `sawit pupuk` upgrades dev tools and `sawit account use work` switches Claude Code accounts. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (169 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (170 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
 | ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn/ui and shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop, Design to Code and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -1671,7 +1671,7 @@ sawit account add client --dir ~/.claude-client   # add an account; login, logou
 
 <img src="https://files.sawit.dev/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 169 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 170 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
@@ -1696,7 +1696,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | SSH | `list_ssh_hosts`, `add_ssh_host`, `update_ssh_host`, `remove_ssh_host`, `probe_ssh_host`, `ssh_exec` |
 | Run commands | `list_scripts`, `save_command`, `remove_command` |
 | Git | `git_status`, `git_log`, `git_diff`, `git_show`, `git_branches`, `git_stage`, `git_unstage`, `git_commit`, `git_switch`, `git_fetch`, `git_pull` (fast-forward only), `git_push` (sets the upstream the first time, never forces): the Git tab's buttons, with your own git credentials first and Sawit's GitHub sign-in for github.com |
-| Agent accounts | `list_agent_accounts`, `agent_account_usage` (5h/7d as Claude Code reported it; `check` asks for current numbers), `use_agent_account`, `open_agent_account` (a Sawit terminal running `claude` as the account), `agent_account_sessions`, `sync_agent_settings` (status, run). Claude Code's accounts on the Accounts page, formerly Claude Pool; never a sign-in or a removal |
+| Agent accounts | `list_agent_accounts`, `agent_account_usage` (5h/7d as Claude Code reported it; `check` asks for current numbers), `use_agent_account`, `open_agent_account` (a Sawit terminal running `claude` as the account), `agent_account_sessions`, `sync_agent_settings` (status, run), `account_pool` (the pool across Claude Code and Codex accounts: overview, detailed, compare with the account that has the most room now and why, timeline, wallet, analytics). Claude Code's accounts on the Accounts page, formerly Claude Pool; never a sign-in or a removal |
 | Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt`, `backup_prompts` / `restore_prompts` (the library in a private GitHub repository, `sawit-prompts` by default, one Markdown file per prompt; prompts changed on both sides are listed, not overwritten) |
 | Files | `search_files` |
 | Config files | `list_config_files` (the Config Files tab's shell and coding-agent config files, as paths: never their contents), `shell_files_sync` (the shell files against the private `sawit-shell-config` repository: `status` per file, `upload` the files named, `download` the files named, each backed up beside itself first; with the user's GitHub sign-in) |

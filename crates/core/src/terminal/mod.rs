@@ -12,7 +12,7 @@ mod tab;
 
 pub use agents::{
     AgentKind, ProcessArgs, command_name, detect, names_phrase, parse_procargs, process_args,
-    process_name, prompt_args, start_with_prompt,
+    process_name, profile_env, prompt_args, start_with_prompt,
 };
 pub use input::{
     KeyInput, Modes, MouseAction, MouseButton, ScrollAccumulator, cd_bytes, drop_bytes,
