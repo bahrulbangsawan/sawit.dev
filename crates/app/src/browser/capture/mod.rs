@@ -2,7 +2,9 @@
 //! for the shot, drawn afresh by WebKit at the scale asked for (so a 3× phone shot is 3× on a 1×
 //! screen too), the view, an element or a clip of it, as PNG or JPEG, written to the project's
 //! screenshot folder with the device and size in its name. The tab's own size comes back after.
-//! The numbers are `sawit_core::browser::capture`'s.
+//! The numbers are `sawit_core::browser::capture`'s. Full-page captures are [`full`]'s.
+
+mod full;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -29,6 +31,7 @@ const STEP: Duration = Duration::from_secs(20);
 #[derive(Clone, Debug, Default)]
 pub struct CaptureAsk {
     pub target: Target,
+    pub full_page: bool,
     pub device: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -62,6 +65,8 @@ pub struct Captured {
     pub device: String,
     pub bytes: u64,
     pub preview_png: Option<Vec<u8>>,
+    /// What the capture had to do differently (a page cut at the height cap).
+    pub notes: Vec<String>,
 }
 
 impl Captured {
@@ -76,6 +81,7 @@ impl Captured {
             "device": self.device,
             "bytes": self.bytes,
             "preview_png_base64": self.preview_png.as_deref().map(base64_encode),
+            "notes": self.notes,
         })
     }
 }
@@ -167,8 +173,14 @@ impl BrowserView {
                 return;
             }
         };
-        if ask.format == ImageFormat::Pdf {
+        if ask.format == ImageFormat::Pdf && !ask.full_page {
             let _ = reply.send(Err("PDF is for full_page captures.".into()));
+            return;
+        }
+        if ask.full_page && (!ask.target.is_empty() || ask.clip.is_some()) {
+            let _ = reply.send(Err(
+                "full_page captures the whole page: leave ref, selector and clip out.".into(),
+            ));
             return;
         }
         let turn = self.shots.enter();
@@ -274,7 +286,7 @@ pub(in crate::browser) fn show_overlays(
 }
 
 /// The CSS size the page lays out at now: the device's, else the tab's.
-fn css_size(view: &BrowserView) -> (u32, u32) {
+pub(super) fn css_size(view: &BrowserView) -> (u32, u32) {
     match &view.viewport {
         ViewportMode::Fixed { width, height, .. } => (*width, *height),
         ViewportMode::Responsive => view.bounds.map_or((1024, 768), |b| {
@@ -287,7 +299,7 @@ fn css_size(view: &BrowserView) -> (u32, u32) {
 }
 
 /// The name a capture gives its size: the device's, else `responsive` or `W x H`.
-fn size_name(mode: &ViewportMode) -> String {
+pub(super) fn size_name(mode: &ViewportMode) -> String {
     match mode {
         ViewportMode::Fixed { name: Some(n), .. } => n.clone(),
         ViewportMode::Fixed { width, height, .. } => format!("{width}x{height}"),
@@ -313,7 +325,11 @@ async fn capture(
         _ => None,
     });
     settle_width(this, want_width, cx).await;
-    let result = shot(this, &ask, cx).await;
+    let result = if ask.full_page {
+        full::full_page(this, &ask, cx).await
+    } else {
+        shot(this, &ask, cx).await
+    };
     if let Some(old) = old {
         let _ = this.update(cx, |this, cx| this.set_viewport(old, cx));
     }
@@ -420,5 +436,6 @@ async fn shot(
         device,
         bytes: written.3,
         preview_png: written.4,
+        notes: Vec::new(),
     })
 }

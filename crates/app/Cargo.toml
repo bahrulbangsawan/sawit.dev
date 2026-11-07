@@ -57,7 +57,7 @@ tokio-postgres.workspace = true
 wry = { version = "0.57", default-features = false, features = ["os-webview", "devtools"] }
 # Browser tab screenshots (WKWebView takeSnapshot → PNG) and mesurer's content world (WKContentWorld,
 # a script message handler with reply); same versions as wry's.
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration", "WKContentWorld", "WKUserContentController", "WKScriptMessage", "WKScriptMessageHandlerWithReply", "WKFrameInfo", "WKWebViewConfiguration"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration", "WKPDFConfiguration", "WKContentWorld", "WKUserContentController", "WKScriptMessage", "WKScriptMessageHandlerWithReply", "WKFrameInfo", "WKWebViewConfiguration"] }
 # NSWorkspace: whether VoiceOver or Switch Control is on (workspace::screen_reader_on). mesurer's
 # captures (a snapshot's CGImage encoded off the main thread) and its colour sampler
 # (NSColorSampler, the colour in sRGB): browser::engine::{capture, color}.

@@ -43,6 +43,8 @@ html5ever = "0.27"
 markup5ever_rcdom = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "gif", "webp", "bmp"] }
 resvg = "0.46"
+# Full-page captures written in strips (already in the tree through image).
+png = "0.18"
 
 [target.'cfg(unix)'.dependencies]
 # Asks the PTY which process group is in the foreground.

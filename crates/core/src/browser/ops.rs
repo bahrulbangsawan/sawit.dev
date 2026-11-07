@@ -113,12 +113,15 @@ pub enum BrowserOp {
     /// A native capture at a chosen size (`browser::capture`): the view, an element (`target`) or
     /// a `clip` (x, y, width, height in CSS px), as the tab shows it or laid out as `device` or
     /// `width` × `height` CSS px for the shot (the tab's own size put back afterwards), at
-    /// `scale` (1 to 3; default the device's), as `png` or `jpeg` (`quality` 0 to 1), written to
+    /// `scale` (1 to 3; default the device's), as `png` or `jpeg` (`quality` 0 to 1), or a vector `pdf` of the full page, written to
     /// `output_path` or the project's screenshot folder. Answers the file, its pixel size and a
     /// small preview.
     Capture {
         #[serde(flatten)]
         target: Target,
+        /// The whole scrollable page, not just the part on show; `pdf` is allowed with it.
+        #[serde(default)]
+        full_page: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         device: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

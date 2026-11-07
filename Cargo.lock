@@ -7610,6 +7610,7 @@ dependencies = [
  "markup5ever_rcdom",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "png 0.18.1",
  "postgresql_archive",
  "regex",
  "reqwest",

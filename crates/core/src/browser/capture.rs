@@ -248,3 +248,49 @@ pub fn slug(text: &str) -> String {
     }
     out.trim_end_matches('-').to_string()
 }
+
+/// A PNG written a strip of rows at a time, so a page 30,000 px tall never needs the whole
+/// picture in memory: each tile's RGBA rows go straight to the file.
+pub struct PngStrips {
+    stream: png::StreamWriter<'static, std::io::BufWriter<std::fs::File>>,
+    width: u32,
+    rows_left: u32,
+}
+
+impl PngStrips {
+    pub fn create(path: &std::path::Path, width: u32, height: u32) -> Result<PngStrips, String> {
+        let file = std::fs::File::create(path)
+            .map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let writer = encoder.write_header().map_err(|e| e.to_string())?;
+        let stream = writer.into_stream_writer().map_err(|e| e.to_string())?;
+        Ok(PngStrips {
+            stream,
+            width,
+            rows_left: height,
+        })
+    }
+
+    /// Appends `rgba` (whole rows of `width` pixels); rows past the picture's height are dropped.
+    pub fn rows(&mut self, rgba: &[u8]) -> Result<(), String> {
+        use std::io::Write as _;
+        let row = self.width as usize * 4;
+        let rows = (rgba.len() / row).min(self.rows_left as usize);
+        self.stream
+            .write_all(&rgba[..rows * row])
+            .map_err(|e| e.to_string())?;
+        self.rows_left -= rows as u32;
+        Ok(())
+    }
+
+    /// Ends the file; rows still missing are filled white.
+    pub fn finish(mut self) -> Result<(), String> {
+        if self.rows_left > 0 {
+            let white = vec![255u8; self.width as usize * 4 * self.rows_left as usize];
+            self.rows(&white)?;
+        }
+        self.stream.finish().map_err(|e| e.to_string())
+    }
+}

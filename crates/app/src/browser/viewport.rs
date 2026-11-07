@@ -153,6 +153,16 @@ impl BrowserView {
     /// would lay it out the same, but WebKit then holds text to its minimum font size in device
     /// pixels, 9 px over the zoom: 20 CSS px at 0.44, so a 12 px paragraph overlapped its own
     /// lines. The page zoom stays at 1, and is the fallback only where WebKit lacks a view scale.
+    /// Puts the view back where the viewport mode wants it (after a capture changed its frame).
+    pub(super) fn relayout(&self) {
+        self.apply_layout();
+    }
+
+    /// Where the view sits now, for a capture that makes it taller for a moment.
+    pub(super) fn page_frame_now(&self) -> Option<Frame> {
+        self.bounds.map(|b| page_frame(frame(b), &self.viewport).0)
+    }
+
     fn apply_layout(&self) {
         if let (Some(engine), Some(bounds)) = (&self.engine, self.bounds) {
             let (frame, scale) = page_frame(frame(bounds), &self.viewport);

@@ -122,3 +122,18 @@ fn formats_parse() {
     assert_eq!(VideoFormat::parse("hevc").unwrap(), VideoFormat::Mov);
     assert!(VideoFormat::parse("avi").unwrap_err().contains("mp4"));
 }
+
+#[test]
+fn png_strips_write_a_tall_picture_in_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tall.png");
+    let mut out = PngStrips::create(&path, 4, 10).unwrap();
+    out.rows(&[255u8; 4 * 4 * 6]).unwrap();
+    out.rows(&[0u8; 4 * 4 * 3]).unwrap();
+    out.finish().unwrap();
+    let img = image::open(&path).unwrap().to_rgba8();
+    assert_eq!(img.dimensions(), (4, 10));
+    assert_eq!(img.get_pixel(0, 0).0, [255, 255, 255, 255]);
+    assert_eq!(img.get_pixel(0, 7).0, [0, 0, 0, 0]);
+    assert_eq!(img.get_pixel(0, 9).0, [255, 255, 255, 255]);
+}

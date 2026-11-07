@@ -64,3 +64,28 @@ sawitTest("capture: each device class comes out at its own pixel size, the tab's
   const el = await capture(ctx, { selector: "#title", scale: 2 });
   assert.ok(el.width >= 2 * el.css_width - 2 && el.width <= 2 * el.css_width + 2);
 });
+
+const TALL = `<!doctype html><html><head><meta charset="utf-8"><title>Tall</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{margin:0;font-family:-apple-system,sans-serif}header{position:sticky;top:0;height:60px;background:#e11d48;color:#fff}
+.hero{height:100vh;background:#fde68a}section{height:1000px;border-bottom:4px solid #111}</style></head>
+<body><header>Sticky header</header><div class="hero">A 100vh hero</div>
+<section>1</section><section>2</section><section>3</section><img loading="lazy" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'/%3E"></body></html>`;
+
+sawitTest("capture: full page comes out whole at the device's width, as PNG and PDF", { site: true }, async (ctx) => {
+  const { writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  await writeFile(path.join(ctx.world.project, "site", "tall.html"), TALL);
+  await openSite(ctx, "tall.html");
+  const before = (await browser(ctx)).viewport;
+  const r = await capture(ctx, { full_page: true, device: "iPhone 15", scale: 2 });
+  // 60 header + 852 hero (100vh held at the phone's height) + 3 × 1000 sections.
+  assert.equal(r.width, 786);
+  assert.ok(r.height >= 2 * 3900 && r.height <= 2 * 3940, `height ${r.height}`);
+  assert.deepEqual(await pngSize(r.path), [r.width, r.height]);
+  assert.match(r.path, /-iphone-15-2x-full\.png$/);
+  const pdf = await capture(ctx, { full_page: true, device: "Laptop", format: "pdf" });
+  const head = (await readFile(pdf.path)).toString("ascii", 0, 4);
+  assert.equal(head, "%PDF");
+  assert.deepEqual((await browser(ctx)).viewport, before, "the tab's size is back");
+});
