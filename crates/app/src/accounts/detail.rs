@@ -280,7 +280,11 @@ impl AccountsPage {
             let _ = window;
             h_flex()
                 .gap_1()
-                .child(div().w(px(200.)).child(Input::new(&self.rename).small()))
+                .child(
+                    div()
+                        .w(px(200.))
+                        .child(Input::new(&self.rename).small().aria_label("New Name")),
+                )
                 .child(
                     Button::new("account-rename-save")
                         .small()
@@ -652,7 +656,7 @@ impl AccountsPage {
                                     let (page, id, s) = (page.clone(), id.clone(), s2.clone());
                                     menu.item(
                                         PopupMenuItem::new(name.clone())
-                                            .icon(Lucide::Users)
+                                            .icon(crate::menu_icons::ACCOUNT)
                                             .on_click(move |_, _, cx| {
                                                 page.update(cx, |this, cx| {
                                                     let opened = this.model.update(cx, |m, cx| {

@@ -368,7 +368,11 @@ impl AccountsPage {
             .border_color(cx.theme().border)
             .bg(cx.theme().sidebar)
             .child(div().text_xs().font_medium().child("Account name"))
-            .child(Input::new(&self.new_name).small())
+            .child(
+                Input::new(&self.new_name)
+                    .small()
+                    .aria_label("Account Name"),
+            )
             .child(
                 h_flex()
                     .gap_2()
@@ -432,7 +436,7 @@ pub fn adopt_button(adoptable: Vec<PathBuf>) -> impl IntoElement {
                     .unwrap_or_default();
                 menu.item(
                     PopupMenuItem::new(dir.display().to_string())
-                        .icon(Lucide::Folder)
+                        .icon(crate::menu_icons::IMPORT)
                         .on_click(move |_, _, cx| {
                             global(cx).update(cx, |m, cx| {
                                 m.add(&name, Some(d.clone()), cx);
@@ -464,7 +468,7 @@ pub fn account_menu(
     };
     menu.item(
         PopupMenuItem::new("Set Active")
-            .icon(Lucide::Check)
+            .icon(crate::menu_icons::SWITCH)
             .disabled(is_active)
             .on_click(on(|this, a, _, cx| {
                 let id = a.id.clone();
@@ -473,18 +477,18 @@ pub fn account_menu(
     )
     .item(
         PopupMenuItem::new("Open in Terminal")
-            .icon(Lucide::SquareTerminal)
+            .icon(crate::menu_icons::OPEN_TERMINAL)
             .on_click(on(|this, a, _, cx| this.open_terminal(a, cx))),
     )
     .separator()
     .item(
         PopupMenuItem::new("Rename…")
-            .icon(Lucide::Pencil)
+            .icon(crate::menu_icons::RENAME)
             .on_click(on(|this, a, window, cx| this.start_rename(a, window, cx))),
     )
     .item(
         PopupMenuItem::new("Check Sign-In Again")
-            .icon(Lucide::RefreshCw)
+            .icon(crate::menu_icons::REFRESH)
             .on_click(on(|this, a, _, cx| {
                 let id = a.id.clone();
                 this.model.update(cx, |m, cx| m.check(&id, cx))
@@ -511,7 +515,7 @@ pub fn account_menu(
     .when(a.tracking, |menu| {
         menu.item(
             PopupMenuItem::new("Turn Off Usage Tracking")
-                .icon(Lucide::Gauge)
+                .icon(crate::menu_icons::HIDE)
                 .on_click(on(|this, a, _, cx| {
                     let id = a.id.clone();
                     this.model
@@ -522,7 +526,8 @@ pub fn account_menu(
     .separator()
     .item(
         PopupMenuItem::new("Remove from Sawit…")
-            .icon(Lucide::Trash)
+            .icon(crate::menu_icons::DELETE)
+            .danger(true)
             .on_click(on(|this, a, window, cx| {
                 this.confirm_remove(a.clone(), window, cx)
             })),

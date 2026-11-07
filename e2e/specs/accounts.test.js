@@ -137,6 +137,13 @@ sawitTest(
         await shoot(`${size}-${tab.toLowerCase().replace(" ", "-")}`);
       }
     }
+    // The account's ⋯ menu, in the shared menu look (B16).
+    await win.resize(1440, 900);
+    await win.click({ role: "radiobutton", name: "Accounts", within: "Account Sections" });
+    await win.openMenu({ role: "button", name: "More for work" });
+    await win.waitFor({ role: "menuitem", name: "Remove from Sawit…" });
+    await shoot("wide-account-menu");
+    await win.press("escape");
     // The seeded state reads right: cp numbers, the at-limit account and "% used".
     await win.click({ role: "radiobutton", name: "Accounts", within: "Account Sections" });
     await win.waitFor({ name: /^client, cp3, At limit/ });
