@@ -42,6 +42,7 @@ mod events;
 mod facilitation;
 mod find;
 mod float_bar;
+mod follow;
 mod frames;
 mod keymap;
 mod keys;
@@ -355,6 +356,8 @@ pub struct BoardView {
     dev: design_panel::DevMode,
     /// The Design panel shows its Prototype tab, and the canvas the connections.
     proto_tab: bool,
+    /// Fitting the view when an agent starts, and Follow agent ([`follow`], B4.1).
+    follow: follow::Follow,
     /// The prototype player, while it shows ([`player`]).
     player: Option<player::PlayerUi>,
     /// The Comments window, while it is open ([`comments`]), and where the Comment tool asked for

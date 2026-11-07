@@ -113,6 +113,8 @@ impl BoardView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        // Follow agent moves the view before anything is laid out over it (B4.1).
+        self.follow_step(window, cx);
         let this = cx.entity().downgrade();
         let painted = this.clone();
         let cursor = self.cursor();

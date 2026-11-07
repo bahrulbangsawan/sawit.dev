@@ -62,6 +62,8 @@ gpui_kit::assets::icon_assets!(
         CopyPlus,
         Trash,
         Tag,
+        Locate,
+        LocateFixed, // Follow agent (B4.1)
         ScrollText,
         Waypoints,
         Radio,

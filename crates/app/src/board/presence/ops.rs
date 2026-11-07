@@ -246,6 +246,18 @@ impl BoardView {
             let sentence = crate::agents::sentence(look, &action.done);
             self.agents.announcer.op(&look.id, sentence, now);
         }
+        // The view fits the page for a new agent session and follows its changes (B4.1).
+        if ok {
+            let rect = match (&changed, page) {
+                (Some((before, after)), Some(page)) => {
+                    target(before, after, page).and_then(|t| super::target::union(&t.rects))
+                }
+                _ => None,
+            };
+            if changed.is_some() || name == Some("begin") {
+                self.follow_saw(&look.session, rect, cx);
+            }
+        }
         // A canvas loaded or cleared in place: nothing of before plays on.
         if matches!(name, Some("replace" | "clear")) {
             self.agents.replays.cancel();
