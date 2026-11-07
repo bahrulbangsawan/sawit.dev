@@ -199,7 +199,7 @@ pub struct CanvasBeginArgs {
     )]
     pub steps: Option<Vec<String>>,
     #[schemars(
-        description = "\"screen\" for UI (a screen, a page, an app view): an HTML page in .nyawit/screens/<screen>/ shown in the frame (1440 × 900 when `frame` names no size, its CSS viewport); write it with canvas_screen_write and the answer's `screen`. \"component\" (the default when left out): a frame you draw into with the canvas tools, for components, diagrams, sketches the user asked for and illustrations"
+        description = "\"component\" (the default when left out): a frame of layers you build with the canvas tools: UI screens, pages and components (from the file's components, with auto layout), diagrams, sketches and illustrations. \"screen\": an HTML page in .nyawit/screens/<screen>/ shown in the frame (1440 × 900 when `frame` names no size, its CSS viewport), written with canvas_screen_write: a live web prototype the user asked for; canvas_screen_to_layers converts it to layers"
     )]
     pub kind: Option<String>,
     #[schemars(

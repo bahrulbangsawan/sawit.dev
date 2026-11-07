@@ -204,11 +204,12 @@ fn words(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// What a screen-sized frame drawn from shapes is told.
-pub const USE_A_SCREEN: &str = "This frame is a screen's size: build UI as a screen \
-     (canvas_begin {kind: \"screen\"}, then canvas_screen_write), which previews live, exports \
-     to HTML and React and hands off to a coding agent. Keep vector frames for diagrams, \
-     wireframes the user asked to be sketchy, and illustrations.";
+/// What a screen-sized frame of layers is told (B15: layers are UI's default).
+pub const BUILD_WITH_LAYERS: &str = "This frame is a screen's size: build it from the file's \
+     components (instance.create) with auto layout (layout.add), and bind colours, gaps and \
+     radii to its tokens; start with canvas_starter_system when the file has none. The user \
+     selects and edits every layer, and Export HTML / React (canvas_screen_export {id}) gives \
+     code.";
 
 /// A guide section's text, without the checklist the digest already holds.
 pub fn section_text(name: &str) -> Option<String> {

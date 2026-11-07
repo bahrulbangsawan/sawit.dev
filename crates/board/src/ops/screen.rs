@@ -168,3 +168,61 @@ pub fn with_pictures(
     }
     Ok(copy)
 }
+
+/// The `screen_layers` op (`{work? | screen?, capture}`, Convert to Layers, B15): the screen's
+/// page as its web view rendered it (`capture`, what [`crate::screens::layers::CAPTURE`]
+/// answered) becomes a frame of editable layers, 100 right of the screen's frame and level with
+/// it, named as the screen's frame was; the screen's frame is renamed `<name> / HTML` and stays,
+/// with its folder. One undo step. Answers `{ok, frame, name, screen, layers, texts,
+/// auto_layouts, pictures, variables, skipped}`.
+pub(super) fn to_layers(board: &mut BoardDoc, op: &Value) -> Value {
+    match convert(board, op) {
+        Ok(reply) => reply,
+        Err(error) => failure(format!("screen_layers: {error}")),
+    }
+}
+
+fn convert(board: &mut BoardDoc, op: &Value) -> Result<Value, String> {
+    use crate::screens::layers::{Capture, build, plan};
+    let doc = board.doc().map_err(|e| e.to_string())?;
+    let named = op.get("screen").and_then(Value::as_str).map(str::trim);
+    let found = match (work_of(op)?, named.filter(|n| !n.is_empty())) {
+        (Some(work), _) => by_work(&doc, work)?,
+        (None, Some(name)) => by_name(&doc, name)?,
+        (None, None) => return Err("name the screen with `screen` or `work`".into()),
+    };
+    let capture = match op.get("capture") {
+        Some(Value::String(text)) => Capture::parse(text)?,
+        Some(value @ Value::Object(_)) => Capture::parse(&value.to_string())?,
+        _ => return Err("it needs the page's `capture`".into()),
+    };
+    if capture.root.is_none() {
+        return Err("the screen's page has no body yet: write its index.html first".into());
+    }
+    let bounds = doc.world_bounds(found.frame).ok_or("its frame is gone")?;
+    let name = doc
+        .node(found.frame)
+        .map(|n| n.name.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| found.data.screen.clone());
+    let layers = plan(&capture);
+    let rename = (found.frame, format!("{name} / HTML"));
+    let at = (bounds.x1 + 100.0, bounds.y0);
+    let made = build(
+        board,
+        &layers,
+        &capture,
+        found.page,
+        at,
+        &name,
+        Some(rename),
+    )?;
+    Ok(json!({
+        "ok": true, "frame": made.frame.to_string(), "name": name,
+        "screen": found.data.screen, "html_frame": found.frame.to_string(),
+        "layers": made.layers, "texts": made.texts, "auto_layouts": made.auto_layouts,
+        "pictures": made.pictures, "variables": made.variables,
+        "skipped": {"pseudo": made.skipped.pseudo, "backgrounds": made.skipped.backgrounds,
+                    "images": made.skipped.images, "over": made.skipped.over},
+    }))
+}

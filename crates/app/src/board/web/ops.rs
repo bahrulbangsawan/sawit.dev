@@ -280,3 +280,39 @@ impl BoardView {
         Ok(json!("reloading"))
     }
 }
+
+impl BoardView {
+    /// Frame `id` is to have a view now (Convert to Layers reads its page): one the pool let go
+    /// of is built again, and it counts as just used, so the pool keeps it.
+    pub(in crate::board) fn web_want_view(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let Some(frame) = self.web.as_mut().and_then(|web| web.frames.get_mut(&id)) else {
+            return;
+        };
+        frame.used = std::time::Instant::now();
+        if frame.engine.is_none() {
+            frame.refresh = true;
+        }
+        cx.notify();
+    }
+
+    /// Whether frame `id` has a view whose page is at rest.
+    pub(in crate::board) fn web_view_ready(&self, id: NodeId) -> bool {
+        self.web.as_ref().is_some_and(|web| {
+            web.at_rest(id) && web.frames.get(&id).is_some_and(|f| f.engine.is_some())
+        })
+    }
+
+    /// Runs `script` in frame `id`'s page; `callback` gets its result as JSON.
+    pub(in crate::board) fn web_eval(
+        &self,
+        id: NodeId,
+        script: &str,
+        callback: impl Fn(String) + Send + 'static,
+    ) -> Result<(), String> {
+        let engine = (self.web.as_ref())
+            .and_then(|web| web.frames.get(&id))
+            .and_then(|frame| frame.engine.as_ref())
+            .ok_or("the screen has no view")?;
+        engine.eval_with_callback(script, callback)
+    }
+}

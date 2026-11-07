@@ -175,6 +175,10 @@ pub const APP_CONTROLS: &[(&str, McpPath)] = &[
         McpPath::Tool("canvas_add_routes", "laying a route out again reloads it"),
     ),
     (
+        "Convert to Layers (screen bar, Layers panel, Design panel)",
+        McpPath::Tool("canvas_screen_to_layers", "{work | screen}"),
+    ),
+    (
         "Send to Agent…",
         McpPath::Tool("canvas_handoff", "{id | work | screen, agent?}"),
     ),

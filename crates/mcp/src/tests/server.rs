@@ -173,6 +173,7 @@ fn every_tool_is_routed() {
         "canvas_progress",
         "canvas_screen_write",
         "canvas_screen_get",
+        "canvas_screen_to_layers",
         "canvas_screen_export",
         "canvas_handoff",
         "canvas_tabs",

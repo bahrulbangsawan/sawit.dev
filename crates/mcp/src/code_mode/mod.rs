@@ -61,7 +61,7 @@ pub const CODE_INSTRUCTIONS: &str = "\
 Sawit is a macOS developer workbench. Its whole API is behind two tools:
 - search_api finds functions by what you want to do (\"git commit\", \"terminal read\", \"canvas screen\") and shows their typed signatures; with no query, every function by area.
 - run runs JavaScript that calls them: `const s = sawit.git_status({repo: \"/path\"}); return s;`. Calls are synchronous (await is fine), a failed call throws, and only what the script returns (and console.log) comes back, so chain several calls in one run.
-Before you design, build or review UI on the Sawit canvas, read sawit.canvas_design_guide() and follow it. Build UI as screens (canvas_begin {kind: \"screen\"}, canvas_screen_write).
+Before you design, build or review UI on the Sawit canvas, read sawit.canvas_design_guide() and follow it. Build UI as editable layers (canvas_begin, then canvas_command with the file's components).
 Databases, instances, ports, SSH, git, prompts, files, dev tools, MCP servers, skills and New Project work without the app; app_*, terminal_*, browser_*, canvas_* and keymap_* need it (launch_app starts it; app_state shows windows, tabs and terminals). terminal_run returns the tab and pane it used: pass both to terminal_read. Browser snapshot refs reset when the page changes. Tools that destroy something need confirm: true, which you pass only after the user says yes. Only the user signs in to GitHub and moves the keyboard.";
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

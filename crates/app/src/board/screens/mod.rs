@@ -8,6 +8,7 @@
 mod agent_tests;
 mod bar;
 mod checks;
+mod convert;
 mod frame_bar;
 mod handoff;
 mod ops;
