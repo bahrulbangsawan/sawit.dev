@@ -184,6 +184,9 @@ pub fn browser_action(op: &crate::browser::BrowserOp) -> Action {
         Op::Screenshot { .. } | Op::Capture { .. } => {
             Action::new("taking a screenshot", "took a screenshot")
         }
+        Op::RecordStart { .. } => Action::new("recording the page", "started recording"),
+        Op::RecordStop => Action::new("finishing the recording", "finished the recording"),
+        Op::RecordStatus => Action::new("checking the recording", "checked the recording"),
         Op::Snapshot => Action::new("reading the page", "read the page"),
         Op::Query { .. } | Op::Settled { .. } => Action::new("waiting", "waited"),
         Op::Evaluate { .. } => Action::new("running a script", "ran a script"),

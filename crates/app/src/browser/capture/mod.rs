@@ -5,6 +5,7 @@
 //! The numbers are `sawit_core::browser::capture`'s. Full-page captures are [`full`]'s.
 
 mod full;
+pub mod record;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -357,7 +358,7 @@ async fn shot(
         let (css_w, css_h) = css_size(this);
         let device = size_name(&this.viewport);
         let view_scale = this.scale();
-        let (_, _, backing) = engine.view_metrics();
+        let backing = engine.pixels_per_point();
         let scale = capture_scale(
             ask.scale,
             Some(&device)
@@ -391,7 +392,7 @@ async fn shot(
             this.current_url(),
         ))
     });
-    let Ok(Some((rx, cw, ch, _pw, _ph, scale, device, project, url))) = started else {
+    let Ok(Some((rx, cw, ch, pw, ph, scale, device, project, url))) = started else {
         show_overlays(this, show, show_mesurer, cx);
         return Err("The browser isn't open.".into());
     };
@@ -405,7 +406,9 @@ async fn shot(
         )),
     };
     show_overlays(this, show, show_mesurer, cx);
+    // WebKit rounds to its own pixel grid: the picture is brought to the exact size asked for.
     let pixels = pixels?;
+    let pixels = pixels.resized(pw, ph).unwrap_or(pixels);
     let path = match &ask.output_path {
         Some(p) => PathBuf::from(p),
         None => unique_path(

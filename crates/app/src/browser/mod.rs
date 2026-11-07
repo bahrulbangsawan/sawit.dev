@@ -194,6 +194,8 @@ pub struct BrowserView {
     seo_panel: Entity<SeoPanel>,
     seo_ask: seo::flow::SeoAsk,
     seo_generation: u64,
+    /// The recording under way, and how the last one ended ([`capture::record`]).
+    recorder: capture::record::Recorder,
     /// Shots take turns: the overlay has one hidden flag.
     shots: ShotGate,
     pick: PickMode,
@@ -354,6 +356,7 @@ impl BrowserView {
             seo_panel,
             seo_ask: Default::default(),
             seo_generation: 0,
+            recorder: Default::default(),
             shots: ShotGate::default(),
             pick: PickMode::Off,
             pick_waiting: false,
@@ -384,6 +387,7 @@ impl BrowserView {
             "pick_mode": self.pick.as_str(),
             "last_pick": self.last_pick,
             "mesurer": self.mesurer_describe(),
+            "recording": self.record_status(),
             // Whether a menu, popover, dialog or notification covers the page, and whether the
             // webview is up (it steps back while something covers it).
             "covered": self.cover.covered,

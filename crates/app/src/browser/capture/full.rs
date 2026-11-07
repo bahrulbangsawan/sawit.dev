@@ -112,7 +112,7 @@ pub(super) async fn full_page(
         let engine = this.engine.clone()?;
         let (css_w, screen_h) = css_size(this);
         let view_scale = this.scale();
-        engine.hold_viewport_units(Some((f64::from(css_w), f64::from(screen_h))));
+        engine.hold_viewport_units(f64::from(css_w), f64::from(screen_h));
         let frame = this.page_frame_now()?;
         engine.set_frame(super::super::engine::Frame {
             height: (css_h * view_scale).ceil() as f32,
@@ -123,7 +123,7 @@ pub(super) async fn full_page(
             ask.scale,
             Some(device.as_str()).filter(|d| device_by_name(d).is_some()),
         );
-        let (_, _, backing) = engine.view_metrics();
+        let backing = engine.pixels_per_point();
         Some((
             engine,
             css_w,
@@ -177,7 +177,16 @@ pub(super) async fn full_page(
                 engine.capture_rect(rect, width_pts, tx);
                 let timer = cx.background_executor().timer(STEP);
                 match within(rx, timer).await {
-                    Some(Ok(Ok(p))) => shots.push((*tile, p)),
+                    Some(Ok(Ok(p))) => {
+                        // Exactly the tile's size: WebKit rounds to its own pixel grid.
+                        let th = if plan.len() > 1 {
+                            (f64::from(tile.height) * scale).round() as u32
+                        } else {
+                            ph
+                        };
+                        let p = p.resized(pw, th).unwrap_or(p);
+                        shots.push((*tile, p))
+                    }
                     Some(Ok(Err(e))) => {
                         failed = Some(e);
                         break;
@@ -194,6 +203,7 @@ pub(super) async fn full_page(
             match failed {
                 Some(e) => Err(e),
                 None => {
+                    let ph: u32 = shots.iter().map(|(_, p)| p.size().1).sum();
                     let quality = ask.quality;
                     let path = path.clone();
                     cx.background_executor()
@@ -206,9 +216,6 @@ pub(super) async fn full_page(
     };
     // Everything put back.
     let _ = this.update(cx, |this, _| {
-        if let Some(engine) = &this.engine {
-            engine.hold_viewport_units(None);
-        }
         this.relayout();
     });
     eval(this, format!("scrollTo({sx}, {sy}); 'ok'"), cx).await;

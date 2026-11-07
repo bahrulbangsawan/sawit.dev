@@ -141,6 +141,45 @@ pub enum BrowserOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mesurer: Option<String>,
     },
+    /// Starts a native recording (`browser::capture`): the view, the `full_page` scrolled
+    /// through, an `element` (`target`) or a `region` (`clip`), as `device` or `width` × `height`,
+    /// at a `resolution` (`720p`…) or `max_width`, `fps` 15, 24, 30 or 60, as `mp4`, `mov` or
+    /// `gif`, for at most `max_seconds` (default 30, at most 300).
+    RecordStart {
+        #[serde(flatten)]
+        target: Target,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clip: Option<[f64; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scroll_speed: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_seconds: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_path: Option<String>,
+    },
+    /// Stops the recording and answers once its file is finished: the path, duration, size,
+    /// frames, fps achieved, codec and bytes.
+    RecordStop,
+    /// Whether a recording runs, for how long, and how the last one ended.
+    RecordStatus,
     Console {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         level: Option<String>,
@@ -236,6 +275,9 @@ impl BrowserOp {
                 | Self::State
                 | Self::Screenshot { .. }
                 | Self::Capture { .. }
+                | Self::RecordStart { .. }
+                | Self::RecordStop
+                | Self::RecordStatus
                 | Self::Console { .. }
                 | Self::Network { .. }
                 | Self::Devtools

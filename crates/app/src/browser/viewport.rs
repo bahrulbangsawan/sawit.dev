@@ -182,6 +182,14 @@ impl BrowserView {
                 (scale < 1.).then(|| engine.screen_scale())
             });
             engine.set_device_scale(ratio.map(|r| device_scale(r, scale)));
+            // vh and vw follow the page's viewport (a full-page capture holds them there too).
+            let (w, h) = match &self.viewport {
+                ViewportMode::Fixed { width, height, .. } => {
+                    (f64::from(*width), f64::from(*height))
+                }
+                ViewportMode::Responsive => (f64::from(frame.width), f64::from(frame.height)),
+            };
+            engine.hold_viewport_units(w, h);
             // The overlay keeps its size on screen: it counter-scales by the page's scale.
             drop(self.page_op(ui_scale_op(scale)));
             self.mesurer_ui_scale(scale);
