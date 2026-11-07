@@ -39,6 +39,8 @@ pub enum RecordMode {
     /// The part of the page on show.
     #[default]
     View,
+    /// A scroll through the whole page, top to bottom.
+    FullPage,
     /// One element's box.
     Element,
     /// A clip of the view, in CSS px.
@@ -49,10 +51,11 @@ impl RecordMode {
     pub fn parse(text: &str) -> Result<RecordMode, String> {
         match text.trim().to_ascii_lowercase().as_str() {
             "" | "view" | "visible" => Ok(RecordMode::View),
+            "full_page" | "full-page" | "fullpage" | "page" => Ok(RecordMode::FullPage),
             "element" => Ok(RecordMode::Element),
             "region" => Ok(RecordMode::Region),
             other => Err(format!(
-                "Unknown mode “{other}”. Use view, element or region."
+                "Unknown mode “{other}”. Use view, full_page, element or region."
             )),
         }
     }
@@ -71,11 +74,8 @@ pub struct RecordAsk {
     pub mode: RecordMode,
     pub target: Target,
     pub clip: Option<[f64; 4]>,
-    /// For full-page recordings, which come next: CSS px a second, or the scroll's length in
-    /// seconds.
-    #[allow(dead_code)]
+    /// Full page: CSS px a second, or the whole scroll's length in seconds.
     pub scroll_speed: Option<f64>,
-    #[allow(dead_code)]
     pub duration: Option<f64>,
     pub max_seconds: u32,
     pub output_path: Option<String>,
@@ -164,6 +164,43 @@ impl Recording {
             "mode": format!("{:?}", self.mode).to_lowercase(),
             "max_seconds": self.max.as_secs(),
         })
+    }
+}
+
+/// The full-page scroll: from the top to `travel` CSS px down, after a pause, at `speed` px a
+/// second, then a pause at the bottom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Scroll {
+    pub travel: f64,
+    pub speed: f64,
+    pub pause: f64,
+}
+
+impl Scroll {
+    /// Where the page is at `t` seconds, and whether the scroll is over.
+    pub fn at(&self, t: f64) -> (f64, bool) {
+        let moving = self.travel / self.speed.max(1.);
+        let y = ((t - self.pause).max(0.) * self.speed).min(self.travel);
+        (y, t >= self.pause * 2. + moving)
+    }
+
+    /// The scroll for a page `travel` px of scrolling: at `speed`, or over `duration` seconds,
+    /// else about 600 px a second, within `max` seconds.
+    pub fn plan(travel: f64, speed: Option<f64>, duration: Option<f64>, max: f64) -> Scroll {
+        let pause = 1.;
+        let room = (max - 2. * pause).max(1.);
+        let speed = match (speed, duration) {
+            (Some(s), _) if s > 0. => s,
+            (_, Some(d)) if d > 0. => travel / d.min(room),
+            _ => 600.,
+        }
+        .max(travel / room)
+        .max(1.);
+        Scroll {
+            travel: travel.max(0.),
+            speed,
+            pause,
+        }
     }
 }
 
@@ -316,7 +353,7 @@ async fn start(
             &url,
             &device,
             f64::from(w) / f64::from(cw.max(1)),
-            false,
+            ask.mode == RecordMode::FullPage,
             format.extension(),
         ),
     };
@@ -336,6 +373,19 @@ async fn start(
         })
         .await?;
     let (show, show_mesurer) = hide_overlays(this, MesurerShot::Hide, cx).await;
+    let full = if ask.mode == RecordMode::FullPage {
+        super::full::prepare_scroll(this, cx).await
+    } else {
+        None
+    };
+    let scroll = full.map(|(height, screen, _, _)| {
+        Scroll::plan(
+            (height - screen).max(0.),
+            ask.scroll_speed,
+            ask.duration,
+            f64::from(max_seconds),
+        )
+    });
     let (stop_tx, stop_rx) = oneshot::channel();
     let started = Instant::now();
     let recording = Recording {
@@ -367,7 +417,7 @@ async fn start(
     });
     let width_pts = f64::from(w) / backing.max(0.5);
     let this2 = this.clone();
-    let restore = (old, show, show_mesurer);
+    let restore = (old, show, show_mesurer, full.map(|(_, _, x, y)| (x, y)));
     cx.spawn(async move |cx| {
         let ended = run(
             &this2,
@@ -378,10 +428,14 @@ async fn start(
             ask.fps,
             points,
             width_pts,
+            scroll,
             cx,
         )
         .await;
-        let (old, show, show_mesurer) = restore;
+        let (old, show, show_mesurer, scrolled) = restore;
+        if let Some((x, y)) = scrolled {
+            super::full::scroll_to(&this2, x, y, cx).await;
+        }
         show_overlays(&this2, show, show_mesurer, cx);
         let result = ended
             .map(|(written, dropped)| done_json(&written, w, h, format, dropped, note.clone()));
@@ -436,6 +490,7 @@ async fn run(
     fps: u32,
     rect: Option<(f64, f64, f64, f64)>,
     width_pts: f64,
+    scroll: Option<Scroll>,
     cx: &mut AsyncApp,
 ) -> Result<(Written, u32), String> {
     let tick = Duration::from_micros(1_000_000 / u64::from(fps.max(1)));
@@ -444,6 +499,13 @@ async fn run(
     loop {
         if !matches!(stop.try_recv(), Ok(None)) || started.elapsed() >= max {
             break;
+        }
+        if let Some(s) = scroll {
+            let (y, over) = s.at(started.elapsed().as_secs_f64());
+            if over {
+                break;
+            }
+            super::full::scroll_to(this, 0., y, cx).await;
         }
         let (tx, rx) = oneshot::channel();
         let asked = this.update(cx, |this, _| match &this.engine {
@@ -484,11 +546,14 @@ async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{RecordAsk, RecordMode};
+    use super::{RecordAsk, RecordMode, Scroll};
 
     #[test]
     fn modes_and_numbers_are_checked() {
-        assert_eq!(RecordMode::parse("element").unwrap(), RecordMode::Element);
+        assert_eq!(
+            RecordMode::parse("full_page").unwrap(),
+            RecordMode::FullPage
+        );
         assert!(RecordMode::parse("movie").is_err());
         let refused = |ask: RecordAsk| ask.check().is_err();
         assert!(!refused(RecordAsk::default()));
@@ -517,5 +582,20 @@ mod tests {
             ..Default::default()
         };
         assert!(refused(region));
+    }
+
+    #[test]
+    fn the_scroll_pauses_moves_and_ends() {
+        let s = Scroll::plan(3000., None, Some(3.), 30.);
+        assert_eq!(s.speed, 1000.);
+        assert_eq!(s.at(0.5), (0., false));
+        assert_eq!(s.at(2.5), (1500., false));
+        assert_eq!(s.at(4.5).0, 3000.);
+        assert!(s.at(5.).1);
+        // Too slow to fit the cap: sped up to end in time.
+        let fast = Scroll::plan(10_000., Some(100.), None, 12.);
+        assert!(fast.speed >= 1000.);
+        // No speed or duration: about 600 px a second.
+        assert_eq!(Scroll::plan(1200., None, None, 30.).speed, 600.);
     }
 }

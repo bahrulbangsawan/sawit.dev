@@ -146,3 +146,21 @@ sawitTest("capture: native recordings play in Quick Look at the size asked for",
   }, { timeoutMs: 20_000, what: "the recording to stop at its cap" });
   assert.ok(capped.last.duration_seconds <= 2.5);
 });
+
+sawitTest("capture: a full-page recording scrolls the page top to bottom", { site: true, timeout: 300_000 }, async (ctx) => {
+  const { writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  await writeFile(path.join(ctx.world.project, "site", "tall.html"), TALL);
+  await openSite(ctx, "tall.html");
+  const started = await record(ctx, { mode: "full_page", device: "iPhone 15", resolution: "720p", duration: 3, max_seconds: 20 });
+  assert.equal(started.mode, "fullpage");
+  const ended = await until(async () => {
+    const s = await ctx.call({ cmd: "browser", op: { op: "record_status" } });
+    return s.recording === false && s.last ? s.last : null;
+  }, { timeoutMs: 30_000, what: "the scroll-through to end" });
+  assert.ok(ended.duration_seconds >= 3 && ended.duration_seconds <= 8, `duration ${ended.duration_seconds}`);
+  assert.equal(ended.width, 720);
+  assert.ok(await quickLookOpens(ended.path), "Quick Look opens it");
+  const y = await ctx.call({ cmd: "browser", op: { op: "evaluate", script: "return scrollY" } });
+  assert.equal(y.value, 0, "the scroll is put back");
+});
