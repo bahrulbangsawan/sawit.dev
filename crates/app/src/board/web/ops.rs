@@ -57,6 +57,30 @@ impl BoardView {
                 self.open_player(Some(id), cx);
                 Ok(json!(self.player.is_some()))
             }
+            // Preview the same way, opened at the next draw, and its controls set as clicks do.
+            ("preview", Some(id)) => {
+                self.screen_ui.open_preview = Some(id);
+                cx.notify();
+                Ok(json!("opening"))
+            }
+            ("preview_set", _) => self.preview_set(op, cx),
+            ("preview_custom", _) => {
+                let text = |k: &str| {
+                    op.get(k)
+                        .map(|v| v.to_string().trim_matches('"').to_string())
+                };
+                self.screen_ui.custom_typed = Some((
+                    text("w").unwrap_or_default(),
+                    text("h").unwrap_or_default(),
+                    op.get("apply").and_then(Value::as_bool).unwrap_or(false),
+                ));
+                cx.notify();
+                Ok(json!("typing"))
+            }
+            ("close_preview", _) => {
+                self.close_preview(cx);
+                Ok(json!("closed"))
+            }
             ("close_present", _) => {
                 self.player = None;
                 self.web_present(&[], None, cx);

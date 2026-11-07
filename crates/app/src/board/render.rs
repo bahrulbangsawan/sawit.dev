@@ -138,6 +138,13 @@ impl BoardView {
         let web_status = self.render_web_status(cx);
         // The design standard's failures each checked frame has, as a badge on it.
         let checks = self.render_check_badges(cx);
+        // Preview asked for by the e2e specs' `web` op, which has no window to build its view.
+        if let Some(frame) = self.screen_ui.open_preview.take() {
+            self.open_preview(frame, window, cx);
+        }
+        if let Some(typed) = self.screen_ui.custom_typed.take() {
+            self.preview_custom_typed(typed, window, cx);
+        }
         let preview = screens::render_preview(self, cx);
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);

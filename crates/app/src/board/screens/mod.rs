@@ -14,6 +14,8 @@ mod handoff;
 mod ops;
 mod pictures;
 mod preview;
+mod preview_bar;
+mod preview_ops;
 #[cfg(test)]
 mod tests;
 
@@ -22,14 +24,15 @@ use std::sync::Arc;
 
 use figcraft_doc::NodeId;
 use gpui_kit::*;
-use sawit_board::screens::{self, ScreenData};
+use sawit_board::screens;
 use sawit_core::terminal::AgentKind;
 
 use super::BoardView;
 pub(super) use bar::{code_export_button, render_screen_bar};
 pub(super) use frame_bar::render_frame_bar;
 pub(super) use handoff::SendTo;
-pub(super) use preview::{Preview, render_preview};
+pub(super) use preview::Preview;
+pub(super) use preview_bar::render_preview;
 
 /// The screens' side of the canvas's tab.
 #[derive(Default)]
@@ -43,14 +46,17 @@ pub(in crate::board) struct ScreenUi {
     /// frame whose list is open.
     pub checks: std::collections::HashMap<NodeId, Vec<sawit_board::checks::Finding>>,
     pub checks_open: Option<NodeId>,
+    /// A Preview to open at the next draw (the `web` op's `preview`, for the e2e specs).
+    pub open_preview: Option<NodeId>,
+    /// Custom size typed at the next draw (the `web` op's `preview_custom`): width, height, and
+    /// whether Apply is pressed.
+    pub custom_typed: Option<(String, String, bool)>,
 }
 
-/// The one screen selected on the canvas: its frame, its plugin data and its frame's name.
+/// The one screen selected on the canvas: its frame.
 #[derive(Clone, Debug)]
 pub(in crate::board) struct Selected {
     pub frame: NodeId,
-    pub data: ScreenData,
-    pub title: String,
 }
 
 impl BoardView {
@@ -77,13 +83,8 @@ impl BoardView {
         if self.web_live() == Some(*frame) {
             return None;
         }
-        let node = ds.doc.node(*frame)?;
-        let data = screens::screen_of(node)?;
-        Some(Selected {
-            frame: *frame,
-            data,
-            title: node.name.clone(),
-        })
+        screens::screen_of(ds.doc.node(*frame)?)?;
+        Some(Selected { frame: *frame })
     }
 
     /// The latest picture of screen frame `frame`, if it has been rendered.
