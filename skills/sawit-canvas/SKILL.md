@@ -11,9 +11,11 @@ Each project has a canvas in Sawit (`.nyawit/canvas.sawit`): pages, frames, shap
 
 Before you design, build, restyle or review any UI on the canvas, call `canvas_design_guide` and follow it; `section` (such as Typography) returns one section with the checklist. Run its checklist before you call a design done. The `sawit-canvas-design` skill, where it is installed, is the same text.
 
-## UI is a screen
+## UI is layers
 
-A screen, page or app view is a screen on the canvas: `canvas_begin {kind: "screen", name, frame, steps}`, then `canvas_screen_write` with its HTML (the whole page, or edits) and files. Each write renders on the canvas, and its answer lists the design standard's machine checks (contrast, target and text sizes, spacing, alt text, labels, focus, overflow), each failure with its rule and the fix: fix them before you finish with `canvas_progress {status: "done"}`. `canvas_screen_get` reads a screen back with a PNG; `canvas_screen_export` writes it as HTML or React. The first UI work of a session answers with the standard's digest; name parts in `steps` (Form, Table, States) to get their sections. Vector frames (`canvas_command`, `canvas_add_elements`) are for components, diagrams, sketches the user asked for and illustrations.
+A screen, page or app view is a frame of editable layers, so the user can select and change every text and button: `canvas_begin {name, frame, steps}` at a device size, then build it with `canvas_command` (`frame.create`, `text.create`, `layout.add`, `instance.create` of the file's components) inside the work. Lay out the design system first (`canvas_starter_system`), then components, then screens from their instances. `canvas_screen_export` writes a frame (`id`) as HTML or React. The first UI work of a session answers with the standard's digest; name parts in `steps` (Form, Table, States) to get their sections.
+
+An HTML screen is for a live web prototype the user asks for: `canvas_begin {kind: "screen"}`, then `canvas_screen_write` with its HTML and files. Each write renders on the canvas and answers the design standard's machine checks; fix them before `canvas_progress {status: "done"}`. `canvas_screen_get` reads a screen back with a PNG. `canvas_screen_to_layers` (Convert to Layers) turns a screen into editable layers beside it, with auto layout and its colours as variables; the HTML screen stays.
 
 ## Systems and lint
 

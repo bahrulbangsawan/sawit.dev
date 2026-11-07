@@ -6,6 +6,7 @@
 mod args;
 pub(crate) mod design;
 mod dispatch;
+mod export;
 mod files;
 mod guide;
 mod handoff;
@@ -18,12 +19,9 @@ mod tab;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
-
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 use rmcp::{tool, tool_router};
-use sawit_board::store;
 use serde_json::{Value, json};
 
 pub use args::{
@@ -34,10 +32,10 @@ pub use args::{
     CanvasTargetArgs, CanvasUpdateArgs,
 };
 use dispatch::{command_list, in_work};
-use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
+use files::{absolute_path, is_sawit_file, read_scene};
 use tab::CanvasTab as _;
 
-use super::{base64_decode, pretty};
+use super::pretty;
 use crate::{Sawit, blocking, fail, ok, tri};
 
 /// `op` with the lane its tool's `agent` argument names, when it names one: the app shows each
@@ -241,72 +239,14 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Export the canvas's page on show as one SVG or PNG file, at 1×. For other pages, chosen layers, another format (pdf, jpg, webp) or scale, use canvas_command file.export {ids, format, scale, path}"
+        description = "Export the canvas's page on show as one SVG or PNG file, at 1×, with the design lint's summary of the page (errors, warnings, the first findings; `lint: false` leaves it out). For other pages, chosen layers, another format (pdf, jpg, webp) or scale, use canvas_command file.export {ids, format, scale, path}"
     )]
     async fn canvas_export(
         &self,
         Parameters(mut a): Parameters<CanvasExportArgs>,
     ) -> CallToolResult {
         tri!(a.tab_into_file());
-        let format = a.format.as_deref().map(str::trim).unwrap_or_default();
-        let png = match format.to_lowercase().as_str() {
-            "svg" | "" => false,
-            "png" => true,
-            _ => return fail(format!("Unknown format “{format}”: use svg or png.")),
-        };
-        // Read as every tool that writes a file reads its path (MCP-11): absolute, and never a
-        // canvas file, since nothing else holds the board when the app is closed.
-        let named = tri!(crate::output_path(
-            "canvas_export",
-            a.output_path.as_deref()
-        ));
-        let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
-        let project = crate::agent_project(a.project.as_deref());
-        // Named after the canvas file: `canvas-…` for the project's, `home-…` for home.sawit.
-        let canvas = tri!(canvas_file(a.file.as_deref()));
-        let stem = canvas.as_deref().map(store::bound_file);
-        let stem = stem.as_deref().and_then(Path::file_stem);
-        let stem = stem.map_or_else(|| "canvas".into(), |stem| stem.to_string_lossy());
-        let value = match self.canvas(a.project, a.file, op).await {
-            Ok(v) => v,
-            Err(e) => return fail(e),
-        };
-        let bytes = if png {
-            match base64_decode(
-                value["png_base64"].as_str().unwrap_or_default(),
-                "The canvas",
-            ) {
-                Ok(b) => b,
-                Err(e) => return fail(e),
-            }
-        } else {
-            value["svg"]
-                .as_str()
-                .unwrap_or_default()
-                .as_bytes()
-                .to_vec()
-        };
-        let path = named.unwrap_or_else(|| {
-            export_path(
-                project.as_deref(),
-                &self.paths.cache_dir(),
-                &stem,
-                if png { "png" } else { "svg" },
-            )
-        });
-        if let Some(dir) = path.parent()
-            && let Err(e) = std::fs::create_dir_all(dir)
-        {
-            return fail(format!("Unable to create {}: {e}", dir.display()));
-        }
-        match std::fs::write(&path, &bytes) {
-            Ok(()) => ok(format!(
-                "Canvas exported to {} ({} bytes)",
-                path.display(),
-                bytes.len()
-            )),
-            Err(e) => fail(format!("Unable to write {}: {e}", path.display())),
-        }
+        self.canvas_export_tool(a).await
     }
 
     #[tool(description = concat!(
@@ -330,13 +270,13 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Begin a component before you build it, and begin each component that way: its named frame appears on the canvas at once, and while you build the canvas shows a skeleton in it, a row above it with its name and step, your name and a progress badge. Pass the `work` this answers to canvas_add_elements, canvas_update, canvas_add_diagram, canvas_delete and canvas_command: their ops go inside the frame (x and y from its top-left corner) and its undo step. Say each step, and that it is done or failed, with canvas_progress. Answers {work, frame, page}. A UI screen, page or app view is kind \"screen\" (the default for UI): the frame and its HTML folder (.nyawit/screens/<screen>/) at once, built with canvas_screen_write, which previews live, exports to HTML and React and hands off; keep the default kind for components, diagrams, sketches the user asked for and illustrations. The first UI work of a session answers with the design standard's digest, and later ones with the sections their `steps` name (Form, Table, Navigation, States); canvas_progress {status: \"done\"} answers the standard's machine checks of what was built. With the app closed the frame is made in the saved file. Designing UI? Read canvas_design_guide first and follow it"
+        description = "Begin a component before you build it, and begin each component that way: its named frame appears on the canvas at once, and while you build the canvas shows a skeleton in it, a row above it with its name and step, your name and a progress badge. Pass the `work` this answers to canvas_add_elements, canvas_update, canvas_add_diagram, canvas_delete and canvas_command: their ops go inside the frame (x and y from its top-left corner) and its undo step. Say each step, and that it is done or failed, with canvas_progress. Answers {work, frame, page}. UI (a screen, page, app view or component) is the default kind: a frame of layers you build with canvas_command from the file's components and auto layout, which the user can select and edit and which exports to HTML and React; kind \"screen\" makes an HTML screen instead (its folder .nyawit/screens/<screen>/, written with canvas_screen_write) for a live web prototype the user asks for, and canvas_screen_to_layers converts one. The first UI work of a session answers with the design standard's digest, and later ones with the sections their `steps` name (Form, Table, Navigation, States); canvas_progress {status: \"done\"} answers the standard's machine checks of what was built. With the app closed the frame is made in the saved file. Designing UI? Read canvas_design_guide first and follow it"
     )]
     async fn canvas_begin(&self, Parameters(mut a): Parameters<CanvasBeginArgs>) -> CallToolResult {
         tri!(a.tab_into_file());
         let screen = (a.kind.as_deref()).is_some_and(|k| k.trim().eq_ignore_ascii_case("screen"));
         let ui = design::is_ui(a.kind.as_deref(), &a.name, &a.frame);
-        let vector_screen = !screen && ui && design::screen_like(&a.name, &a.frame);
+        let layered_screen = !screen && ui && design::screen_like(&a.name, &a.frame);
         let words = format!(
             "{} {}",
             a.name,
@@ -357,8 +297,8 @@ impl Sawit {
             Ok(v) => v,
             Err(e) => return fail(e),
         };
-        if vector_screen {
-            v["use_screen"] = json!(design::USE_A_SCREEN);
+        if layered_screen {
+            v["build"] = json!(design::BUILD_WITH_LAYERS);
         }
         let (project, file, sketch) = (a.project.clone(), a.file.clone(), a.sketch == Some(true));
         self.begin_design_status(project, file, &mut v, ui, screen, sketch)
@@ -395,7 +335,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Read a UI screen: its HTML (index.html), its files, its frame and viewport, and a PNG of it as the canvas renders it (with the app running). Without `work` or `screen`, list the screens on the canvas. With the app closed nothing is rendered, so there is no PNG"
+        description = "Read a UI screen: its HTML (index.html), its files, its frame and viewport, the design standard's machine checks of its page (`design_checks`), and a PNG of it as the canvas renders it (with the app running). Without `work` or `screen`, list the screens on the canvas. With the app closed nothing is rendered, so there is no PNG"
     )]
     async fn canvas_screen_get(
         &self,

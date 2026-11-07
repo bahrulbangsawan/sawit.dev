@@ -56,7 +56,7 @@ async fn the_standard_goes_with_the_work() {
 
     let vector = begin(&project, "Checkout / Mobile", phone);
     let begun = answer(&server.canvas_begin(Parameters(vector)).await);
-    assert_eq!(begun["use_screen"], design::USE_A_SCREEN);
+    assert_eq!(begun["build"], design::BUILD_WITH_LAYERS);
     // A component's own size isn't a screen's.
     let card = begin(
         &project,
@@ -64,7 +64,7 @@ async fn the_standard_goes_with_the_work() {
         json!({"x": 0, "y": 900, "width": 320, "height": 240}),
     );
     let begun = answer(&server.canvas_begin(Parameters(card)).await);
-    assert!(begun.get("use_screen").is_none(), "{begun}");
+    assert!(begun.get("build").is_none(), "{begun}");
 }
 
 /// Another session's first UI work gets the digest too, and a diagram or a routes work none.

@@ -1,5 +1,6 @@
 //! The bar over a selected screen, in the context bar's place, on the canvas's one floating bar
-//! ([`FloatBar`], B13): Preview | Export ▾ (HTML, React, PNG) | Send to Agent ▾, the bar's one
+//! ([`FloatBar`], B13): Preview, Convert to Layers (B15) | Export ▾ (HTML, React, PNG) | Send to
+//! Agent ▾, the bar's one
 //! primary action: a menu of the coding agents on this Mac that Sawit can start with a prompt,
 //! each with its logo, then Copy Prompt and Reveal in Finder. The downloads ask where to save,
 //! starting in the project's folder. The artboard and flow bars ([`super::frame_bar`]) share the
@@ -60,8 +61,17 @@ pub(in crate::board) fn render_screen_bar(
                 let _ = this.update(cx, |view, cx| view.open_preview(frame, window, cx));
             })
     };
+    let convert = {
+        let this = this.clone();
+        BarButton::new("screen-bar-layers", menu_icons::LAYERS, "Convert to Layers")
+            .tooltip("Make an editable copy of this screen from layers, beside it")
+            .on_click(move |_, _, cx| {
+                let _ = this.update(cx, |view, cx| view.convert_screen_to_layers(frame, cx));
+            })
+    };
     let bar = FloatBar::new("screen-bar")
         .button(preview)
+        .button(convert)
         .divider()
         .button(export_button(
             this.clone(),

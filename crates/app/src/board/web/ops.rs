@@ -57,6 +57,30 @@ impl BoardView {
                 self.open_player(Some(id), cx);
                 Ok(json!(self.player.is_some()))
             }
+            // Preview the same way, opened at the next draw, and its controls set as clicks do.
+            ("preview", Some(id)) => {
+                self.screen_ui.open_preview = Some(id);
+                cx.notify();
+                Ok(json!("opening"))
+            }
+            ("preview_set", _) => self.preview_set(op, cx),
+            ("preview_custom", _) => {
+                let text = |k: &str| {
+                    op.get(k)
+                        .map(|v| v.to_string().trim_matches('"').to_string())
+                };
+                self.screen_ui.custom_typed = Some((
+                    text("w").unwrap_or_default(),
+                    text("h").unwrap_or_default(),
+                    op.get("apply").and_then(Value::as_bool).unwrap_or(false),
+                ));
+                cx.notify();
+                Ok(json!("typing"))
+            }
+            ("close_preview", _) => {
+                self.close_preview(cx);
+                Ok(json!("closed"))
+            }
             ("close_present", _) => {
                 self.player = None;
                 self.web_present(&[], None, cx);
@@ -278,5 +302,41 @@ impl BoardView {
         frame.phase = Phase::Loading;
         frame.built = Some(std::time::Instant::now());
         Ok(json!("reloading"))
+    }
+}
+
+impl BoardView {
+    /// Frame `id` is to have a view now (Convert to Layers reads its page): one the pool let go
+    /// of is built again, and it counts as just used, so the pool keeps it.
+    pub(in crate::board) fn web_want_view(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let Some(frame) = self.web.as_mut().and_then(|web| web.frames.get_mut(&id)) else {
+            return;
+        };
+        frame.used = std::time::Instant::now();
+        if frame.engine.is_none() {
+            frame.refresh = true;
+        }
+        cx.notify();
+    }
+
+    /// Whether frame `id` has a view whose page is at rest.
+    pub(in crate::board) fn web_view_ready(&self, id: NodeId) -> bool {
+        self.web.as_ref().is_some_and(|web| {
+            web.at_rest(id) && web.frames.get(&id).is_some_and(|f| f.engine.is_some())
+        })
+    }
+
+    /// Runs `script` in frame `id`'s page; `callback` gets its result as JSON.
+    pub(in crate::board) fn web_eval(
+        &self,
+        id: NodeId,
+        script: &str,
+        callback: impl Fn(String) + Send + 'static,
+    ) -> Result<(), String> {
+        let engine = (self.web.as_ref())
+            .and_then(|web| web.frames.get(&id))
+            .and_then(|frame| frame.engine.as_ref())
+            .ok_or("the screen has no view")?;
+        engine.eval_with_callback(script, callback)
     }
 }

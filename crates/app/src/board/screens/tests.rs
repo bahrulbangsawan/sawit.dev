@@ -8,7 +8,7 @@ use sawit_core::terminal::AgentKind;
 
 use super::handoff::agent_command;
 use super::pictures::png_of;
-use super::preview::{BAR, Preview, Size};
+use super::preview::{BAR, BEZEL, PAD, Preview, Size, Zoom, custom_size};
 use crate::board::web::screens_of;
 
 /// Send to Agent starts the agent's CLI with the prompt file as its first message: the command
@@ -33,26 +33,28 @@ fn send_to_agent_runs_the_agents_cli_with_the_prompt() {
 }
 
 fn preview(size: Size, rotated: bool) -> Preview {
-    Preview {
-        frame: figcraft_doc::NodeId(1),
-        title: "Sign in".into(),
-        made: (390, 844),
-        size,
-        rotated,
-        engine: None,
-        placed: None,
-    }
+    let mut p = Preview::new(figcraft_doc::NodeId(1), "Sign in".into(), (390, 844), None);
+    p.size = size;
+    p.rotated = rotated;
+    p
 }
 
-/// Preview lays the page out at the size it was made at, the window's, or a device's, on its
-/// side when turned, scaled down to fit under its bar, never up.
+/// Preview lays the page out at the size it was made at, the window's, a device's or a custom
+/// one, on its side when turned, scaled down to fit under its bar, never up.
 #[test]
 fn preview_sizes_fit_under_its_bar() {
     let canvas = (1200.0, 900.0);
-    let area = (1200.0 - 32.0, 900.0 - BAR - 32.0);
+    let area = (1200.0 - 2.0 * PAD, 900.0 - BAR - 2.0 * PAD);
     assert_eq!(preview(Size::Made, false).css_size(area), (390, 844));
     assert_eq!(preview(Size::Made, true).css_size(area), (844, 390));
-    assert_eq!(preview(Size::Window, true).css_size(area), (1168, 824));
+    assert_eq!(
+        preview(Size::Window, true).css_size(area),
+        (area.0 as u32, area.1 as u32)
+    );
+    assert_eq!(
+        preview(Size::Custom(800, 600), true).css_size(area),
+        (600, 800)
+    );
     let desktop = sawit_core::browser::DEVICES
         .iter()
         .position(|d| d.name == "Desktop")
@@ -61,7 +63,7 @@ fn preview_sizes_fit_under_its_bar() {
         preview(Size::Device(desktop), false).css_size(area),
         (1440, 900)
     );
-    let (frame, scale) = preview(Size::Made, false).place((1200.0, 1000.0));
+    let (frame, scale) = preview(Size::Made, false).place((1200.0, 1100.0));
     assert_eq!(
         (frame.width, frame.height, scale),
         (390.0, 844.0, 1.0),
@@ -75,6 +77,37 @@ fn preview_sizes_fit_under_its_bar() {
     );
     let (frame, scale) = preview(Size::Device(desktop), false).place(canvas);
     assert!(scale < 1.0 && frame.width <= area.0 && frame.height <= area.1);
+}
+
+/// 100% shows one CSS px a point when the width fits, the room's height for a taller page; a
+/// device frame fits phones and tablets only, and takes its bezel from the room.
+#[test]
+fn preview_zoom_and_device_frame() {
+    let canvas = (1200.0, 900.0);
+    let mut phone = preview(Size::Made, false);
+    phone.zoom = Zoom::Actual;
+    assert!(phone.actual_fits(canvas));
+    let (frame, scale) = phone.place(canvas);
+    assert_eq!((frame.width, scale), (390.0, 1.0));
+    assert!(frame.height <= 900.0 - BAR - 2.0 * PAD);
+    let desktop = sawit_core::browser::DEVICES
+        .iter()
+        .position(|d| d.name == "Desktop")
+        .unwrap();
+    let mut wide = preview(Size::Device(desktop), false);
+    wide.zoom = Zoom::Actual;
+    assert!(!wide.actual_fits(canvas), "1440 doesn't fit 1200");
+    assert!(wide.place(canvas).1 < 1.0, "it fits instead");
+    assert!(!wide.frame_fits());
+    phone.framed = true;
+    phone.zoom = Zoom::Fit;
+    assert!(phone.frame_shown());
+    let (framed, _) = phone.place(canvas);
+    assert!(framed.y >= BAR + PAD + BEZEL);
+    assert!(framed.height <= 900.0 - BAR - 2.0 * PAD - 2.0 * BEZEL);
+    assert_eq!(custom_size(Some(1024), Some(768)), Ok((1024, 768)));
+    assert!(custom_size(Some(10), Some(768)).is_err());
+    assert!(custom_size(None, Some(768)).is_err());
 }
 
 /// A texture's BGRA bytes come out as a PNG of the same pixels.

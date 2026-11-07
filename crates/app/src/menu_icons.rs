@@ -51,6 +51,7 @@ pub const STOP: Lucide = Lucide::CircleStop;
 pub const RESTART: Lucide = Lucide::RotateCcw;
 pub const REFRESH: Lucide = Lucide::RefreshCw;
 pub const PREVIEW: Lucide = Lucide::Eye;
+pub const DEVICE: Lucide = Lucide::Smartphone;
 pub const CONNECT: Lucide = Lucide::Plug;
 pub const DISCONNECT: Lucide = Lucide::Unplug;
 pub const AGENT: Lucide = Lucide::Bot;

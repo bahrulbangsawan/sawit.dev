@@ -144,6 +144,7 @@ impl Sawit {
                 Err(e) => fail(e),
             };
         }
+        let (project, file) = (a.project.clone(), a.file.clone());
         let got = self.screen_call(a.project, a.file, op, |at, op| {
             let mut found = at.find(&op)?;
             let folder = PathBuf::from(found["folder"].as_str().unwrap_or_default());
@@ -155,6 +156,10 @@ impl Sawit {
         });
         match got.await {
             Ok(mut v) => {
+                // The design standard's machine checks of its page, as a write answers them (B12).
+                if let Some(checks) = self.screen_checks(project, file, &v, false).await {
+                    v["design_checks"] = checks;
+                }
                 let png = v.get_mut("png_base64").map(Value::take);
                 if let Some(map) = v.as_object_mut() {
                     map.remove("png_base64");

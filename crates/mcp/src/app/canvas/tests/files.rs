@@ -77,6 +77,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
     // An export with no path goes to the project's exports, named after the file.
     let exported = server
         .canvas_export(Parameters(CanvasExportArgs {
+            lint: None,
             tab: None,
             format: None,
             output_path: None,

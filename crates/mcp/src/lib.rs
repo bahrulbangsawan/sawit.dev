@@ -113,7 +113,7 @@ const MAX_OUTPUT: usize = 100_000;
 /// stay at 4,000 at most, and the step an agent designing UI takes first comes first.
 pub const INSTRUCTIONS: &str = "\
 Sawit is a macOS developer workbench. Before you design, build or review UI on the Sawit canvas, read canvas_design_guide and follow it.
-Build UI as screens (canvas_begin {kind: \"screen\"}, canvas_screen_write): their answers bring the rules and checks.
+Build UI as layers from the file's components (canvas_begin, canvas_command); answers bring the checks.
 Several agents in one session: pass each its own stable `agent` id on canvas tools.
 These tools work without the Sawit app running:
 - Instances: local PostgreSQL servers (create, start, stop, logs, …).
