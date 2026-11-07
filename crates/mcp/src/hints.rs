@@ -199,6 +199,8 @@ const ADDS: &[&str] = &[
     "app_ssh_connect",
     "canvas_add_elements",
     "canvas_starter_system",
+    // It renames the screen's frame too, which one undo puts back.
+    "canvas_screen_to_layers",
     "canvas_add_diagram",
     "canvas_add_mermaid",
     "canvas_begin",

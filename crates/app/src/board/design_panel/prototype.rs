@@ -4,7 +4,8 @@
 //! selected top-level frame start one; and Present, which shows the frames in the player
 //! ([`crate::board::player`]). While the tab shows, the canvas draws the connections.
 
-use figcraft_doc::NodeId;
+use figcraft_doc::proto::{DeviceRotation, PrototypeSettings};
+use figcraft_doc::{Document, NodeId, NodeKind};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
@@ -83,6 +84,7 @@ pub(super) fn render_prototype(
             .tooltip("Present the prototype from the selection (⌥⌘↩)")
             .on_click(cx.listener(move |view, _, _, cx| view.open_player(start, cx))),
     );
+    body = body.child(settings_section(&doc, page, &this, muted));
     if let [id] = selection.as_slice() {
         let id = *id;
         let mut list = v_flex().gap_2().child(section_title(
@@ -326,4 +328,65 @@ fn section_title(icon: Lucide, name: &'static str, muted: Hsla) -> impl IntoElem
 /// What an empty section says, in one muted line.
 fn empty_state(text: &'static str, muted: Hsla) -> impl IntoElement {
     div().text_xs().text_color(muted).child(text)
+}
+
+/// The prototype's settings, at the tab's top (B15): the device Present shows the frames in, and
+/// whether it is turned.
+fn settings_section(
+    doc: &Document,
+    page: NodeId,
+    this: &WeakEntity<BoardView>,
+    muted: Hsla,
+) -> impl IntoElement {
+    let settings = match doc.node(page).map(|n| &n.kind) {
+        Some(NodeKind::Page { prototype, .. }) => prototype.clone(),
+        _ => PrototypeSettings::default(),
+    };
+    let mut devices: Vec<(String, SharedString)> = vec![("None".into(), "None".into())];
+    devices.extend(
+        PrototypeSettings::DEVICES
+            .iter()
+            .map(|d| (d.name.to_string(), d.name.into())),
+    );
+    let device = {
+        let run = this.clone();
+        menu(
+            "proto-device".into(),
+            settings.device.clone(),
+            "The device Present shows the frames in",
+            devices,
+            Some(settings.device.clone()),
+            move |d: &String, cx| {
+                let params = serde_json::json!({"device": d});
+                let _ = run.update(cx, |v, cx| v.choose("proto.settings", params, cx));
+            },
+        )
+    };
+    let turns = settings.model().is_some_and(|m| m.rotates);
+    let landscape = matches!(settings.rotation, DeviceRotation::Landscape);
+    let rotate = {
+        let run = this.clone();
+        Button::new("proto-rotate")
+            .ghost()
+            .small()
+            .icon(Lucide::RotateCw)
+            .accessibility_label("Landscape")
+            .tooltip(if turns {
+                "Turn the device to landscape"
+            } else {
+                "This device doesn't turn"
+            })
+            .selected(landscape)
+            .toggled(landscape)
+            .disabled(!turns)
+            .on_click(move |_, _, cx| {
+                let to = if landscape { "portrait" } else { "landscape" };
+                let params = serde_json::json!({"rotation": to});
+                let _ = run.update(cx, |v, cx| v.choose("proto.settings", params, cx));
+            })
+    };
+    v_flex()
+        .gap_2()
+        .child(section_title(Lucide::Smartphone, "Device", muted))
+        .child(row().child(device).child(rotate))
 }

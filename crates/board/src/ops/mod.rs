@@ -241,6 +241,7 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         Some("begin") => work::begin(board, op),
         Some("progress") => work::progress(board, op),
         Some("screen") => screen::screen(board, op),
+        Some("screen_layers") => screen::to_layers(board, op),
         Some("checks") => checks::checks(board, op),
         Some("lint") => checks::lint(board, op),
         Some("design_status") => checks::design_status(board),

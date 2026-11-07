@@ -37,8 +37,19 @@ pub(super) fn on_click_edit(
     }
 }
 
+thread_local! {
+    /// The sections folded away, by id: they stay folded for every selection (B15).
+    static FOLDED: std::cell::RefCell<std::collections::HashSet<&'static str>> =
+        Default::default();
+}
+
+/// Whether section `id` is folded away.
+pub(super) fn folded(id: &'static str) -> bool {
+    FOLDED.with(|f| f.borrow().contains(id))
+}
+
 /// A section of the panel: `title`, with `actions` (small buttons) on its right, over `rows`, and
-/// a line under it all.
+/// a line under it all. A click on the title folds the rows away or opens them (B15).
 pub(super) fn section(
     id: &'static str,
     title: &'static str,
@@ -46,12 +57,45 @@ pub(super) fn section(
     rows: Vec<AnyElement>,
     cx: &App,
 ) -> AnyElement {
+    let closed = folded(id);
+    let muted = cx.theme().muted_foreground;
+    let toggle = Button::new(SharedString::from(format!("design-fold-{id}")))
+        .ghost()
+        .small()
+        .compact()
+        .label(title)
+        .icon(
+            Icon::new(if closed {
+                Lucide::ChevronRight
+            } else {
+                Lucide::ChevronDown
+            })
+            .text_color(muted),
+        )
+        .accessibility_label(format!(
+            "{title}, {}",
+            if closed { "folded" } else { "open" }
+        ))
+        .tooltip(if closed {
+            "Show this section"
+        } else {
+            "Fold this section away"
+        })
+        .on_click(move |_, window, _| {
+            FOLDED.with(|f| {
+                let mut f = f.borrow_mut();
+                if !f.remove(id) {
+                    f.insert(id);
+                }
+            });
+            window.refresh();
+        });
     v_flex()
         .debug_selector(move || format!("design-section-{id}"))
         .w_full()
         .px_3()
         .pt_2()
-        .pb_3()
+        .pb(px(if closed { 8. } else { 12. }))
         .gap_2()
         .border_b_1()
         .border_color(cx.theme().border)
@@ -60,10 +104,10 @@ pub(super) fn section(
                 .w_full()
                 .h(px(24.))
                 .justify_between()
-                .child(div().font_medium().child(title))
+                .child(div().ml(px(-6.)).font_medium().child(toggle))
                 .child(h_flex().gap_1().children(actions)),
         )
-        .children(rows)
+        .when(!closed, |s| s.children(rows))
         .into_any_element()
 }
 

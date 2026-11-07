@@ -41,6 +41,7 @@ impl BoardView {
             "routes" => Ok(self.agent_routes_op(op, look, cx)),
             "screen_write" => Ok(Answer::Now(self.write_screen(&op, look, cx))),
             "screen_get" => Ok(self.get_screen(&op, look, cx)),
+            "screen_layers" => Ok(self.agent_screen_layers(&op, look, cx)),
             "export_svg" | "export_png" => {
                 let pictures = self.screen_pictures();
                 if pictures.is_empty() {

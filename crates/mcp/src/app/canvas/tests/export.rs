@@ -45,6 +45,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
             let target = file.with_file_name(name);
             let refused = server
                 .canvas_export(Parameters(CanvasExportArgs {
+                    lint: None,
                     tab: None,
                     format: Some(format.into()),
                     output_path: Some(target.display().to_string()),
@@ -74,6 +75,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
         let out = dir.path().join(name);
         let done = server
             .canvas_export(Parameters(CanvasExportArgs {
+                lint: None,
                 tab: None,
                 format: Some(format.into()),
                 output_path: Some(out.display().to_string()),
@@ -96,6 +98,7 @@ async fn canvas_export_reads_its_path_and_format_as_every_tool_does() {
     let project = dir.path().join("project");
     write_board(&board_file(&project), 1);
     let export = |format: &str, output_path: &str| CanvasExportArgs {
+        lint: None,
         tab: None,
         format: Some(format.into()),
         output_path: Some(output_path.into()),
@@ -149,6 +152,7 @@ async fn exported_sticky(text: &str) -> String {
     let out = dir.path().join("page.svg");
     let done = server
         .canvas_export(Parameters(CanvasExportArgs {
+            lint: Some(false),
             tab: None,
             format: Some("svg".into()),
             output_path: Some(out.display().to_string()),
@@ -199,6 +203,7 @@ async fn an_export_path_is_read_as_every_tool_reads_one() {
     let out = dir.path().join("page.svg");
     let done = server
         .canvas_export(Parameters(CanvasExportArgs {
+            lint: Some(false),
             tab: None,
             format: Some("svg".into()),
             output_path: Some(format!("{}  ", out.display())),
@@ -215,5 +220,30 @@ async fn an_export_path_is_read_as_every_tool_reads_one() {
             out.display(),
             written.len()
         )
+    );
+}
+
+/// An export answers the design lint's summary of the page by default (B12).
+#[tokio::test]
+async fn an_export_says_what_the_lint_finds() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let project = dir.path().join("project");
+    write_board(&board_file(&project), 1);
+    let out = dir.path().join("linted.svg");
+    let done = server
+        .canvas_export(Parameters(CanvasExportArgs {
+            lint: None,
+            tab: None,
+            format: Some("svg".into()),
+            output_path: Some(out.display().to_string()),
+            file: None,
+            project: project_arg(&project),
+        }))
+        .await;
+    let text = said(&done);
+    assert!(
+        text.contains("\"lint\"") && text.contains("\"errors\""),
+        "{text}"
     );
 }

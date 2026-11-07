@@ -147,6 +147,13 @@ fn build(board: &mut BoardDoc, op: &Value) -> Result<Value, String> {
         bind(board, label, "fills/0/color", ink)?;
         bind(board, b, "paddingHorizontal", "space/4")?;
         bind(board, b, "paddingVertical", "space/3")?;
+        // A 44 px target (a11y.2), and a gap on the scale (spc.1).
+        bind(board, b, "gap", "space/2")?;
+        run(
+            board,
+            "node.set",
+            json!({"ids": [b], "props": {"minWidth": 44, "minHeight": 44, "crossAlign": "center"}}),
+        )?;
         bind(board, b, "cornerRadius", "radius/md")?;
         bind(board, label, "fontSize", "type/body")?;
         run(board, "component.create", json!({"ids": [b]}))?;
@@ -203,12 +210,29 @@ fn build(board: &mut BoardDoc, op: &Value) -> Result<Value, String> {
         json!({"ids": [field], "direction": "horizontal"}),
     )?;
     bind(board, input, "gap", "space/2")?;
-    bind(board, input, "fills/0/color", "bg/subtle")?;
+    // The input is its label over its field: no fill of its own, and the field as wide as it.
+    run(
+        board,
+        "node.set",
+        json!({"ids": [input], "props": {"fills": []}}),
+    )?;
+    run(
+        board,
+        "node.set",
+        json!({"ids": [field], "props": {"sizingH": "fill"}}),
+    )?;
     bind(board, label, "fills/0/color", "fg/default")?;
     bind(board, field, "fills/0/color", "bg/surface")?;
     bind(board, field, "strokes/0/color", "border")?;
     bind(board, field, "cornerRadius", "radius/sm")?;
     bind(board, field, "paddingHorizontal", "space/3")?;
+    bind(board, field, "paddingVertical", "space/3")?;
+    bind(board, field, "gap", "space/2")?;
+    run(
+        board,
+        "node.set",
+        json!({"ids": [field], "props": {"minHeight": 44, "crossAlign": "center"}}),
+    )?;
     bind(board, value, "fills/0/color", "fg/muted")?;
     run(board, "component.create", json!({"ids": [input]}))?;
     components.push(("Input", input));
@@ -280,6 +304,12 @@ mod tests {
             .filter(|f| f.finding.rule == "col.16")
             .collect();
         assert!(raw.is_empty(), "{raw:?}");
+        // Nor any error: its buttons and field are 44 px targets, its gaps on the scale.
+        assert_eq!(lint.errors, 0, "{:?}", lint.findings);
+        let off_scale: Vec<_> = (lint.findings.iter())
+            .filter(|f| f.finding.rule == "spc.1")
+            .collect();
+        assert!(off_scale.is_empty(), "{off_scale:?}");
         // Run again: the tokens are kept, not made twice.
         let again = super::super::run(&mut board, &json!({"op": "starter"}));
         assert_eq!(again["variables"], json!([]));

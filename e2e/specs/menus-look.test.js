@@ -97,7 +97,7 @@ sawitTest("menus look: the screen, artboard and flow bars (B13)", { timeout: 240
   await ctx.win.screenshot(path.join(dir, "bar-screen.png"));
 });
 
-sawitTest("menus look: the file tree and the terminal's menus", { timeout: 120_000 }, async (ctx) => {
+sawitTest("menus look: the file tree and the terminal's menus", { timeout: 120_000, headed: true }, async (ctx) => {
   const { win, world } = ctx;
   const dir = await shotsDir(ctx);
   await writeFile(path.join(world.project, "notes.md"), "# Notes\n");

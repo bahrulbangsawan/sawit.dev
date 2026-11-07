@@ -280,6 +280,7 @@ impl BoardView {
             "follow": self.follow.state(Instant::now()),
             "presenting": self.player.is_some(),
             "preview": self.preview_open(),
+            "preview_state": self.preview_state(),
         })
     }
 

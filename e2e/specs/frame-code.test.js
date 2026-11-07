@@ -1,5 +1,5 @@
-// An artboard (a frame of layers) exports as code: the bar over it offers Export HTML and Export
-// React, and the HTML, opened in Sawit's browser, lays its layers out where the canvas draws them.
+// An artboard (a frame of layers) exports as code: the bar over it has an Export menu with HTML and
+// React (B13), and the HTML, opened in Sawit's browser, lays its layers out where the canvas draws them.
 
 import assert from "node:assert/strict";
 import { writeFile, mkdir } from "node:fs/promises";
@@ -40,11 +40,14 @@ async function drawCard(ctx) {
   return { card: card.id, button: button.id };
 }
 
-sawitTest("frame code: a selected artboard has Export HTML and Export React over it", async (ctx) => {
+sawitTest("frame code: a selected artboard has an Export menu with HTML and React over it", async (ctx) => {
   await openCanvas(ctx);
   await drawCard(ctx);
-  await ctx.win.waitFor({ role: "button", name: "Export HTML" });
-  await ctx.win.waitFor({ role: "button", name: "Export React" });
+  await ctx.win.openMenu({ role: "button", name: "Export" });
+  await ctx.win.waitFor({ role: "menuitem", name: "HTML" });
+  await ctx.win.waitFor({ role: "menuitem", name: "React" });
+  await ctx.win.press("escape");
+  await ctx.win.waitForGone({ role: "menu" });
 });
 
 sawitTest("frame code: the HTML lays the artboard out as the canvas draws it", { site: true }, async (ctx) => {

@@ -308,7 +308,6 @@ mod tests {
                 currency: "EUR".into(),
                 renews_day: Some(15),
                 renews_month: Some(1),
-                ..Default::default()
             },
         );
         w.prices.insert(
