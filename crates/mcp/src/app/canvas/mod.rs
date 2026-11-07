@@ -6,6 +6,7 @@
 mod args;
 pub(crate) mod design;
 mod dispatch;
+mod export;
 mod files;
 mod guide;
 mod handoff;
@@ -18,12 +19,9 @@ mod tab;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
-
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 use rmcp::{tool, tool_router};
-use sawit_board::store;
 use serde_json::{Value, json};
 
 pub use args::{
@@ -34,10 +32,10 @@ pub use args::{
     CanvasTargetArgs, CanvasUpdateArgs,
 };
 use dispatch::{command_list, in_work};
-use files::{absolute_path, canvas_file, export_path, is_sawit_file, read_scene};
+use files::{absolute_path, is_sawit_file, read_scene};
 use tab::CanvasTab as _;
 
-use super::{base64_decode, pretty};
+use super::pretty;
 use crate::{Sawit, blocking, fail, ok, tri};
 
 /// `op` with the lane its tool's `agent` argument names, when it names one: the app shows each
@@ -241,72 +239,14 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Export the canvas's page on show as one SVG or PNG file, at 1×. For other pages, chosen layers, another format (pdf, jpg, webp) or scale, use canvas_command file.export {ids, format, scale, path}"
+        description = "Export the canvas's page on show as one SVG or PNG file, at 1×, with the design lint's summary of the page (errors, warnings, the first findings; `lint: false` leaves it out). For other pages, chosen layers, another format (pdf, jpg, webp) or scale, use canvas_command file.export {ids, format, scale, path}"
     )]
     async fn canvas_export(
         &self,
         Parameters(mut a): Parameters<CanvasExportArgs>,
     ) -> CallToolResult {
         tri!(a.tab_into_file());
-        let format = a.format.as_deref().map(str::trim).unwrap_or_default();
-        let png = match format.to_lowercase().as_str() {
-            "svg" | "" => false,
-            "png" => true,
-            _ => return fail(format!("Unknown format “{format}”: use svg or png.")),
-        };
-        // Read as every tool that writes a file reads its path (MCP-11): absolute, and never a
-        // canvas file, since nothing else holds the board when the app is closed.
-        let named = tri!(crate::output_path(
-            "canvas_export",
-            a.output_path.as_deref()
-        ));
-        let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
-        let project = crate::agent_project(a.project.as_deref());
-        // Named after the canvas file: `canvas-…` for the project's, `home-…` for home.sawit.
-        let canvas = tri!(canvas_file(a.file.as_deref()));
-        let stem = canvas.as_deref().map(store::bound_file);
-        let stem = stem.as_deref().and_then(Path::file_stem);
-        let stem = stem.map_or_else(|| "canvas".into(), |stem| stem.to_string_lossy());
-        let value = match self.canvas(a.project, a.file, op).await {
-            Ok(v) => v,
-            Err(e) => return fail(e),
-        };
-        let bytes = if png {
-            match base64_decode(
-                value["png_base64"].as_str().unwrap_or_default(),
-                "The canvas",
-            ) {
-                Ok(b) => b,
-                Err(e) => return fail(e),
-            }
-        } else {
-            value["svg"]
-                .as_str()
-                .unwrap_or_default()
-                .as_bytes()
-                .to_vec()
-        };
-        let path = named.unwrap_or_else(|| {
-            export_path(
-                project.as_deref(),
-                &self.paths.cache_dir(),
-                &stem,
-                if png { "png" } else { "svg" },
-            )
-        });
-        if let Some(dir) = path.parent()
-            && let Err(e) = std::fs::create_dir_all(dir)
-        {
-            return fail(format!("Unable to create {}: {e}", dir.display()));
-        }
-        match std::fs::write(&path, &bytes) {
-            Ok(()) => ok(format!(
-                "Canvas exported to {} ({} bytes)",
-                path.display(),
-                bytes.len()
-            )),
-            Err(e) => fail(format!("Unable to write {}: {e}", path.display())),
-        }
+        self.canvas_export_tool(a).await
     }
 
     #[tool(description = concat!(
@@ -395,7 +335,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Read a UI screen: its HTML (index.html), its files, its frame and viewport, and a PNG of it as the canvas renders it (with the app running). Without `work` or `screen`, list the screens on the canvas. With the app closed nothing is rendered, so there is no PNG"
+        description = "Read a UI screen: its HTML (index.html), its files, its frame and viewport, the design standard's machine checks of its page (`design_checks`), and a PNG of it as the canvas renders it (with the app running). Without `work` or `screen`, list the screens on the canvas. With the app closed nothing is rendered, so there is no PNG"
     )]
     async fn canvas_screen_get(
         &self,

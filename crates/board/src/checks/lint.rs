@@ -217,7 +217,10 @@ fn screen_rules(
                     let c = rgba(color);
                     fills.insert(c.hex());
                     let field = format!("fills/{i}/color");
-                    if !colors.is_empty() && !node.bound.contains_key(&field) && !sketch {
+                    // `fill: {"$var": …}` binds the whole fill (cnv.15), `variable.bind` the
+                    // paint's colour: both are the token.
+                    let whole = i == 0 && node.bound.contains_key("fill");
+                    if !colors.is_empty() && !node.bound.contains_key(&field) && !whole && !sketch {
                         let (token, d) = nearest_token(colors, c).unwrap_or(("", 0.0));
                         let fix = if d < 0.02 {
                             format!(

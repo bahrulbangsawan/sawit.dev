@@ -175,6 +175,10 @@ pub struct CanvasExportArgs {
         description = "Absolute path (or ~/…) to write the file to; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
+    #[schemars(
+        description = "false leaves out the design lint's summary of the page (errors, warnings and the first findings), which comes by default"
+    )]
+    pub lint: Option<bool>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]
