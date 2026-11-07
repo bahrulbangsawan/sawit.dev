@@ -148,7 +148,8 @@ fn a_projects_canvas_file_named_through_a_link_is_that_projects_canvas() {
 #[test]
 fn no_two_shortcuts_share_a_keystroke() {
     let mut seen = HashSet::new();
-    let global = ["cmd-q", "shift-cmd-n", "cmd-o"];
+    // The app's own (`cli::init`): Quit, New Window (⌥⌘N since B5) and Open Folder.
+    let global = ["cmd-q", "alt-cmd-n", "cmd-o"];
     for binding in bindings() {
         let keys: Vec<String> = binding
             .keystrokes()
@@ -167,6 +168,83 @@ fn no_two_shortcuts_share_a_keystroke() {
         let first = chord.split(' ').next().unwrap();
         assert!(!seen.contains(first), "{first} shadows {chord}");
     }
+}
+
+/// B5: macOS and the Edit menu keep these for themselves: the app switcher, Spotlight, full
+/// screen, Hide, Minimize, Quit, Close Window, Preferences and the clipboard and undo keys. No
+/// default binding of the workspace, the terminal, the file tree, the browser or the canvas's
+/// workspace keys takes one (the canvas's and the file tree's own Copy and Paste act on what they
+/// hold, as the Edit menu's would).
+const MACOS_KEYS: &[&str] = &[
+    "cmd-tab",
+    "shift-cmd-tab",
+    "cmd-space",
+    "ctrl-cmd-f",
+    "cmd-h",
+    "alt-cmd-h",
+    "cmd-m",
+    "cmd-q",
+    "cmd-,",
+    "cmd-c",
+    "cmd-v",
+    "cmd-x",
+    "cmd-z",
+    "shift-cmd-z",
+    "cmd-a",
+    "cmd-`",
+];
+
+#[test]
+fn no_default_binding_takes_a_macos_key() {
+    for binding in bindings() {
+        let keys: Vec<String> = binding
+            .keystrokes()
+            .iter()
+            .map(|k| page_key(k.modifiers(), k.key()))
+            .collect();
+        let keys = keys.join(" ");
+        assert!(!MACOS_KEYS.contains(&keys.as_str()), "{keys} is macOS's");
+    }
+}
+
+/// B5's keys, each the one action the backlog gives it, in the workspace; ⌘J is free.
+#[test]
+fn the_area_keys_open_close_and_fill() {
+    let bound: Vec<(String, String)> = bindings()
+        .iter()
+        .map(|b| {
+            let keys = crate::keymap::names::unparse(b.keystrokes());
+            (keys, b.action().name().to_string())
+        })
+        .collect();
+    let action = |key: &str| {
+        let found: Vec<&str> = (bound.iter())
+            .filter(|(k, _)| k == key)
+            .map(|(_, a)| a.as_str())
+            .collect();
+        assert_eq!(found.len(), 1, "{key}: {found:?}");
+        found[0].to_string()
+    };
+    for (key, name) in [
+        ("cmd-t", "workspace::ToggleTerminal"),
+        ("cmd-shift-t", "workspace::MaximizeTerminal"),
+        ("alt-cmd-t", "workspace::NewTerminal"),
+        ("cmd-u", "workspace::ToggleCanvas"),
+        ("cmd-shift-c", "workspace::MaximizeCanvas"),
+        ("cmd-b", "workspace::ToggleBrowser"),
+        ("cmd-shift-b", "workspace::MaximizeBrowser"),
+        ("cmd-e", "workspace::ToggleSidebar"),
+        ("cmd-n", "workspace::NewFileInProject"),
+        ("cmd-shift-n", "workspace::OpenNewProject"),
+        ("alt-tab", "workspace::FocusNextPanel"),
+        ("alt-shift-tab", "workspace::FocusPreviousPanel"),
+        ("cmd-k o", "workspace::CloseOtherTabs"),
+        ("ctrl-cmd-c", "workspace::OpenCanvas"),
+    ] {
+        assert_eq!(action(key), name, "{key}");
+    }
+    assert!(!bound.iter().any(|(k, _)| k == "cmd-j"), "⌘J is left free");
+    assert!(!bound.iter().any(|(k, _)| k == "ctrl-cmd-n"), "⌃⌘N is gone");
 }
 
 /// ⇧⌘↩ fills the window with the canvas or the browser, and a second ⇧⌘↩ puts the layout back;
@@ -227,9 +305,9 @@ fn maximize_keys_are_free() {
 mod keyboard;
 
 /// What had the keyboard and goes off screen gives it to the workspace
-/// ([`super::KeyboardHome`]), whatever it is: a terminal pane once ⌘J hides the dock, a file
+/// ([`super::KeyboardHome`]), whatever it is: a terminal pane once ⌘T hides the dock, a file
 /// editor's text once ⌃Tab shows another tab. Before, it kept the keyboard unseen, GPUI sent
-/// the keys from the window's root, and the second ⌘J or ⌃Tab did nothing. Each of three
+/// the keys from the window's root, and the second ⌘T or ⌃Tab did nothing. Each of three
 /// presses works, and the keyboard ends where it belongs: with the workspace once the dock is
 /// hidden, with the text once ⌃Tab has gone round to its tab again. (The browser's page and
 /// address field: `browser::tests`.)
@@ -247,7 +325,7 @@ fn what_goes_off_screen_gives_the_keyboard_to_the_workspace(cx: &mut gpui_kit::T
     let pane: Keyboard = |this, _| this.pane.clone();
     let text: Keyboard = |this, cx| this.text.read(cx).focus_handle(cx);
     for (what, keyboard, keys, ends) in [
-        ("a terminal pane", pane, "cmd-j", ("the workspace", home)),
+        ("a terminal pane", pane, "cmd-t", ("the workspace", home)),
         ("a file's text", text, "ctrl-tab", ("the text", text)),
     ] {
         let (window, workspace) = open(keyboard, cx);
@@ -270,7 +348,7 @@ fn what_goes_off_screen_gives_the_keyboard_to_the_workspace(cx: &mut gpui_kit::T
 
 /// What went off screen with the keyboard has it again once it is shown again
 /// ([`super::KeyboardHome::give_back`], review I4): a terminal pane hidden and shown by the
-/// title bar's button (clicks, no key) or by ⌘J twice, and a file's text whose tab is left and
+/// title bar's button (clicks, no key) or by ⌘T twice, and a file's text whose tab is left and
 /// come back to by clicks, take the typing that follows, as they did before the workspace took
 /// the keyboard from what is hidden. What has been clicked meanwhile keeps the keyboard, and
 /// the browser's page (here the stand-in's page) waits for a click, as it always did.
@@ -303,7 +381,7 @@ fn what_is_shown_again_has_the_keyboard_again(cx: &mut gpui_kit::TestAppContext)
 
     let (window, workspace) = open(pane, cx);
     for _ in 0..2 {
-        cx.simulate_keystrokes(window, "cmd-j");
+        cx.simulate_keystrokes(window, "cmd-t");
         cx.run_until_parked();
     }
     cx.simulate_keystrokes(window, "l s");
@@ -313,7 +391,7 @@ fn what_is_shown_again_has_the_keyboard_again(cx: &mut gpui_kit::TestAppContext)
     });
     if !dock || typed != ["l", "s"] {
         failed.push(format!(
-            "after cmd-j twice the dock shows = {dock}, and the pane got {typed:?} of `l s`"
+            "after cmd-t twice the dock shows = {dock}, and the pane got {typed:?} of `l s`"
         ));
     }
 
@@ -358,8 +436,8 @@ fn what_is_shown_again_has_the_keyboard_again(cx: &mut gpui_kit::TestAppContext)
 /// review I5): GPUI takes it from what isn't drawn only in a frame after one with a keyboard
 /// path, and the frame that hid it had none. So two changes on screen in a row, the second
 /// showing something else again, left the keyboard on the hidden view, past every workspace
-/// shortcut, until a click: ⌘J, ⌃Tab, ⌘J from a terminal pane left the dock hidden; ⌃Tab,
-/// ⌘J, ⌃Tab from a file's text lost the last ⌃Tab. Also: what is clicked meanwhile makes the
+/// shortcut, until a click: ⌘T, ⌃Tab, ⌘T from a terminal pane left the dock hidden; ⌃Tab,
+/// ⌘T, ⌃Tab from a file's text lost the last ⌃Tab. Also: what is clicked meanwhile makes the
 /// workspace forget what it took, and a redraw that changes nothing gives nothing back (one
 /// would, given back to what is hidden, come home and ask for the next frame, without end).
 #[gpui_kit::test]
@@ -378,16 +456,16 @@ fn the_keyboard_never_stays_on_what_is_hidden(cx: &mut gpui_kit::TestAppContext)
 
     for (what, from, keys, presses, ends) in [
         (
-            "⌘J, ⌃Tab, ⌘J",
+            "⌘T, ⌃Tab, ⌘T",
             pane,
-            "cmd-j ctrl-tab cmd-j",
+            "cmd-t ctrl-tab cmd-t",
             3,
             ("the pane", pane),
         ),
         (
-            "⌃Tab, ⌘J, ⌃Tab, ⌃Tab",
+            "⌃Tab, ⌘T, ⌃Tab, ⌃Tab",
             text,
-            "ctrl-tab cmd-j ctrl-tab ctrl-tab",
+            "ctrl-tab cmd-t ctrl-tab ctrl-tab",
             4,
             ("the text", text),
         ),
@@ -407,16 +485,16 @@ fn the_keyboard_never_stays_on_what_is_hidden(cx: &mut gpui_kit::TestAppContext)
         }
     }
 
-    // The text's tab left, then the dock hidden, both by clicks: ⌘J still works.
+    // The text's tab left, then the dock hidden, both by clicks: ⌘T still works.
     let (window, workspace) = open(text, cx);
     show(&workspace, cx, |w| w.tab = 1);
     show(&workspace, cx, |w| w.dock = false);
-    cx.simulate_keystrokes(window, "cmd-j");
+    cx.simulate_keystrokes(window, "cmd-t");
     cx.run_until_parked();
     let (worked, dock) = cx.update(|cx| (workspace.read(cx).presses, workspace.read(cx).dock));
     if worked != 1 || !dock || !has(home, window, &workspace, cx) {
         failed.push(format!(
-            "after the text's tab and the dock were hidden by clicks, cmd-j worked {worked} \
+            "after the text's tab and the dock were hidden by clicks, cmd-t worked {worked} \
                  times and the dock shows = {dock}"
         ));
     }

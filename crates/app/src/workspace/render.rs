@@ -66,7 +66,20 @@ impl Render for Workspace {
                 cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_area(Area::Sidebar, cx)),
             )
             .on_action(
-                cx.listener(|this, _: &ToggleTerminal, _, cx| this.toggle_area(Area::Terminal, cx)),
+                cx.listener(|this, _: &ToggleTerminal, w, cx| this.toggle_terminal_area(w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ToggleBrowser, w, cx| {
+                this.toggle_tab_area(hotkeys::TabArea::Browser, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleCanvas, w, cx| {
+                this.toggle_tab_area(hotkeys::TabArea::Canvas, w, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &NewFileInProject, w, cx| this.new_file_in_project(w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &FocusNextPanel, w, cx| this.focus_other_panel(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &FocusPreviousPanel, w, cx| this.focus_other_panel(w, cx)),
             )
             .on_action(
                 cx.listener(|this, _: &ToggleCenter, _, cx| this.toggle_area(Area::Center, cx)),

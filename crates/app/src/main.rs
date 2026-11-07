@@ -17,6 +17,8 @@ mod find;
 mod git;
 mod highlight;
 mod keymap;
+#[cfg(test)]
+mod keys_tests;
 mod layout;
 mod local_explorer;
 mod login_item;

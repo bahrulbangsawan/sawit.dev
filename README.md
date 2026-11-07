@@ -1425,31 +1425,35 @@ French…), the defaults move where macOS menus put them.
 |---|---|
 | Keymap Editor | <kbd>⌘</kbd><kbd>K</kbd> <kbd>⌘</kbd><kbd>S</kbd> |
 | Open folder | <kbd>⌘</kbd><kbd>O</kbd> |
-| New Project page | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>N</kbd> |
-| New window | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
+| New file (in the folder selected in Files, else the project's root) | <kbd>⌘</kbd><kbd>N</kbd> |
+| New Project page | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
+| New window | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | Run SQL (selection or all) | <kbd>⌘</kbd><kbd>↩</kbd> |
 | Save file | <kbd>⌘</kbd><kbd>S</kbd> |
 | Format document | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd> |
-| Show/hide sidebar | <kbd>⌘</kbd><kbd>B</kbd> |
-| Show/hide terminal | <kbd>⌘</kbd><kbd>J</kbd> |
+| Show/hide the folder panel (sidebar) | <kbd>⌘</kbd><kbd>E</kbd> |
+| Show/hide the terminal / fill the window with it | <kbd>⌘</kbd><kbd>T</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>T</kbd> |
+| Show/hide the browser / fill the window with it | <kbd>⌘</kbd><kbd>B</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd> |
+| Show/hide the canvas / fill the window with it | <kbd>⌘</kbd><kbd>U</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> |
+| Move between the terminal and the tabs | <kbd>⌥</kbd><kbd>⇥</kbd> / <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⇥</kbd> |
 | Show/hide tabs & tables | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>J</kbd> |
 | Show/hide agent cursors | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>A</kbd> |
 | Close active tab | <kbd>⌘</kbd><kbd>W</kbd> |
-| Close Others | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>T</kbd> |
+| Close Others | <kbd>⌘</kbd><kbd>K</kbd> <kbd>O</kbd> |
 | Close Left / Close Right | <kbd>⌘</kbd><kbd>K</kbd> <kbd>E</kbd> / <kbd>⌘</kbd><kbd>K</kbd> <kbd>T</kbd> |
 | Close Clean (tabs without changes) | <kbd>⌘</kbd><kbd>K</kbd> <kbd>U</kbd> |
 | Safe Close All / Force Close All (asks first) | <kbd>⌘</kbd><kbd>K</kbd> <kbd>W</kbd> / <kbd>⌘</kbd><kbd>K</kbd> <kbd>⇧</kbd><kbd>W</kbd> |
 | Pin Tab | <kbd>⌘</kbd><kbd>K</kbd> <kbd>⇧</kbd><kbd>↩</kbd> |
 | Next tab / previous tab | <kbd>⌃</kbd><kbd>⇥</kbd> / <kbd>⌃</kbd><kbd>⇧</kbd><kbd>⇥</kbd> |
-| New terminal | <kbd>⌘</kbd><kbd>T</kbd> |
+| New terminal | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>T</kbd> |
 | Sidebar: Instances, Files, Git, Database, Run, Ports, Network, SSH, Config Files, Prompts | <kbd>⌘</kbd><kbd>1</kbd> … <kbd>⌘</kbd><kbd>9</kbd>, <kbd>⌘</kbd><kbd>0</kbd> |
 | Next project / previous project | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>]</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>[</kbd> |
 | Add project / close project / copy project path | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>O</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>W</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>P</kbd> |
-| Canvas / Dev Tools / MCP / New Project / Changelog page | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>M</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>N</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>V</kbd> |
+| Canvas / Dev Tools / MCP / New Project / Changelog page | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>M</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>V</kbd> |
 | Install update / install the `sawit` command | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>U</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>I</kbd> |
 | Find / find and replace (editable files) | <kbd>⌘</kbd><kbd>F</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>F</kbd> |
 | Next match / previous match | <kbd>⌘</kbd><kbd>G</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> (in the find bar also <kbd>↩</kbd> / <kbd>⇧</kbd><kbd>↩</kbd>); <kbd>⎋</kbd> closes it |
-| Browser: new tab / close tab | <kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌘</kbd><kbd>W</kbd> (while the browser has the keyboard) |
+| Browser: new tab / close tab | <kbd>⌃</kbd><kbd>T</kbd> / <kbd>⌘</kbd><kbd>W</kbd> (while the browser has the keyboard; <kbd>⌘</kbd><kbd>T</kbd> is the terminal's everywhere) |
 | Browser: show tab 1–8 / the last tab | <kbd>⌘</kbd><kbd>1</kbd> … <kbd>⌘</kbd><kbd>8</kbd> / <kbd>⌘</kbd><kbd>9</kbd> (while the browser has the keyboard) |
 | Browser: Annotate | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd> |
 | Files / Config Files: reveal in Finder | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
@@ -1477,6 +1481,8 @@ French…), the defaults move where macOS menus put them.
 | Terminal: close pane (the last one closes the tab) | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>W</kbd> |
 | Open the project's Cloudflare Local Explorer | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>E</kbd> |
 | Quit | <kbd>⌘</kbd><kbd>Q</kbd> |
+
+A place with its own use for one of the area keys keeps it while it has the keyboard: bold <kbd>⌘</kbd><kbd>B</kbd>, underline <kbd>⌘</kbd><kbd>U</kbd> and centre <kbd>⌥</kbd><kbd>⌘</kbd><kbd>T</kbd> in canvas text, Copy as PNG <kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> on the canvas (it fills the window with <kbd>⌃</kbd><kbd>⌘</kbd><kbd>3</kbd> or <kbd>⇧</kbd><kbd>⌘</kbd><kbd>↩</kbd>), the terminal's Copy Last Output <kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd>, the file tree's <kbd>⌘</kbd><kbd>N</kbd> and <kbd>⌥</kbd><kbd>⌘</kbd><kbd>N</kbd>, and the Keymap Editor's <kbd>⌘</kbd><kbd>N</kbd> and <kbd>⌘</kbd><kbd>E</kbd>. <kbd>⌘</kbd><kbd>J</kbd> is free. <kbd>⇧</kbd><kbd>⇥</kbd> stays the program's in a terminal (an agent switches modes with it); <kbd>⌃</kbd><kbd>⇥</kbd> switches tabs everywhere.
 
 The canvas's keys are FigCraft's, which follow Figma's (the sheet, <kbd>⌃</kbd><kbd>⇧</kbd><kbd>?</kbd>, lists them).
 Sawit adds keys for the canvas commands FigCraft leaves without one, and for those whose FigCraft key Sawit keeps

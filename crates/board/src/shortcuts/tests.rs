@@ -89,9 +89,11 @@ fn sheet_drops_the_keys_sawit_keeps() {
         .filter(|spec| owned_by_sawit(spec))
         .map(|spec| keymap::display(spec, Platform::Mac))
         .collect();
-    assert_eq!(kept.len(), SAWIT_WINS.len(), "{kept:?}");
+    // Some of the policy's keys (B5's area keys, ⌘T, ⇧⌘B, ⌥Tab…) are no FigCraft key at all.
+    assert!(kept.len() <= SAWIT_WINS.len(), "{kept:?}");
     // Those are the keys written out: no typing slip leaves the check below empty.
-    for key in ["⌘W", "⌘O", "⌃⇥", "⌃⇧⇥", "⌃⌘M", "⌥⌘O", "⌘J", "⇧⌘J"] {
+    for key in ["⌘W", "⌘O", "⌃⇥", "⌃⇧⇥", "⌃⌘M", "⌥⌘O", "⌘J", "⇧⌘J", "⌘E"]
+    {
         assert!(kept.iter().any(|k| k == key), "{key} is not in {kept:?}");
     }
     for key in &kept {
