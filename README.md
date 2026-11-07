@@ -486,21 +486,26 @@ explained. A conflict on the same address can't be forced.
 
 #### Sawit Skills
 
-Sawit Skills teach the coding agents on your Mac to use Sawit: local PostgreSQL through Sawit's instances instead of
-Docker, Sawit's browser instead of Chrome, Playwright or Puppeteer for testing, the canvas for designs and diagrams,
-and Sawit's terminals and Run panel for dev servers, ports and SSH, all through Sawit's MCP server. **Install Skills**
-in the footer, beside **Install CLI**, does it in one click:
+Sawit Skills teach the coding agents on your Mac to use all of Sawit, through Sawit's MCP server: local PostgreSQL
+instead of Docker, terminals and the Run panel for dev servers and ports, SSH, git, Sawit's browser instead of Chrome,
+Playwright or Puppeteer, the canvas for designs and diagrams, new projects, dev tools, MCP servers and skills, the
+prompt library, and the app itself. **Install Skills** in the footer, beside **Install CLI**, does it in one click:
 
-- **The Sawit pack**, Built In like Canvas Design, into every agent's skills folder: `sawit` (an overview that sends
-  each job to the right skill), `sawit-databases` (`create_instance`, `start_instance`, `query`, `execute_sql`,
-  `write_env` for `DATABASE_URL`, `detect_databases`, D1 and SQLite targets), `sawit-browser-testing` (the
-  `browser_*` tools: navigate, snapshot, click, type, screenshot, console, network, resize, annotations),
-  `sawit-canvas` (`canvas_design_guide` first, diagrams with `canvas_add_diagram`) and `sawit-terminal`
-  (`terminal_run`, `app_run_script`, `list_ports`, `stop_processes`, SSH). Each says what to do when the sawit MCP
-  server isn't connected. Their sources are in [skills/](https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills).
+- **The Sawit pack** (v2), Built In like Canvas Design, into every agent's skills folder: `sawit` (sends each job to
+  the right skill, the ground rules, code mode, and the `sawit` command when the MCP server isn't connected),
+  `sawit-databases` (instances, SQL, `DATABASE_URL`, D1 and SQLite, exports, backups, connections),
+  `sawit-terminal` (`terminal_run` and terminal reuse, the Run panel, ports, the network, Workers dev servers),
+  `sawit-ssh` (hosts, `ssh_exec`, sessions), `sawit-git` (status to push, the GitHub page), `sawit-browser-testing`
+  (the `browser_*` tools, tabs, SEO, design, Annotate), `sawit-canvas` (`canvas_design_guide` first, screens, lint,
+  diagrams, handoff), `sawit-project` (New Project, dev tools, MCP servers, skill packs, config files and shell
+  sync), `sawit-prompts` (the library and its GitHub sync) and `sawit-app` (windows, pages, tabs, keys, file
+  search, agent accounts, permissions). Every tool the server has is taught by one of them (a test holds them to
+  it), and each says what works without the app and what to do when the sawit MCP server isn't connected. Their
+  sources are in [skills/](https://github.com/bahrulbangsawan/sawit.dev/tree/main/skills); the map of tools and
+  commands to skills is in `docs/notes/2026-11-07-skills-map.md`. A v1 install shows an update.
 - **A short block** in each agent's own instruction file, the one it reads for every project, between
   `<!-- sawit:start -->` and `<!-- sawit:end -->`, with its version on the line after the start (`<!-- Sawit Skills
-  v1: … -->`): prefer Sawit for these jobs, which skill to load for each, and that the sawit MCP server has the tools.
+  v2: … -->`): prefer Sawit for these jobs, which skill to load for each, and that the sawit MCP server has the tools.
   The files, from each agent's docs: Claude Code's `~/.claude/CLAUDE.md` and each profile's
   (`CLAUDE_CONFIG_DIR/CLAUDE.md`), Codex's `~/.codex/AGENTS.md` (its `AGENTS.override.md` when that's the one Codex
   reads), Gemini CLI's and Antigravity's `~/.gemini/GEMINI.md`, Qwen Code's `~/.qwen/QWEN.md`, Amp's
