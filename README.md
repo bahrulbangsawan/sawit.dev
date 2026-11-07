@@ -31,9 +31,9 @@
 </p>
 
 <p align="center">
-  <img src="https://files.sawit.dev/media/demo.gif" alt="Sawit demo: a PostgreSQL instance, port conflict detection, the table grid, the SQL editor, a schema diagram, the code editor with psql in the terminal, the find bar, a Markdown preview, Agent Accounts, Permissions, the browser with Local Servers, tabs and iPhone size, the git graph, Dev Tools, MCP servers, three agents building on the canvas with live cursors, artboard export and Send to Agent, a full-screen canvas and the confirm dialog" width="100%">
+  <img src="https://files.sawit.dev/media/demo.gif" alt="Sawit demo: a PostgreSQL instance, port conflict detection, the table grid, the SQL editor, a schema diagram, the code editor with psql in the terminal, the find bar, a Markdown preview, Agent Accounts and the account pool's Overview, Timeline and Analytics, Permissions, the browser with tabs and their favicons and iPhone size, the SEO panel, the capture menu and capture bar, Dev Tools, MCP servers, three agents building on the canvas with live cursors, the Export menu and Send to Agent, Convert to Layers and Preview in a device frame, a full-screen canvas and the confirm dialog" width="100%">
   <br>
-  <sub>▶︎ <a href="https://files.sawit.dev/media/demo.mp4">Watch the demo video (MP4)</a>: instance → port conflict → table → SQL → schema diagram → code + terminal → find bar → Markdown → Agent Accounts → Permissions → browser, Local Servers, tabs and iPhone → git → dev tools → MCP → live cursors on the canvas → export and Send to Agent → full screen → confirm dialog</sub>
+  <sub>▶︎ <a href="https://files.sawit.dev/media/demo.mp4">Watch the demo video (MP4)</a>: instance → port conflict → table → SQL → schema diagram → code + terminal → find bar → Markdown → Accounts and the account pool → Permissions → browser, tabs and iPhone → SEO → capture → dev tools → MCP → live cursors on the canvas → Export and Send to Agent → Convert to Layers and Preview → full screen → confirm dialog</sub>
 </p>
 
 ---
@@ -42,12 +42,12 @@
 
 Sawit is built for local development. That work usually takes Docker Desktop, a database client,
 an editor, a terminal, a browser, a design tool, and a few installers, each a separate app. In Sawit
-they all live in a single Rust binary of about **80 MiB** (see [Size & memory](#size--memory)), and AI
+they all live in a single Rust binary of about **89 MiB** (see [Size & memory](#size--memory)), and AI
 agents can drive it through the `sawit-mcp` server.
 The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (the "One Dark" palette).
 
 <p align="center">
-  <img src="https://files.sawit.dev/media/editor-terminal.png" alt="Code editor with a file tree, TSX highlighting, and a terminal running psql" width="100%">
+  <img src="https://files.sawit.dev/media/editor-terminal.png" alt="Code editor with a file tree and TSX highlighting, and the terminal dock below: two dev servers turning as busy, and psql's result in the tab on show" width="100%">
 </p>
 
 | | |
@@ -58,22 +58,24 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 📦 **Export, back up, import** | Tables and queries to CSV or Excel, `pg_dump` backups, CSV imports, and bulk delete or set on the rows you select. |
 | 🗺️ **Schema diagrams** | Tables and foreign keys drawn as a diagram, and exported as DBML or SVG. |
 | ✍️ **Full editor** | Tree-sitter parsing for the languages you open most and highlighting for about 200 more, formatters, Markdown/HTML/SVG/Mermaid preview, and image, PDF, and video viewers. |
-| 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, split panes, full right-click menus, tabs you can lock and pin, and Copy Last Output or Copy Error in one key. Closing a project stops what its terminals started. |
+| 🖥️ **A real terminal** | Full `alacritty_terminal` emulation, split panes, full right-click menus, tabs you can lock and pin, an icon on each tab that says busy, done, failed (with the exit code) or waiting for you, and Copy Last Output or Copy Error in one key. Agents reuse their own idle terminal instead of opening tab after tab. Closing a project stops what its terminals started. |
 | 📡 **Ports & network** | See and stop every dev server you started, and diagnose your internet connection step by step. |
-| 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying, and back them up to a private GitHub repository. |
+| 💬 **Prompt library** | Save the prompts you reuse, with tags and `{{variables}}` to fill in before copying, and keep them in step with a private GitHub repository, deletes included, holding back anything that looks like a secret. |
 | 🐚 **Shell files on GitHub** | Keep `~/.zshrc` and the other startup files in a private repository, with a per-file status, diffs, backups and Undo. |
 | 🔎 **Find anywhere** | One <kbd>⌘</kbd><kbd>F</kbd> bar in code, Markdown previews, PDFs, the browser's page, the canvas and the terminal's scrollback, with a match count, Match Case, Whole Word and Regex. |
-| ⛶ **Full-screen panels** | The terminal, the browser or the canvas fills the window with one key, and the layout comes back as it was. |
+| ⛶ **One key per area** | <kbd>⌘</kbd><kbd>T</kbd>, <kbd>⌘</kbd><kbd>B</kbd>, <kbd>⌘</kbd><kbd>U</kbd> and <kbd>⌘</kbd><kbd>E</kbd> show or hide the terminal, the browser, the canvas and the folder panel; with <kbd>⇧</kbd> the terminal, browser or canvas fills the window, and the layout comes back as it was. |
 | 🔐 **Permissions** | See and change what your agents may do on this Mac: Claude Code's rules, Sawit's confirm tools and the macOS permissions. |
-| 👥 **Agent Accounts** | Several Claude Code accounts side by side: their sign-in, 5-hour and 7-day usage, the active one, `cp1`–`cp9` and `sawit account`. It takes over from Claude Pool. |
+| 👥 **Agent Accounts** | Several Claude Code accounts side by side: their sign-in, 5-hour and 7-day usage, the active one, `cp1`–`cp9` and `sawit account`. The account pool adds your Codex accounts and answers which account has the most room right now, with a timeline of every limit window, analytics of when you hit them, and what the plans cost. It takes over from Claude Pool. |
 | 🧯 **Asks before it destroys** | Every action that deletes, stops or discards asks first in one dialog that names the thing, with Cancel as the default. |
-| 🌐 **Browser for agents** | A browser tab per project, with tabs of its own, a list of the dev servers running, true-size device previews and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: click, type, snapshot, console, network and screenshots. |
-| 🎨 **Canvas to code** | A whiteboard and design canvas in tabs. Export an artboard as HTML or React, send it to your coding agent, and watch agents build on it live, each with its own cursor. |
+| 🌐 **Browser for agents** | A browser tab per project, with tabs of its own and their favicons, a list of the dev servers running, twenty true-size device presets and Web Inspector. Annotate the page for your agent, export a site's design system, and let AI agents drive it through `browser_*` MCP tools: real clicks, typing, snapshot, console, network, screenshots and recordings. |
+| 🧭 **SEO and agent readiness** | One scan of any page, a local dev server's too: search and link previews, every check with its evidence and fix, and how ready the site is for AI agents, scored with a grade. |
+| 📸 **Screenshots and recordings** | The visible area or the full page as PNG, JPEG or PDF, at a phone, tablet, laptop and desktop size at once, and recordings of the page or a scroll through it as MP4, MOV or GIF, encoded natively. |
+| 🎨 **Canvas to code** | A whiteboard and design canvas in tabs. Turn an HTML screen into editable layers, preview it at any device size or present it, export an artboard as HTML or React and send it to your coding agent. Watch agents build on it live, each with its own cursor, logo and name, while the view follows them; a design lint keeps their work on your tokens and components. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps, `sawit pupuk` upgrades dev tools and `sawit account use work` switches Claude Code accounts. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (177 tools) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
-| 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project. |
-| ✨ **Agent skills** | Sawit's own Canvas Design, Superpowers, shadcn/ui and shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop, Design to Code and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (177 tools, or a code mode of two that takes about 600 tokens) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project, and offers the upgrade when a newer release is out. |
+| ✨ **Agent skills** | Sawit Skills, ten skills that teach your agents every Sawit tool, Sawit's own Canvas Design, Superpowers, shadcn/ui and shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop, Design to Code and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
 ## Install
 
@@ -84,7 +86,7 @@ curl -fsSL https://raw.githubusercontent.com/bahrulbangsawan/sawit.dev/main/scri
 ```
 
 This installs the latest release into `/Applications` (or `~/Applications`). To install a given release instead, add
-`SAWIT_VERSION=v0.0.9` (or another tag from [Releases](https://github.com/bahrulbangsawan/sawit.dev/releases)) before `sh`.
+`SAWIT_VERSION=v0.0.10` (or another tag from [Releases](https://github.com/bahrulbangsawan/sawit.dev/releases)) before `sh`.
 After that, the app updates itself. A running Sawit is quit before it is replaced, so run the command from another
 terminal app: in Sawit's own terminal, the script stops and says so.
 
@@ -282,9 +284,19 @@ explained. A conflict on the same address can't be forced.
   doesn't change it, and the glyph comes back when it exits. Over SSH only the title the remote agent sets can say so
   ("✳ Claude Code"). On an SSH or Run panel tab, a green dot on the logos marks the live session or running script, as
   the green glyph does. `app_state` reports each pane's agent (`agent: "claude-code"`).
+- **Each tab says how its work stands**, with an icon of its own for each state, so neither colour nor motion is the
+  only sign: a turning loader while something runs in it (a dev server, a build, an agent while it prints), and once
+  what the tab runs has ended, a check when it exited cleanly, a cross when it failed and a stop sign when it was
+  stopped; a bell when the program rang for you (until you look at that pane). A tab whose program failed says so
+  in its name, "(exited 3)", and its accessible name reads "Exited with code 3". Over
+  an agent's logo the state is a small badge. Under Reduce motion the loader stands still. Browser tabs turn while
+  their page loads, and canvas tabs while an agent draws. Agents read the same in `app_state` (`activity`: the
+  state, its label and the exit code).
 - Drop files on a terminal, from Finder or the file tree, to type their paths, quoted where they need it. Claude Code
   takes a dropped image as an attachment (`[Image #1]`). This works right after you type, too.
-- The **Maximize Terminal** button (or <kbd>⌃</kbd><kbd>⌘</kbd><kbd>1</kbd>) fills the window with the terminal;
+- <kbd>⌘</kbd><kbd>T</kbd> shows or hides the terminal dock from anywhere, and <kbd>⌥</kbd><kbd>⌘</kbd><kbd>T</kbd> opens a
+  new terminal tab. The **Maximize Terminal** button (or <kbd>⇧</kbd><kbd>⌘</kbd><kbd>T</kbd>, or
+  <kbd>⌃</kbd><kbd>⌘</kbd><kbd>1</kbd>) fills the window with the terminal;
   click it again, or the title bar's **Restore Layout**, to get your layout back. See [Full screen](#full-screen).
 - Full emulation via `alacritty_terminal`: 256/truecolor, alt-screen, SGR mouse, bracketed paste,
   and resize.
@@ -548,43 +560,104 @@ one project's block; each asks first, `-y` skips it). Agents use `install_sawit_
 
 ### Agent Accounts
 
-<p align="center"><img src="https://files.sawit.dev/media/accounts.png" alt="Accounts page: three Claude Code accounts (personal, work and client) with their sign-in, plan and 5-hour and 7-day usage, the work account active in the title bar" width="100%"></p>
+<p align="center"><img src="https://files.sawit.dev/media/accounts.png" alt="Accounts page: the tab list with Pool, Accounts, Claude Code and Setup; three Claude Code accounts (work, personal, client) with cp numbers, % used meters and Active or At limit; work's detail with its 5-hour and 7-day cards and its folder; work in the title bar" width="100%"></p>
 
 Several Claude Code accounts on one Mac, each a config folder of its own (`~/.claude`, `~/.claude-work`, …) with its
 own sign-in. Agent Accounts takes over from [Claude Pool](#moving-from-claude-pool): everything it did now lives in
 Sawit, without a menu bar app.
 
-- Open **Accounts** from the **Pages** menu. Each account shows its colour, name, who it is signed in as, its plan and
-  its 5-hour and 7-day usage. **Add Account and Sign It In** makes a new folder; **Adopt Existing…** lists the
-  `~/.claude-*` folders already there.
-- The chosen account has **Set Active**, **Open in Terminal** (`claude` as that account, in a new tab), **Sign In…**
-  (Claude Code's own `claude auth login`, in the app), **Check Usage Now**, **Rename…** and **Remove from Sawit…**,
-  which asks first and keeps the folder and its sign-in.
+- Open **Accounts** from the **Pages** menu (<kbd>⌥</kbd><kbd>⌘</kbd><kbd>A</kbd>). The page's header sums it up ("3
+  accounts · 1 active · next resets in 35m"), and a tab list down its side groups the views: **Pool** (Overview,
+  Detailed, Compare, Timeline, Analytics, Wallet, [below](#the-account-pool)), **Accounts** (Accounts, Usage),
+  **Claude Code** (Status Line) and **Setup** (Diagnostics, Settings). ↑ and ↓ move between them, and in a narrow
+  window the list folds to its icons.
+- **Accounts** lists them under their agent's logo: each with its initial on its colour, its name and `cp` number,
+  who it is signed in as (all of it in a tooltip), its 5-hour and 7-day windows as "% used" meters and a status with
+  an icon and words (**Active**, **At limit**, **Signed out**). ↑ and ↓ select, ↩ opens a terminal as that account,
+  and a row drags to a new place (or **Move Up** / **Move Down** in its menu). **Add Account** opens a panel for the
+  name, with **Add and Sign In** and **Adopt Existing…**, which lists the `~/.claude-*` folders already there (or
+  says why there are none).
+- The chosen account's detail: its name (rename it in place), plan, who it is, **Set Active** or the Active pill,
+  **Open in Terminal** (`claude` as that account, in a new tab) and a ⋯ menu with **Check Sign-In Again**, **Turn Off
+  Usage Tracking** and **Remove from Sawit…**, which asks first and keeps the folder and its sign-in. **Usage
+  limits** shows the 5-hour and 7-day windows as two cards, each with "% used", a bar and when it resets, in words
+  and on the clock, with **Check Usage** and how old the numbers are; a window that has
+  reset since says "No data since the reset at …" instead of an empty bar. **Details** has the folder (Reveal, Copy
+  Path), how it runs (`CLAUDE_CONFIG_DIR`) and the sessions running as it. With no account yet, the page offers
+  Add Account and Adopt Existing….
+- Signing in (Claude Code's own `claude auth login`, in the app) shows its steps: open the browser, paste the code,
+  done, with the time left and **Cancel Sign-In**.
 - **The active account** is the one a plain `claude` starts as in a new terminal. The **Settings** tab installs a
   short block in `~/.zshrc` (or `~/.bash_profile`) that reads it, and the `cp1`–`cp9` shortcuts, each starting
   `claude` as one account. An explicit `CLAUDE_CONFIG_DIR=… claude` still wins. Each change shows what it writes
   first and backs the file up.
-- With two accounts or more, the title bar shows the active one and its usage (`work · 5h 23% · 7d 41%`). Its menu
-  switches the account and opens the page.
+- With two accounts or more, the title bar shows the active one, its initial on its colour, and its usage
+  (`work · 5h 23% used · 7d 41% used`). Its menu switches the account (and names the one with the most room left) and
+  opens the page.
 - **Usage** comes from Claude Code itself: with tracking on, an account's status line also hands Sawit the 5-hour
   and 7-day windows Claude Code reports. Nothing is estimated. The **Usage** tab charts them over a period, with the
-  tokens Claude Code recorded on this Mac; **Limit Alerts** notify you near and at a limit, and can name the account
-  with the most room.
+  tokens Claude Code recorded on this Mac: pick the period, read the tokens, requests and cache hit rate against the
+  period before, and a table per account and model. **Limit Alerts** notify you near a limit (at 75 to 95%, in steps
+  of 5) and at it, and can name the account with the most room.
 - **Sessions**: the running Claude Code sessions of each account, with **Continue On…**, which copies the
   conversation into another account and resumes it there, and **End…**.
 - **Shared Settings** keep the same MCP servers, skills, plugins, hooks and permission rules in every account, so
   switching never loses one. The sign-in, the model, the theme and the status line stay per account. Every file it
   changes is backed up first.
 - **Status Line** edits the layout Sawit's status line prints in Claude Code, with a preview, presets and **Undo
-  Last Apply**. **Diagnostics** checks each part (Claude Code on `PATH`, the shell block, variables that would override
-  a sign-in, the active account, the usage collector and each account) and says how to fix what fails. **Open Sawit at Login** is off until you turn it on.
+  Last Apply**; the preview stays in sight while you scroll, and each part's menu moves it left or right or removes
+  it. **Diagnostics** checks each part (Claude Code on `PATH`, the shell block, variables that would override a
+  sign-in, the active account, the usage collector and each account), sums them up (passed, warnings, failed) and
+  says how to fix what fails, with **Run Again** and **Copy Report**. **Settings** groups the shell block and
+  shortcuts (installed where, and **Remove** asks first), shared settings, limit alerts and **Open Sawit at Login**,
+  which is off until you turn it on.
 - Sawit never reads, copies or moves a sign-in: Claude Code keeps each one in the Keychain, and only its own commands
   touch it.
 - From the terminal: `sawit account list` (`--json`), `sawit account use work`, `sawit account open work ~/code/shop`
   (or `cp2`), `sawit account usage`, `sawit account status`, `sawit account add client`, `eval "$(sawit account env
   work)"` to pin one shell, and `sawit account login|logout|rename|remove`. Agents use `list_agent_accounts`,
-  `agent_account_usage`, `use_agent_account`, `open_agent_account`, `agent_account_sessions` and
-  `sync_agent_settings`; they never sign in or remove an account.
+  `agent_account_usage`, `use_agent_account`, `open_agent_account`, `agent_account_sessions`,
+  `sync_agent_settings` and `account_pool`; they never sign in or remove an account.
+
+#### The account pool
+
+<p align="center"><img src="https://files.sawit.dev/media/accounts-pool.png" alt="The account pool's Overview: Codex's default account has the most room right now, 63% of its weekly limit left, with what holds it back and the next best, work; then work, personal, client and the Codex account with their 5-hour and weekly use, time to reset and a status: Plenty left, Running low, Limit reached" width="100%"></p>
+
+The **Pool** tabs put every account of every agent you use side by side: Claude Code's accounts and Codex's
+(`~/.codex`, and `~/.codex-<name>` for more, read from Codex's own session logs; Sawit never reads a sign-in). Each
+limit, the 5-hour and the weekly, has a status in words and with an icon: Plenty left, Running low (under 25% left),
+Almost out (under 10%), Limit reached, Not reported, Out of date (no reading for 15 minutes), Refresh failed or
+Sign-in expired.
+
+- **Overview**: the account with the most room right now, why, what holds it back and the next best; every account
+  with both limits, the time to each reset and its status; **Agents in Sawit**, the agents running in your terminals
+  (with their project, tab, the account they run as, read from their environment, and whether they're busy) and the
+  agents on the canvas or in the browser through `sawit-mcp`, with what they did last; and the notifications of
+  status changes, with **Mark All as Read**.
+- **Detailed**: every account by provider or by urgency, for one provider or all, in an order of providers you set,
+  with the limits as % used or % left.
+- **Compare**: the pick, with **Open in Terminal**, then every account by the room it has, what holds each back, when
+  it resets, and which plans look too small or too big.
+- **Timeline**: the next 24 hours or this week, each account's 5-hour and weekly windows on one time axis with the
+  time now, the next window outlined and the time spent at the limit marked (with a legend), a watch list of the
+  accounts near a limit, and the resets of the last 7 days.
+<p align="center"><img src="https://files.sawit.dev/media/accounts-timeline.png" alt="The pool's Timeline for the next 24 hours: each account's 5-hour window above its weekly one, the time now as a line, the next windows outlined and client's time at its limit in red, with a watch list and the recent resets" width="100%"></p>
+
+- **Analytics**: the last 30 or 90 days, for every account or one: a forecast (your pace against an even pace, and
+  when the limit would run out), the busiest hour and the limit hits; a weekday × hour heatmap in your local time,
+  with a dot on each hour spent at a limit; each weekly window as a cell sized by its length and filled by its peak;
+  how well each plan fits (too small, fits, could downsize, could cancel, money unused), sortable by any column; and
+  where moving work to another account would help.
+<p align="center"><img src="https://files.sawit.dev/media/accounts-analytics.png" alt="The pool's Analytics for 30 days: a forecast of when personal runs out, the busiest hour and 38 limit hits; a weekday by hour heatmap with red dots on hours at the limit; each account's weekly windows; plan fit and move-work suggestions" width="100%"></p>
+- **Wallet**: what you pay per month, what renews in the next 30 days and the top-ups this month; each subscription's
+  price (monthly, yearly, included with another plan, or not set) with its currency and renewal day; top-ups with
+  their expiry and **Delete** (it asks first); paid top-ups per month for six months; removed accounts; and exchange
+  rates. Prices are entered by hand; known plans offer their list price.
+- Sawit keeps the readings in `accounts/readings.sqlite` in its data folder (readable only by you) for 120 days,
+  storing one when it changes or every 5 minutes, and brings in the 8 days of history the status line kept before.
+  The pool is read off the UI thread when a Pool tab opens, and again each minute while it shows.
+- Agents read the same with `account_pool` (`view`: `overview`, `detailed`, `compare`, `timeline`, `wallet` or
+  `analytics`; `provider`; `days`), which reads and never writes.
 
 #### Moving from Claude Pool
 
@@ -598,9 +671,9 @@ Sawit, without a menu bar app.
 
 ### New project
 
-<img src="https://files.sawit.dev/media/new-project.png" alt="New Project page: the project name, location, command and stack on the left, and the stack's categories as cards on the right" width="100%">
+<img src="https://files.sawit.dev/media/new-project.png" alt="New Project page: Better-T-Stack v3.49.0 under the title, the project name, location, command and stack on the left, and the stack's categories as cards on the right" width="100%">
 
-- **New Project** in the **Pages** menu (<kbd>⌃</kbd><kbd>⌘</kbd><kbd>N</kbd>), **New Project…** on the welcome
+- **New Project** in the **Pages** menu (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd>), **New Project…** on the welcome
   screen or in the File menu opens a page to start a TypeScript project with
   [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack)'s builder: one section of cards per
   category (web and native frontend, backend, runtime, API, database, ORM, database setup, web and server deploy,
@@ -636,12 +709,12 @@ Sawit, without a menu bar app.
 
 ### Browser
 
-<img src="https://files.sawit.dev/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:3000, with its tab strip above the toolbar; the toolbar has back, forward, reload, the address field, Local Servers, the device menu, Annotate, Design, Open in Default Browser and the Web Inspector" width="100%">
+<img src="https://files.sawit.dev/media/browser.png" alt="Browser tab showing the acme-store demo shop on localhost:3000, with its tab strip above the toolbar, each tab with its favicon; the toolbar has back, forward, reload, the address field, Local Servers, the device menu, Capture, Annotate, Design, SEO, Agent cursors, Open in Default Browser and the Web Inspector" width="100%">
 
 - Open **Browser** from the **Pages** menu for the project's web browser tab (WebKit; each project has its own). With
   nothing typed, it opens the project's running dev server. The toolbar has back, forward, reload, an address
-  field (text that isn't a URL is searched), the device menu, **Annotate**, **Design**, **Open in Default Browser**
-  and the Web Inspector.
+  field (text that isn't a URL is searched), **Local Servers**, the device menu, **Capture**, **Annotate**,
+  **Design**, **SEO**, the agent cursors switch, **Open in Default Browser** and the Web Inspector.
 - Cookies and storage are kept per project, so being signed in to one app doesn't leak into another.
 - **Local Servers**, the button after the address field, lists every port a dev server listens on right now:
   `localhost:<port>`, what runs it and its project folder (`bun run dev · shop`), one row per port. Pick one to open
@@ -651,7 +724,7 @@ Sawit, without a menu bar app.
 - While a page loads, a thin bar along the foot of the toolbar shows how far it has got, and Reload turns into Stop,
   so a slow page never looks hung.
 - **Tabs**: the strip above the toolbar holds the browser's tabs, each with its own address, history, device size
-  and notes. **+** or <kbd>⌘</kbd><kbd>T</kbd> opens one, <kbd>⌘</kbd><kbd>W</kbd> closes the tab on show,
+  and notes, and its page's **favicon** (the globe when it has none). **+** or <kbd>⌃</kbd><kbd>T</kbd> opens one, <kbd>⌘</kbd><kbd>W</kbd> closes the tab on show,
   <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>8</kbd> show a tab by its place and <kbd>⌘</kbd><kbd>9</kbd> the last
   (while the browser has the keyboard; elsewhere those keys stay the workspace's); drag a tab to move it. A tab off
   screen gives its page up after a minute, so memory doesn't grow with the tab count, and gets it back, history
@@ -663,13 +736,16 @@ Sawit, without a menu bar app.
   <kbd>⌘</kbd><kbd>X</kbd>, <kbd>⌘</kbd><kbd>V</kbd> and <kbd>⌘</kbd><kbd>A</kbd> act in the page, through the
   **Edit** menu, and <kbd>⌘</kbd><kbd>Z</kbd>, <kbd>⇧</kbd><kbd>⌘</kbd><kbd>Z</kbd> and <kbd>⌘</kbd><kbd>,</kbd>
   reach the page as typed. Sawit's own shortcuts (<kbd>⌘</kbd><kbd>W</kbd>, <kbd>⌘</kbd><kbd>T</kbd>,
-  <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>9</kbd>…) still work there, before the page sees them. While Annotate's
+  <kbd>⌘</kbd><kbd>B</kbd>, <kbd>⌘</kbd><kbd>1</kbd>–<kbd>⌘</kbd><kbd>9</kbd>…) still work there, before the page sees them. While Annotate's
   measuring tools are on the page, <kbd>⌘</kbd><kbd>K</kbd> and <kbd>⇧</kbd><kbd>⌘</kbd><kbd>K</kbd> are theirs
   there (the <kbd>⌘</kbd><kbd>K</kbd> chords, such as <kbd>⌘</kbd><kbd>K</kbd> <kbd>W</kbd>, still work from the
   address field, the side panel and the rest of the window), and so is <kbd>⌘</kbd><kbd>A</kbd> in their **Select**
   tool.
-- **Device sizes**: the device menu lays the page out as an iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop or
-  Desktop, scaled to fit the tab. **Rotate** turns the device, and **Responsive** fills the tab again. The device
+- **Device sizes**: the device menu lays the page out at one of twenty presets, under a heading per class: **Mobile**
+  (iPhone SE, iPhone 15, iPhone 15 Pro Max, Pixel 8, Galaxy S, a small Android), **Tablet** (iPad mini, iPad Air,
+  iPad Pro 11″ and 13″, an Android tablet), **Laptop** (1280 × 800, 1366, MacBook Air, MacBook Pro 14″, 1536) and
+  **Desktop** (1440 × 900, Full HD, QHD, 4K), scaled to fit the tab.
+<p align="center"><img src="https://files.sawit.dev/media/browser-device-menu.png" alt="The browser's device menu: Responsive, then Mobile, Tablet, Laptop and Desktop headings with twenty devices and their sizes, iPhone 15 checked, and Rotate" width="100%"></p> **Rotate** turns the device, and **Responsive** fills the tab again. The device
   button shows the device in use (its name, or the size an agent set), and the menu ticks it, and **Rotate** while
   it's turned. While the menu is open the page steps aside for it and comes back at the size you picked. The **×**
   beside the device button (**Back to Responsive**) fills the tab again in one click.
@@ -802,26 +878,48 @@ Sawit, without a menu bar app.
     export does that only when it passes `replace: true`.
 - Each tab shows its page's **favicon** (the page's own icon links, else `/favicon.ico`, fetched in Rust and
   cached per site), the globe when it has none.
-- **SEO**, the toolbar's magnifier with a check, scans the page for search engines, link previews and agents:
-  an **Overview** (the search and sharing score, what to fix, what the page says about itself), **Previews** of the
-  link as a search result and on WhatsApp, LinkedIn, Facebook and X, every **Check** with its evidence, fix and
-  spec, and **Agents**: the agent-readiness checks (discovery files, Markdown for agents, AI crawler rules, the MCP
-  server, OAuth metadata, page tools, the accessibility tree…) scored per layer with a grade and an Essentials
-  score, for a content site, an API or app, or both. **Copy fix prompt** hands a check to an agent. The site's
-  files are fetched by Sawit, not the page, so local dev servers work the same as live sites; an optional
-  external score asks an outside scanner, for public addresses only.
-- **Capture**, the camera button: a screenshot of the visible area or the full page (lazy images loaded, sticky
-  headers once), the page at a phone, tablet, laptop and desktop size at once, or a recording of the visible area
-  or a scroll through the full page (MP4, MOV or GIF, 720p to 4K), at the tab's size or any of twenty device
-  presets. Pixels follow the device and scale picked, not the window or the screen. The bar under the toolbar
-  shows the capture with **Copy**, **Reveal in Finder** and **Open**; while a recording runs the tab shows a red
-  dot and the time, and closing it asks first. Files go to the project's `.nyawit/annotations/<date>/`, named
-  with the site, device and scale (`example.com-iphone-15-3x-full.png`).
+- **SEO**, the toolbar's magnifier with a check, scans the page for search engines, link previews and AI agents, in
+  a panel beside the page:
+  - **Overview**: the **Search and sharing** score out of 100 and **Agent readiness** with its grade (A+ to F),
+    how many checks passed, warn and failed, what to fix first (**Copy fixes for an agent** copies them all as
+    one prompt), and what the page says about itself (title, description, canonical, language, robots, headings,
+    structured data, share image).
+  - **Previews**: the link as a search result and as a card on WhatsApp, LinkedIn, Facebook and X, from the page's
+    own tags, with what's missing named.
+  - **Checks**: every check with its status (an icon and words, never colour alone), its evidence, the fix and a link
+    to its spec. **Copy fix prompt** hands one check to an agent.
+  - **Agents**: Agent readiness and the **Essentials** score, then the checks in four layers, each with its score
+    and weight: **Discovery** (`llms.txt`, an agent resource catalog, AI crawler rules, not hidden from search…),
+    **Access** (Markdown for agents, an OpenAPI description, the MCP server and its OAuth metadata…), **Usability**
+    (page tools, the accessibility tree…) and **Payments**. **All**, **Content site** or **API or app** leaves out
+    the checks that don't apply.
+    **External score** (off until you turn it on, per tab) also asks an outside scanner, for a public address only:
+    a local one is never sent.
+  - Sawit fetches the site's files itself, in Rust, not through the page, so a dev server on `localhost` scans the
+    same as a live site. **Scan again** after a change; the panel says how old the scan is.
+<p align="center"><img src="https://files.sawit.dev/media/browser-seo.png" alt="Browser with the SEO panel beside the Acme Store page on localhost:3000: Search and sharing 46/100, Agent readiness 34 (D), 6 passed, 5 warnings, 9 failed, and the checks to fix first: share image, JSON-LD, sitemap, llms.txt" width="100%"></p>
+<p align="center"><img src="https://files.sawit.dev/media/browser-seo-agents.png" alt="The SEO panel's Agents tab: Agent readiness 34 (D) and Essentials 18/100, the Discovery, Access, Usability and Payments layers with their scores and weights, the External score switch, and the Discovery checks" width="100%"></p>
+- **Capture**, the camera button, takes a **Screenshot** of the **Visible area** or the **Full page** (lazy images
+  loaded, a sticky header once, up to 30,000 CSS px tall), or the page at a **phone, tablet, laptop and
+  desktop** size in one go (iPhone 15, iPad Air, Laptop and Full HD), or **Records** the visible area or a scroll
+  through the full page, for up to 30 seconds at first (5 minutes at most). Its **Size** menu takes the shot at this
+  tab's size or any of the twenty device presets; pixels follow the device and its scale, not the window or the
+  screen (an iPhone 15 comes out at 1179 × 2556). Videos are **MP4** (H.264), **MOV** (HEVC, smaller) or **GIF**,
+  at 720p, 1080p, 1440p or 2160p, encoded natively with AVFoundation. While a recording runs the tab shows a red dot
+  and the time, the button turns into **Stop Recording**, and closing the tab asks first. Agents also get the full
+  page as a PDF, and a single element or region.
+- After a capture, the **capture bar** under the toolbar shows it with **Copy**, **Reveal in Finder** and **Open**.
+  Files go to the project's `.nyawit/annotations/<date>/`, named for the site, the device and the scale
+  (`localhost-3000-iphone-15-3x-full.png`); **Open Captures Folder** shows them.
+<p align="center"><img src="https://files.sawit.dev/media/browser-capture.png" alt="The browser's capture menu open under the camera button: Screenshot the visible area, the full page or phone, tablet, laptop and desktop at once; Record the visible area or the full page; Size: This tab; Video: 1080p MP4; Open Captures Folder" width="100%"></p>
+<p align="center"><img src="https://files.sawit.dev/media/browser-capture-bar.png" alt="The capture bar under the browser's toolbar after a screenshot: a thumbnail, localhost-3000-responsive-2x.png, 2080 × 1194 px, 217 KB, with Copy, Reveal in Finder and Open" width="100%"></p>
 - AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
   click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
-  requests and screenshots (any device size, full page, PDF) and recordings. They can also set a device size, read your annotations, and inspect, read or export
-  the page's design. An agent uses its own project's browser (the project it names, else the one it runs in),
-  even while you look at another project of the window, and in the background: only opening a page, a
+  requests, screenshots (any device size, several at once, full page, PDF) and recordings. They can also set a
+  device size, scan the page for SEO and agent readiness, read your annotations, and inspect, read or export the
+  page's design. On a tab on screen, an agent's click is a real mouse click, which the page can't tell from yours;
+  it still never takes your keyboard. An agent uses its own project's browser (the project it names, else the one
+  it runs in), even while you look at another project of the window, and in the background: only opening a page, a
   screenshot or a device size brings it forward.
 - From the terminal: `sawit browse` opens the project's dev server here, `sawit browse 5173` a port, and
   `sawit https://example.com` any page.
@@ -835,6 +933,8 @@ Sawit, without a menu bar app.
 
 - Open **Canvas** from the **Pages** menu, or press <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd>, for a native whiteboard
   and design canvas (its engine is [FigCraft](https://github.com/storytold/figcraft)). It saves by itself.
+  <kbd>⌘</kbd><kbd>U</kbd> shows or hides it from anywhere (while you edit text on it, <kbd>⌘</kbd><kbd>U</kbd> stays
+  underline), and <kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> from outside it fills the window with it.
 - **Boards and design files**: the project's canvas is a board, for sticky notes, shapes with text, connectors,
   marker drawing, stamps and sections. A `.sawit` file opened from the **Files** tab gets its own canvas tab,
   as a board or as a design file (frames, vectors, auto layout and components), and saves back to the same file.
@@ -864,9 +964,11 @@ Sawit, without a menu bar app.
     pencil, <kbd>T</kbd> text, <kbd>⇧</kbd><kbd>T</kbd> text on a path, and on a board <kbd>M</kbd> marker,
     <kbd>U</kbd> highlighter, <kbd>E</kbd> eraser, <kbd>Q</kbd> sticky, <kbd>B</kbd> shape, <kbd>X</kbd>
     connector, <kbd>W</kbd> stamp, <kbd>C</kbd> comment, <kbd>I</kbd> eyedropper.
-- **Layers and Design panels**: the layers panel on the left (<kbd>⌥</kbd><kbd>1</kbd>) lists the pages and layers.
-  Click to select, double-click to rename, hide or lock a layer, drag layers to reorder or nest them, and filter by
-  name. Its **Assets** tab (View ▸ Panels ▸ Assets) lists the file's components with a picture of each; a click
+- **Layers and Design panels**: the layers panel on the left (<kbd>⌥</kbd><kbd>1</kbd>) lists the pages, as compact
+  rows with the page on show checked, and the layers. Click to select, double-click to rename, hide or lock a layer,
+  drag layers to reorder or nest them, and **Find** them by name from the panel's head. A sticky, shape or label
+  with no name of its own shows its first words, so two stickies don't look alike; a screen's row has an **HTML**
+  tag, whose tooltip says how to make it editable. Its **Assets** tab (View ▸ Panels ▸ Assets) lists the file's components with a picture of each; a click
   places an instance in the middle of the view. The Design panel on the right (<kbd>⌥</kbd><kbd>8</kbd>) edits the
   selection: a component's or instance's properties (variants, booleans, text, instance swap; add, rename and delete
   them on the main, Swap, Reset and Detach on an instance), position and size, auto layout (with a grid's columns and
@@ -875,20 +977,24 @@ Sawit, without a menu bar app.
   fill mode, tile scale, turn, adjustments and Choose…; any colour can be bound to a colour variable), effects
   (shadows, blurs with a progressive ramp, noise, texture, glass), layout grids, typography (with decoration, case,
   lists, wrap, paragraph spacing and indent, max lines, OpenType features and variable axes) and export. Editing one
-  paint or effect never touches the others, so their variable bindings stay.
-  - **Prototype** tab: the selected layer's interactions (trigger, action, destination, animation, duration), the
-    page's flows, and **Present** (<kbd>⌥</kbd><kbd>⌘</kbd><kbd>↩</kbd>), which plays the frames: a click on a
-    layer with an interaction follows it, and Back, <kbd>←</kbd> or <kbd>Esc</kbd> go back. While the tab shows,
-    green lines join each layer to the frame it goes to.
+  paint or effect never touches the others, so their variable bindings stay. The panel shows only what applies to
+  the selection (a text's typography and fill first; an HTML screen, only its position and size and a **Screen**
+  section, see [UI screens](#ui-screens)), and each section folds to one row with its chevron.
+  - **Prototype** tab: the **Device** Present shows the frames in (and Landscape for one that turns), the selected
+    layer's **Interactions** (trigger, action, destination, animation, duration), the page's **Flows**, and
+    **Present** (<kbd>⌥</kbd><kbd>⌘</kbd><kbd>↩</kbd>), which plays the frames, HTML screens included (each drawn
+    from its page, sharp): a click on a layer with an interaction follows it, and Back, <kbd>←</kbd> or
+    <kbd>Esc</kbd> go back. While the tab shows, green lines join each layer to the frame it goes to.
   - **Dev Mode** (<kbd>⇧</kbd><kbd>D</kbd>) puts the **Inspect** panel in the Design panel's place: the layer's
     properties with their styles and variables, its code in CSS, HTML, React, Leptos, Vue, Tailwind, SwiftUI,
     Compose, ArkUI or Flutter with Copy, its annotations, and Ready for dev on a top-level frame.
 - **Windows over the canvas**: View ▸ **Variables…** (collections, modes across, variables down: click a name or a
   value to change it; add and delete collections, modes and variables), View ▸ **Comments…** (the page's threads:
   reply, resolve, delete; the Comment tool starts one where you click, and View ▸ Comments shows their pins), File ▸
-  **Show version history** (restore or delete a saved version) and **Save to version history**. On a board a pill
-  at the top right runs the shared timer (start, pause, +1 minute, stop) and votes (start, vote on the selection,
-  end, results).
+  **Show version history** (restore or delete a saved version) and **Save to version history**. On a board, View ▸
+  **Start Timer** (5 minutes) and **Start Vote** bring up a pill at the bottom right, above the toolbar, that runs the
+  shared timer (pause, +1 minute, stop) and the vote (vote on the selection, end, results). It shows only while a
+  timer runs or a vote is on or has results, and never over Preview or Present.
 - **View aids**: View ▸ Layout grids, Pixel grid (from 800%), Rulers (with the page's and frames' guides), Slices,
   Mask outlines and Frame outlines draw over the canvas. A board opens with both panels hidden and a design file
   with both shown, and the top bar toggles them. Its menus picture their choices too: the blend modes by group
@@ -939,13 +1045,26 @@ Sawit, without a menu bar app.
   The standard applies even to an agent that never asks for it: the first UI work of a session (`canvas_begin` of a
   screen, or of a frame named or sized like one) answers with its digest, made from the skill's `SKILL.md` when
   Sawit is built (the floors, the rules Sawit checks and the checklist, about 2k tokens), and later works with the
-  sections their `steps` name (forms, tables, states…). UI is built as a screen by default; a screen-sized frame
-  drawn from shapes is told to be one. After each `canvas_screen_write`, and when a work is said done, Sawit runs the
+  sections their `steps` name (forms, tables, states…). UI is built as a frame of editable layers by default, from
+  the file's components with auto layout and its tokens; an HTML screen is for a live web prototype you ask for.
+  After each `canvas_screen_write`, and when a work is said done, Sawit runs the
   rules a machine can check (text contrast with the skill's `contrast.py` formula, target and text sizes, the 4 px
   spacing scale, images without alt text, fields without labels, focus rings, text that overflows its box) and
   answers each failure as `{rule, selector or layer, fix}`; the frame shows a **design issues** badge that opens the
   same list. Clients that read MCP resources and prompts get the guide as `sawit://design-guide` (and
   `sawit://design-guide/<section>`) and a `design-ui` prompt, with nothing installed.
+- **The design lint** keeps agents' UI off the usual generated look. `canvas_lint` checks a page against the design
+  standard's rules, each by its id: colours that aren't the file's tokens (with the nearest token, and the
+  `variable.bind` command that fixes it), UI built with no design system yet, three or more alike copies that
+  should be a component, frames placed by hand where auto layout belongs, uneven gaps, more than six type sizes or
+  ten colours, placeholder copy, a purple-to-blue gradient, emoji as icons, glow, blur and glass everywhere, a card
+  in a card, everything centred, and the machine checks above. Each finding names its layer, the fix and a command.
+  Every UI write answers with a short summary of it, and `canvas_export` with the page's; `canvas_begin {sketch:
+  true}` quiets it for wireframes and diagrams. `canvas_begin` also says where the file is in the workflow (no
+  system, a system, components, screens, a cover) and warns when a step is skipped. A colour may name a token
+  (`"backgroundColor": "accent"`), and a raw colour equal to a token is bound to it. `canvas_starter_system` gives
+  a file Sawit's tokens as variables, with Light and Dark modes, and Button, Input and Card components bound to
+  them, which pass the lint.
   `canvas_add_diagram` (`canvas_add_mermaid` is its deprecated old name) turns a diagram written in Mermaid syntax
   into **editable shapes**: boxes, connectors joined to them, and labels. Pele, the renderer the rest of the app
   uses, lays the diagram out, and every type it draws comes in,
@@ -984,9 +1103,11 @@ A picture is an SVG the canvas imports as its own layers, drawn as Pele drew it.
 
 ### UI screens
 
-UI on the canvas is HTML: a **screen** is a page of your project shown in a frame, which you can preview, download
-as HTML or React, and hand to a coding agent to build in your app. Diagrams, stickies, whiteboards and illustrations
-stay vector.
+UI on the canvas is a frame of editable layers by default: frames with auto layout, text, vectors and instances of
+the file's components, bound to its tokens, which you edit in the Design panel. A **screen** is the other kind: a
+page of your project shown in a frame, a live web prototype, which you can preview, download as HTML or React,
+**convert to layers**, and hand to a coding agent to build in your app. Diagrams, stickies, whiteboards and
+illustrations stay vector.
 
 - **Where a screen lives.** A screen is an ordinary frame of the canvas that names a folder of the project:
   `.nyawit/screens/<screen>/index.html`, with its CSS, scripts and images beside it (for a `.sawit` file outside a
@@ -1001,15 +1122,34 @@ stay vector.
   run its scripts. Its name and handles step aside while it is live. Press <kbd>Esc</kbd> or click outside it to
   leave. While the canvas pans or zooms, or a menu is open over it, the live page steps aside for its latest
   picture, and comes back when the canvas is still.
-- **Preview.** Select a screen and click **Preview** in the bar over it for the page full size and live, at the size
-  it was made at, the window's, or one of the Browser tab's device sizes (iPhone 15 to Desktop), turned on its side
-  with **Rotate**, scaled down to fit when it is larger than the window. <kbd>Esc</kbd> or **Close** ends it.
-- **Export HTML** saves the page as one file, its CSS and images inlined. **Export React** saves a `.tsx`
+- **The bar over a selected screen** has **Preview**, **Convert to Layers**, **Export** (HTML, React or PNG) and
+  **Send to Agent**, each with its icon; in a narrow canvas they fold to their icons, named in their tooltips. With
+  a screen selected the Design panel shows only its position and size and a **Screen** section: what a screen is,
+  its size as a device (the twenty presets by class), **Convert to Layers**, **Preview** and **Export**.
+- **Convert to Layers** turns the screen into a frame of editable layers, built beside it from the page as WebKit
+  rendered it: every box that draws or groups becomes a frame, with auto layout wherever the page's rows and
+  columns sit at even gaps (its padding, alignment, fill and hug), text keeps its font, size and colour, images
+  come in as images and inline SVG as editable vectors, with fills, borders, radii and shadows. The page's colours
+  become variables named by role (`text/1`, `bg/2`, `border/1`, or a token the file already has) and its type sizes
+  `type/16`, all bound; frames without a name are named by what they are (Header, Navigation, Button, List item,
+  Row, Column). The screen stays beside it as "<name> / HTML", and one undo takes both steps back. A toast says how
+  many layers it made and anything it couldn't carry (`::before` content, background images). Agents use
+  `canvas_screen_to_layers`.
+<p align="center"><img src="https://files.sawit.dev/media/canvas-convert.png" alt="An HTML screen of the Acme Store home page and, beside it, the frame Convert to Layers made from it, selected, with its layers in the Layers panel and its auto layout in the Design panel" width="100%"></p>
+- **Preview.** Select a screen and click **Preview** for the page full size and live. Its bar picks the size: **As
+  Made**, **Window**, any of the twenty device presets by class, or **Custom size…** (a width and height from 200 to
+  3840, typed in the bar); **Fit** (scaled down to the room, never up) or **100%** (one CSS pixel a point; a taller page
+  scrolls); a **device frame** round phone and tablet sizes; **Rotate**; **Reload**; and **Open in Browser**, which
+  opens the screen in the project's Browser tab. <kbd>Esc</kbd> or **Close** ends it. In a narrow window the bar
+  folds so nothing is cut off.
+<p align="center"><img src="https://files.sawit.dev/media/canvas-preview.png" alt="Preview of an HTML screen at iPhone 15 size in a device frame, with the bar above it: the size menu, Fit and 100%, Device frame, Rotate, Reload, Open in Browser and Close" width="100%"></p>
+- **Present** (on the Prototype tab) plays screens too, each from a sharp picture of its page.
+- **Export ▸ HTML** saves the page as one file, its CSS and images inlined. **Export ▸ React** saves a `.tsx`
   component and its `.css`, with the images it uses in a `<Component>-assets` folder beside them: a mechanical
   conversion (`class` to `className`, `for` to `htmlFor`, style attributes to objects, void elements closed, form
   values as `defaultValue` and `defaultChecked`). What React can't take as it is, scripts and `on…` handlers, is
   left out and listed at the top of the file, with the scripts kept in a comment at its end. Both ask where to
-  save, starting in the project's folder.
+  save, starting in the project's folder. **Export ▸ PNG** saves the screen's latest picture.
 - **Send to Agent…** lists the coding agents Sawit finds on this Mac that it can start with a prompt (Claude Code,
   Codex, Gemini CLI, OpenCode). It is on the screen bar, the artboard bar, the right-click menu of a screen or an
   artboard, and over several of them selected (**Send Flow to Agent…**, one flow in canvas order, with the prototype
@@ -1019,10 +1159,10 @@ stay vector.
   `prompt.md`, which asks the agent to build it in the project's own stack and components (not by pasting the
   export), to follow Sawit's design standard and to check it against `design.png` in Sawit's browser. Then that
   agent's CLI opens in a new terminal tab in the project with the prompt. **Copy Prompt** writes the same files and
-  copies the prompt instead; **Reveal Handoff Folder** shows them in the Finder. A toast names the folder.
-<p align="center"><img src="https://files.sawit.dev/media/canvas-handoff.png" alt="Send to Agent menu over a selected Settings artboard: Claude Code, Codex, Copy Prompt and Reveal Handoff Folder" width="100%"></p>
-- **Artboards export too.** A frame drawn in layers (an artboard right on its page) gets the same **Export HTML**
-  and **Export React** on a bar over it, in its right-click menu, in File ▸ Export as HTML… and as React… (named
+  copies the prompt instead; **Reveal in Finder** shows the handoff folder. A toast names the folder.
+<p align="center"><img src="https://files.sawit.dev/media/canvas-handoff.png" alt="Send to Agent menu over a selected Settings artboard, under Build in this project: Claude Code and Codex with their logos, Copy Prompt and Reveal in Finder" width="100%"></p>
+- **Artboards export too.** A frame drawn in layers (an artboard right on its page) gets the same **Export** menu
+  (HTML, React, PNG and SVG) and **Send to Agent** on a bar over it, in its right-click menu, in File ▸ Export as HTML… and as React… (named
   for the selection) and in the design panel's Export section, as a screen does. Sawit converts it layer by layer
   with the CSS Copy as CSS gives each layer: auto layout frames become flexboxes (gap, padding, alignment, hug,
   fill and fixed sizes), other layers are placed absolutely, text keeps its type, images and vectors are embedded
@@ -1031,14 +1171,18 @@ stay vector.
   component with a prop per variant property and its text overrides. Both say at their top that they are a
   mechanical reference, not production code. Agents get the same with `canvas_screen_export {id}`, and FigCraft's
   `inspect.code` (html, react, tailwind) through `canvas_command`.
-<p align="center"><img src="https://files.sawit.dev/media/canvas-export.png" alt="A selected Settings artboard with the bar over it: Export HTML, Export React and Send to Agent" width="100%"></p>
-- **Agents build screens live.** `canvas_begin {kind: "screen"}` makes the screen's frame and folder at once, with
+<p align="center"><img src="https://files.sawit.dev/media/canvas-export.png" alt="A selected Settings artboard with the bar over it: its Export menu open with HTML, React, PNG and SVG, beside Send to Agent" width="100%"></p>
+- **Agents build screens live** when you ask them for a web prototype. `canvas_begin {kind: "screen"}` makes the
+  screen's frame and folder at once, with
   the agent's row and a skeleton; each `canvas_screen_write` (the whole page, edits to it, or its other files)
   renders again, so you watch the screen go from layout to copy to styles. `canvas_screen_get` reads a screen back,
   with a PNG of it, and `canvas_screen_export` writes the HTML or React download where the agent says. With Sawit
   closed they work on the files and the saved canvas, and say that nothing is rendered.
 - **Exports.** `canvas_export` and the PNG and SVG exports agents run paint each screen's latest picture in its
-  frame.
+  frame. A screen's picture waits for its page to settle: fonts and images loaded, its entrance animations run to
+  their end, and the page looked at again if it changed itself in its first seconds. A picture that looks half
+  drawn (a flat band over the lower part of its content) is taken again, up to three times, while the frame keeps
+  its last good picture or says **Loading…**. Pictures are retaken sharper as you zoom in, up to 3×.
 
 ### Live routes
 
@@ -1086,9 +1230,13 @@ cursor.
   per session; a session's subagents share it but still get a cursor each (see *Many agents in one session* below).
   The session's name comes from the client (`clientInfo` in MCP `initialize`), and it keeps one colour and one label
   for as long as Sawit runs. A second session of the same
-  client is told apart by its project ("Codex · shop") or numbered ("Claude Code 2"). The name is always there to
-  read, so colour is never the only way to tell agents apart. Ops from an older `sawit-mcp`, which doesn't say who
-  it is, show as "Agent".
+  client is told apart by its project ("Codex · shop") or, in the same project, by a short random name of an
+  adjective and a fruit or plant ("Swift Durian"), the same each time it is met and never a number. The name is
+  always there to read, so colour is never the only way to tell agents apart. Ops from an older `sawit-mcp`, which
+  doesn't say who it is, get a random name too.
+- **Logos.** On the canvas, an agent's name pill carries its client's logo (Claude Code, Codex, Cursor, …) on a small
+  white disc, which reads on light and dark pages and on every agent colour; an unknown client gets the generic
+  agent mark.
 - **Canvas.** Each agent's pointer is Sawit's own vector art, the same screen size at every zoom: an arrow, a
   crosshair for boxes, an I-beam for text, a pen for lines, an arrow with a + for copies, a hand for moves. It rests
   just outside the top-right corner of what the agent works on, so it never covers it, travels there on a gently
@@ -1124,7 +1272,7 @@ cursor.
   `sawit-mcp`, so they used to share one cursor. Each canvas tool that draws takes `agent` (`"header"` or `{id: "header",
   name: "Header agent"}`): each id is a cursor of its own, in its own colour (none reused while on screen), with its
   own name and rows. A session without `agent` that has several components open at once gets a cursor per component
-  ("Claude Code 2", "Claude Code 3"). Pointers at one spot fan out instead of covering each other, and the roster and
+  (each with a random name). Pointers at one spot fan out instead of covering each other, and the roster and
   the edge chips group a session's agents ("Claude Code · 4 agents").
 - **Roster and edges.** The canvas's top bar sums up the agents ("3 building · 1 done · 1 failed", idle ones as
   "+N"); click it for the list, and pick one to go there. Agents at work off screen share one chip per edge ("2
@@ -1134,6 +1282,12 @@ cursor.
   work), and `view.*` and `page.select` are refused. An op that takes a moment (a Mermaid diagram, an image or file brought in, a long `command.batch`) shows a
   placeholder at once where its result will land, with a soft shimmer. The placeholder is replaced by the result,
   or shows an error mark for a moment if the op failed.
+- **Follow agent.** When an agent starts working on the canvas you're looking at, the view glides once (under half
+  a second) to fit the page, so you see where it draws. Then **Follow agent**, a toggle on the toolbar shown while an
+  agent has worked in the last 20 seconds, keeps what agents change in view: it pans while the change fits, zooms out
+  only when it would be off screen, and never zooms in. It is on by default and for each new session; any pan or
+  zoom of your own turns it off. Under Reduce motion the view jumps. `app_state` reports it
+  (`canvases[].view.follow`); only you set it.
 - **Browser.** For `browser_click`, `browser_hover`, `browser_type`, `browser_select_option`, `browser_scroll` and
   `browser_press_key`, the pointer glides to the element's centre and rings it in the agent's colour. A click
   ripples where it lands, and a field the agent types into shows its caret before the text arrives. The action
@@ -1357,8 +1511,17 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
 - <kbd>⇧</kbd><kbd>⌘</kbd><kbd>↩</kbd> fills the window with the panel you're in: the terminal, the browser or the
   canvas, with no sidebar, other area, tab bar or status bar. The same key puts the layout back as it was, at the
   same sizes. A split terminal tab zooms its pane first.
-- <kbd>⌃</kbd><kbd>⌘</kbd><kbd>1</kbd>, <kbd>⌃</kbd><kbd>⌘</kbd><kbd>2</kbd> and <kbd>⌃</kbd><kbd>⌘</kbd><kbd>3</kbd>
-  go straight to the terminal, the browser and the canvas, opening the browser or the canvas if needed.
+- <kbd>⇧</kbd><kbd>⌘</kbd><kbd>T</kbd>, <kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd> and <kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd>
+  (or <kbd>⌃</kbd><kbd>⌘</kbd><kbd>1</kbd>, <kbd>⌃</kbd><kbd>⌘</kbd><kbd>2</kbd> and <kbd>⌃</kbd><kbd>⌘</kbd><kbd>3</kbd>)
+  go straight to the terminal, the browser and the canvas, opening the browser or the canvas if needed. The canvas
+  keeps <kbd>⇧</kbd><kbd>⌘</kbd><kbd>C</kbd> for Copy as PNG while it has the keyboard, and the terminal for Copy
+  Last Output.
+- <kbd>⌘</kbd><kbd>T</kbd>, <kbd>⌘</kbd><kbd>B</kbd>, <kbd>⌘</kbd><kbd>U</kbd> and <kbd>⌘</kbd><kbd>E</kbd> show or
+  hide the terminal dock, the browser, the canvas and the folder panel. Hiding the browser or the canvas shows the tab
+  before it (with no other tab, the tab area hides). <kbd>⌥</kbd><kbd>⇥</kbd> moves the keyboard between the terminal
+  and the tabs, and <kbd>⌥</kbd><kbd>⇧</kbd><kbd>⇥</kbd> back. The menu bar's **View** menu has them all (Folder
+  Panel, Terminal, Browser, Canvas, Next and Previous Panel), and **File** has New File (<kbd>⌘</kbd><kbd>N</kbd>,
+  in the folder selected in the Files tab) and New Terminal.
 - While a panel fills the window, the title bar says "⇧⌘↩ to exit" for a moment and has a **Restore Layout** button.
   <kbd>⎋</kbd> also restores it in the browser, outside the page (the terminal and the canvas keep their own
   <kbd>⎋</kbd>).
@@ -1392,6 +1555,11 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
 - **Menus fit.** A long item (a session title, a branch, a path) ends in an ellipsis inside its menu, keeps its
   shortcut, and shows all of it in a tooltip; a menu is as wide as its items, never wider than the window. Tooltips
   wrap at 360 px.
+- **One look for every menu and floating bar.** Every menu item has an icon in one column (a checked choice shows
+  its check there instead), in 28 px rows, with section headings and separators; an item that destroys something
+  is red and still asks first, and a disabled item's icon dims with its label. The canvas's floating bars (a screen,
+  an artboard, a flow, a route, Preview, the timer) share one bar whose width fits its buttons, centred over what it
+  belongs to, folding to icons in a narrow canvas.
 
 ### Asking first
 
@@ -1487,6 +1655,7 @@ French…), the defaults move where macOS menus put them.
 | Next project / previous project | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>]</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>[</kbd> |
 | Add project / close project / copy project path | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>O</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>W</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>P</kbd> |
 | Canvas / Dev Tools / MCP / New Project / Changelog page | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>T</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>M</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>V</kbd> |
+| Accounts page | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>A</kbd> |
 | Install update / install the `sawit` command | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>U</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>I</kbd> |
 | Find / find and replace (editable files) | <kbd>⌘</kbd><kbd>F</kbd> / <kbd>⌥</kbd><kbd>⌘</kbd><kbd>F</kbd> |
 | Next match / previous match | <kbd>⌘</kbd><kbd>G</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> (in the find bar also <kbd>↩</kbd> / <kbd>⇧</kbd><kbd>↩</kbd>); <kbd>⎋</kbd> closes it |
@@ -1719,6 +1888,18 @@ except the app-control ones, which drive the running app (`launch_app` starts it
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
 
+**Code mode.** All 177 tools' schemas come to about 229 KB, some 57,000 tokens, in every session's context. Set
+`SAWIT_MCP_TOOLS=code` in the server's entry in your AI client's MCP config and `tools/list` lists two tools
+instead, about 2 KB, some 600 tokens: `search_api` finds the functions for a job and shows their typed signatures,
+and `run` runs a short JavaScript that calls them (`await sawit.terminal_run({...})`), chaining several calls and
+answering only what the script returns. Every tool is a function there, with the same arguments and
+confirmations, and the others still answer when called by name. The script runs in QuickJS inside `sawit-mcp`,
+sandboxed, with a time and memory limit. For example, in Claude Code:
+
+```bash
+claude mcp add sawit -e SAWIT_MCP_TOOLS=code -- /Applications/Sawit.app/Contents/MacOS/sawit-mcp
+```
+
 Every op `sawit-mcp` sends the app says which agent session sent it: the client's name and version from MCP
 `initialize`, an id made once per `sawit-mcp` process, and the project the session works in. The app shows each
 agent's cursor where it works ([Agent cursors](#agent-cursors)). `app_state` lists them in `agents`: each agent at
@@ -1757,7 +1938,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Canvas features through `canvas_command` | The canvas's design tools have no tools of their own: `canvas_command` runs them by id, and `canvas_commands` lists the ids (with a `filter`, what each takes). Prototyping: `proto.flow.add`, `proto.interaction.add` / `set` / `remove` (the Prototype tab's links; Present and Preview are the user's). Dev Mode Inspect: `inspect.code {id, language}` (a frame's code). Variables (the Variables window): `variable.create`, `variable.set`, `variable.update`, `variable.bind`, `variable.delete`, `variable.export {path}` to read them, `variable.import`. Components and their properties (the Assets tab lists them): `component.create`, `component.detach`, `instance.create`, `instance.swap`, `node.get`. Shape Builder: `bool.union`, `bool.subtract`. Boards: `board.timer`, `board.vote`. Version history: `version.preview`, `version.duplicate`. Annotations: `annotation.add` / `remove`. Comments: `canvas_get` returns the page's threads as `comments`; `comment.add {x, y, text}`, `comment.reply {id, text}`, `comment.resolve {id, resolved}`, `comment.delete`. Opening the windows and tabs themselves (`view.*`, `panel.*`, `sawit.variables`, `sawit.comments`) stays the user's: an agent never moves their view |
 | Canvas settings | `canvas_settings` (how the canvas plays agents' builds: `build_animation` full, fast or off, `sound`, `subagent_cursors`; reads or changes the user's View menu settings) |
 | Canvas tabs | `canvas_tabs` (the project's canvases, each a `.sawit` file in `.nyawit/` with a tab of its own, `canvas` first: list, open one by name (a new one when there is none), close, activate or rename one; deleting one is the user's, from its tab's menu, after being asked) |
-| Code mode | `search_api` (find functions by what you want to do and read their typed signatures, made from the tools' own definitions) and `run` (a short JavaScript that calls them as `sawit.<tool>({...})`, chaining several calls and returning only what it returns, with its `console.log`; sandboxed, with a time and memory limit). Every tool is a function, with the same arguments and confirmations. Set `SAWIT_MCP_TOOLS=code` in the client's MCP config to list only these two tools (about 2 KB of schemas, some 600 tokens, instead of about 197 KB, some 49,000); the other tools still answer when called by name |
+| Code mode | `search_api` (find functions by what you want to do and read their typed signatures, made from the tools' own definitions) and `run` (a short JavaScript that calls them as `sawit.<tool>({...})`, chaining several calls and returning only what it returns, with its `console.log`; sandboxed, with a time and memory limit). Every tool is a function, with the same arguments and confirmations. Set `SAWIT_MCP_TOOLS=code` in the client's MCP config to list only these two tools (about 2 KB of schemas, some 600 tokens, instead of about 229 KB, some 57,000); the other tools still answer when called by name |
 | Resources and prompts | `sawit://design-guide` (Sawit's design standard, whole) and `sawit://design-guide/<section>` (one section: `typography`, `components`, `accessibility`…) as MCP resources; the `design-ui` prompt (`what` to design: UI on the canvas as a screen, with the standard's digest) |
 
 Destructive tools say so and need an explicit confirmation: `drop_database`, `drop_relation`, `truncate_table`,
@@ -1988,18 +2169,27 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   binaries, download     binary detection + download via postgresql_archive
   instances, recent      TOML registry, app paths, validation, recent folders
   nyawit                 a project's .nyawit/ folder: its canvas, exports, diagrams, annotations and design exports
+  canvases               a project's canvases, each a .sawit file with a tab of its own
   db                     profiles, DATABASE_URL/.env, TLS, schema, paging, SQL, read-only, diagrams,
                          bulk edits, CSV/Excel export, pg_dump backups, CSV import
   keychain               passwords in the macOS Keychain
-  mermaid                diagrams in Mermaid syntax → SVG with Pele 1.13 in embedded QuickJS
+  mermaid, embedded      diagrams in Mermaid syntax → SVG with Pele 1.13 in embedded QuickJS; the big JS bundles
+                         (Pele, mesurer) carried deflated and inflated when run
   files, format, media, pdf   folder listing, safe reads, atomic saves, formatters, image & PDF rendering
   terminal               PTY + alacritty_terminal → snapshot, keyboard/mouse encoding
+  activity               one set of activity states (busy, done, failed with its code, stopped, needs you) for
+                         terminal, browser and canvas tabs
+  copy_logs, find        a command's last output or its errors as plain text; the find bar's matches in any view
   network                connection diagnosis and ping
-  prompts                prompt library and {{variables}}
+  prompts, prompt_sync   prompt library and {{variables}}; its two-way sync with a private GitHub repository
   git, github            status, diff, log graph, commits, branches; GitHub pull requests and checks
   github_token           `sawit github token`: the GitHub sign-in handed to AI clients for GitHub's MCP server
   ssh, shell_config      saved SSH hosts and ~/.ssh/config; shell startup files
+  text_diff              a line diff of two small texts, for what a sync would change
   agent_config           coding agents' config files on this Mac and in projects
+  permissions            Claude Code's permission rules per settings file, other agents' settings, macOS permissions
+  agent_accounts         Agent Accounts: Claude Code accounts, usage, sessions, shared settings, the status line;
+                         the account pool across Claude Code and Codex, its readings, analytics and wallet
   scripts, search        a project's run scripts and saved commands; text search in a folder
   dev_tools              the Tools page catalog, detection, latest releases, install, upgrade and uninstall
   skills, sawit_skills   the Skills page catalog, agents' skills folders and installs; Sawit Skills
@@ -2007,9 +2197,12 @@ crates/core   sawit-core — no GPUI, tested with plain cargo test
   cloudflare             Workers projects on disk, their bindings, and Cloudflare Local Explorer
   keymap                 the key bindings' ops and rows for sawit-mcp and `sawit list keys`
   agents                 the agents that drive the app through sawit-mcp: who each is, its colour and label
-  browser                the browser tab's agent ops and page scripts, device sizes, console and network logs
+  browser                the browser tab's agent ops and page scripts, device sizes, captures, the snapshot outline,
+                         console and network logs
+  web, https             favicons and the SEO and agent-readiness scan over one rustls HTTP client; a small HTTPS GET
   annotations, date      Annotate's notes, their Markdown and screenshot names; calendar dates
-  site_design            the Design panel's colors (OKLCH, contrast, ramps), tokens, Tailwind classes and export files
+  site_design            the Design panel's colors (OKLCH, contrast, ramps), the scan's grouping, ranking and limits,
+                         tokens, Tailwind classes and export files
   mcp_clients, mcp_catalog, mcp_auth   MCP install into AI clients, the server catalog, client sign-in
   app_control, update, cli    control socket for agents, self-update, the sawit command
   kebun                  sawit <db>, list, bakar, panen, backup, tanam, pasang, pupuk, cabut (no app needed)
@@ -2047,19 +2240,62 @@ crates/mcp    sawit-mcp — stdio MCP server on top of core and board
 
 ## Size & memory
 
-Measured on an Apple Silicon MacBook (M3, macOS 26.6.1), release build (`lto = "fat"`, `strip`); the binary on
-2026-11-03, the rest on 2026-11-01:
+Release build (`lto = "fat"`, `strip`) of `main` after the 2026-11-07 backlog, measured on 2026-11-08 on an 8-core
+Apple Silicon Mac with 16 GB (macOS 27.2); memory from the backlog's footprint runs (below):
 
 | | |
 |---|---|
-| `sawit` | 79.5 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
-| `Sawit.app` installed · DMG · update zip | 63.6 MB · 22.7 MB · 29.9 MB |
-| Idle memory (1 window, 1 terminal tab, 10 seconds after launch) | RSS 114 MB · physical footprint 73 MB (peak 121 MB during startup); the same a minute later |
-| The same with an empty canvas open | Physical footprint 160 MB; up to 380 MB for about half a minute after the first canvas opens, which reads the system's fonts |
-| Memory with a large canvas board open (776 layers, measured on 2026-10-31) | RSS 532 MiB |
-| Clean release build | 12 min 8 s, on a busy machine |
+| `sawit` | 92.9 MB, 88.6 MiB (single file, no JVM/Chromium/Node runtime; includes the MCP server, reached as `sawit-mcp` through a symlink, the FigCraft canvas engine and the canvas's Inter fonts) |
+| `Sawit.app` · update zip | 92.9 MB · 39.8 MB |
+| Idle memory (1 window, 1 terminal tab) | footprint 109–131 MB |
+| With a browser tab, then an empty canvas open | footprint 140–171 MB, then 243–249 MB |
+| With a diagram on the canvas, then two idle minutes later | footprint 331–333 MB, then 249–273 MB |
+| WebKit's processes for one browser tab | about 38 MB |
+| Clean release build | about 23 minutes, with other builds running |
 
 Figures for other apps are not listed because they have not been measured on the same machine.
+
+### Smaller and lighter: the 2026-11-07 backlog
+
+The size and memory work of the 2026-11-07 backlog, measured on an 8-core Apple Silicon Mac with 16 GB (macOS 27.2)
+while other builds ran, so CPU times are rough; sizes are exact. "Before" is the backlog with every other item in;
+"after" adds the size work on top. Memory is the footprint macOS charges Sawit (dirty plus compressed, the least of
+three samples a second apart, 8 s after each step), Sawit in a scratch home with its window filling the screen,
+steps driven over the control socket (`e2e/specs/footprint.test.js`, run with `SAWIT_E2E_FOOTPRINT=1`).
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `sawit` binary, stripped | 93.13 MB | 92.14 MB | −0.98 MB |
+| `Sawit.app` | 93.62 MB | 92.64 MB | −0.98 MB |
+| Update zip | 40.01 MB | 39.74 MB | −0.27 MB |
+| Idle (one terminal) | 108 MB | 109 MB | 0 |
+| + one browser tab | 141 MB | 142 MB | 0 |
+| + the canvas open, empty | 410 MB | 244 MB | **−165 MB** |
+| + a diagram on it | 504–582 MB | 333 MB | **−170 to −250 MB** |
+| + 10 terminals | 479 MB | 345 MB | **−135 MB** |
+| Two idle minutes later | 423 MB | 250 MB | **−173 MB** |
+
+- **The canvas's 165 MB** was freed frames the system allocator kept dirty in its cache of large blocks. Sawit's
+  allocator now maps each block of 4 MB or more on its own and gives it back when it is freed. It costs 1.4 MB of
+  code; a new 27 MB frame costs about 0.75 ms of page faults.
+- **System fonts are mapped, not read.** The canvas's fallback faces (4–55 MB files; Apple Color Emoji is 180 MB)
+  are clean memory shared with the rest of the system, not Sawit's.
+- **Pele gives its memory back.** The QuickJS engine that draws diagrams is dropped after two idle minutes (about
+  40 MB with one diagram); the next diagram loads it again in about 60 ms.
+- **Pele and mesurer ship deflated** in the binary and are inflated when run: −1.0 MB on disk, nothing in memory
+  while unused.
+- **One syntax set** serves the editors and Markdown's code blocks; a Markdown file with code no longer loads a
+  second copy.
+- **`opt-level = "s"`** for the code that runs rarely (the MCP server's framing, wasm validation, font downloads,
+  the TOML parser): −1.3 MB of code. Tried on the PDF and font crates too, where under fat LTO it came out bigger,
+  so they stay at 3.
+- **Kept as they are, on purpose**: `panic = "unwind"` (the canvas's render worker and the text code catch a panic so
+  one bad frame doesn't take the app down), every image decoder (the app shows any image file), terminal scrollback
+  at 10,000 lines (an idle terminal costs only its screen), the canvas's live frame buffers (for redraws of only what
+  changed), Inter as clean static memory, and the syntax set prewarmed at launch so the first file opens fast. Ten
+  terminals cost about 11 MB together.
+- WebKit's own processes, about 38 MB for one tab, didn't change. The full write-up, with every step and run, is
+  `docs/notes/2026-11-07-size-and-ram.md`.
 
 ### Before and after the 30-item backlog
 
