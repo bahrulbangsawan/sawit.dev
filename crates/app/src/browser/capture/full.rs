@@ -85,6 +85,23 @@ async fn load_lazy(this: &WeakEntity<BrowserView>, height: f64, screen: f64, cx:
     eval(this, "scrollTo(0, 0); 'ok'".into(), cx).await;
 }
 
+/// Before a full-page recording: the page's height, the screen's, and where it was scrolled,
+/// with lazy content loaded and the page back at its top.
+pub(super) async fn prepare_scroll(
+    this: &WeakEntity<BrowserView>,
+    cx: &mut AsyncApp,
+) -> Option<(f64, f64, f64, f64)> {
+    let (h, x, y, vh) = measure(this, cx).await?;
+    load_lazy(this, h, vh, cx).await;
+    let (h, ..) = measure(this, cx).await.unwrap_or((h, x, y, vh));
+    Some((h.min(f64::from(MAX_PAGE_HEIGHT)), vh, x, y))
+}
+
+/// Scrolls the page to `x`, `y` CSS px.
+pub(super) async fn scroll_to(this: &WeakEntity<BrowserView>, x: f64, y: f64, cx: &mut AsyncApp) {
+    eval(this, format!("scrollTo({x}, {y}); 'ok'"), cx).await;
+}
+
 /// A full-page capture of the page as it is laid out now.
 pub(super) async fn full_page(
     this: &WeakEntity<BrowserView>,
