@@ -219,3 +219,31 @@ sawitTest(
     await win.press("ctrl+c");
   },
 );
+
+// B2: each tab's activity, the same in app_state as on its icon: busy while a command runs,
+// idle at the prompt, and failed with the code once the shell exits with one.
+sawitTest("terminal: a tab's activity is busy, idle, then failed with its exit code", async (ctx) => {
+  const { win } = ctx;
+  await newTerminal(ctx);
+  const active = async () => (await terminals(ctx)).find((t) => t.active);
+  await win.typeKeys("sleep 4");
+  await win.press("return");
+  await until(async () => (await active())?.activity?.state === "busy", {
+    what: "the tab to be busy while sleep runs",
+  });
+  await until(async () => (await active())?.activity?.state === "idle", {
+    timeoutMs: 20_000,
+    what: "the tab to be idle at the prompt again",
+  });
+  await win.typeKeys("exit 3");
+  await win.press("return");
+  await until(async () => (await active())?.activity?.state === "failed", {
+    what: "the tab to report the failure",
+  });
+  const tab = await active();
+  assert.equal(tab.exit_code, 3);
+  assert.equal(tab.activity.exit_code, 3);
+  assert.equal(tab.activity.label, "Exited with code 3");
+  // The name says the code in words too, not only the icon.
+  await win.waitFor({ role: "radiobutton", name: /\(exited 3\)$/, within: "Terminals" });
+});

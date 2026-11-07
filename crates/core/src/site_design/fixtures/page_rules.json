@@ -1,8 +1,31 @@
 {
   "font_faces": [
-    { "family": "Inter", "weight": "normal", "style": "italic", "src": ["https://cdn.example.net/inter-italic.woff2", "data:font/woff2;base64,AAAA"] }
+    {
+      "family": "Inter",
+      "weight": "normal",
+      "style": "italic",
+      "src": [
+        "https://cdn.example.net/inter-italic.woff2",
+        "data:font/woff2;base64,AAAA"
+      ]
+    }
   ],
-  "variables": [["--brand", "#2563eb"]],
-  "breakpoints": [480, 1280],
-  "focus_ring": null
+  "variables": [
+    [
+      "--brand",
+      "#2563eb"
+    ]
+  ],
+  "breakpoints": [
+    1280,
+    480
+  ],
+  "focus_rings": {
+    "visible": [],
+    "plain": [
+      "rgba(0, 0, 0, 0)",
+      "rgb(37, 99, 235)"
+    ]
+  },
+  "color_fallbacks": {}
 }

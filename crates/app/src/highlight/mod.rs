@@ -30,7 +30,6 @@ mod tree_sitter_highlighter;
 
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use gpui_kit::component::input::{
@@ -43,7 +42,11 @@ use grammars::{Grammar, Highlights};
 use syntect_highlighter::{SyntectHighlighter, find_syntax};
 use tree_sitter_highlighter::TreeSitterHighlighter;
 
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
+/// The syntax definitions (bat's collection, loaded on first use), shared with gpui-component's
+/// highlighter that colors Markdown's code blocks, so the set is in memory once.
+fn syntaxes() -> &'static SyntaxSet {
+    gpui_kit::component::highlighter::syntax_set()
+}
 
 /// Documents this small are parsed in place: well under a millisecond.
 const SYNC_MAX_BYTES: usize = 4 * 1024;
@@ -64,7 +67,7 @@ const PARSE_DEBOUNCE: Duration = Duration::from_millis(100);
 pub fn prewarm(cx: &App) {
     cx.background_executor()
         .spawn(async {
-            LazyLock::force(&SYNTAXES);
+            syntaxes();
             grammars::compile_all();
         })
         .detach();

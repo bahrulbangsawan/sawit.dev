@@ -75,8 +75,10 @@ mod refusal;
 mod replace;
 mod routes;
 mod screen;
+mod starter;
 #[cfg(test)]
 mod tests;
+mod tokens;
 mod work;
 
 use command::{command, commands};
@@ -97,6 +99,7 @@ pub use work::{PROGRESS_UNSHOWN, WORK_SIZE, agent_refusal, work_frame, work_of, 
 // ids): the files File ▸ Export and Import from file… make and read, and what Edit ▸ Copy as
 // copies. The canvas's view (crates/app/src/board/commands/) asks for files and writes them, and
 // puts what is copied on the system clipboard.
+pub use command::{agent_can_run, is_document_command};
 pub use copy_as::{COPY_PNG_MAX_SIDE, Copied, copy_as, copy_png_scale};
 pub use export::{export_page, frames_pdf};
 pub use files::import_file;
@@ -238,7 +241,11 @@ fn run_unguarded(board: &mut BoardDoc, op: &Value) -> Value {
         Some("begin") => work::begin(board, op),
         Some("progress") => work::progress(board, op),
         Some("screen") => screen::screen(board, op),
+        Some("screen_layers") => screen::to_layers(board, op),
         Some("checks") => checks::checks(board, op),
+        Some("lint") => checks::lint(board, op),
+        Some("design_status") => checks::design_status(board),
+        Some("starter") => starter::starter(board, op),
         Some("frame_code") => code::frame_code(board, op),
         Some("handoff") => handoff::handoff(board, op),
         Some("routes") => routes::routes(board, op),

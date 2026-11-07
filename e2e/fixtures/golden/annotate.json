@@ -1,0 +1,550 @@
+{
+ "snapshot": {
+  "snapshot": "- main [ref=e1]:\n  - button \"Submit order\" [ref=e2]\n- paragraph \"Go to page two\" [ref=e3]\n  - link \"Go to page two\" [ref=e4]",
+  "url": "http://fixture/annotate.html",
+  "title": "Annotate · fixture",
+  "ready": "complete",
+  "refs": 4,
+  "truncated": false
+ },
+ "design.summary": {
+  "url": "http://fixture/annotate.html",
+  "title": "Annotate · fixture",
+  "truncated": false,
+  "counts": {
+   "colors": 3,
+   "text_styles": 2,
+   "font_faces": 0,
+   "assets": 0,
+   "variables": 0,
+   "components": 1
+  },
+  "tokens": {
+   "site": "127.0.0.1",
+   "url": "http://fixture/annotate.html",
+   "date": "DATE",
+   "palette": [
+    {
+     "role": "primary",
+     "base": "#2563eb",
+     "steps": [
+      "#f1f5fd",
+      "#dde8fe",
+      "#c4d8fd",
+      "#9cbefe",
+      "#6f9ffd",
+      "#417dfc",
+      "#2563eb",
+      "#1a4dbc",
+      "#103993",
+      "#08266b",
+      "#021546"
+     ],
+     "uses": 1
+    },
+    {
+     "role": "neutral",
+     "base": "#ffffff",
+     "steps": [
+      "#ffffff",
+      "#e8e8e8",
+      "#d7d7d7",
+      "#bebebe",
+      "#a1a1a1",
+      "#868686",
+      "#6f6f6f",
+      "#585858",
+      "#424242",
+      "#2e2e2e",
+      "#1b1b1b"
+     ],
+     "uses": 1
+    }
+   ],
+   "semantic": [
+    [
+     "foreground",
+     "#ffffff"
+    ],
+    [
+     "primary",
+     "#2563eb"
+    ],
+    [
+     "primary-foreground",
+     "#ffffff"
+    ],
+    [
+     "ring",
+     "#2563eb"
+    ]
+   ],
+   "families": [],
+   "type_roles": [
+    [
+     "label",
+     {
+      "family": "system-ui",
+      "size": 15,
+      "weight": 400,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ]
+   ],
+   "type_scale": [],
+   "spacing_base": null,
+   "spacing": [
+    [
+     "xs",
+     10
+    ],
+    [
+     "sm",
+     15
+    ],
+    [
+     "md",
+     18
+    ],
+    [
+     "lg",
+     40
+    ]
+   ],
+   "radius": [
+    [
+     "sm",
+     "8px"
+    ]
+   ],
+   "shadows": [],
+   "breakpoints": [],
+   "variables": [],
+   "components": [
+    {
+     "name": "button-primary",
+     "props": [
+      [
+       "backgroundColor",
+       "{colors.primary}"
+      ],
+      [
+       "textColor",
+       "{colors.primary-foreground}"
+      ],
+      [
+       "typography",
+       "{typography.label}"
+      ],
+      [
+       "rounded",
+       "{rounded.sm}"
+      ],
+      [
+       "padding",
+       "10px 18px"
+      ],
+      [
+       "height",
+       "38px"
+      ]
+     ]
+    }
+   ],
+   "facts": {
+    "primary_buttons": 1,
+    "primary_links": 0,
+    "smallest_text": 15,
+    "dark": true,
+    "colors_seen": 3,
+    "body": null
+   }
+  }
+ },
+ "design.colors": {
+  "colors": [
+   {
+    "value": "rgb(255, 255, 255)",
+    "role": "text",
+    "count": 1,
+    "on_button": 1,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(37, 99, 235)",
+    "role": "background",
+    "count": 1,
+    "on_button": 1,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(0, 0, 238)",
+    "role": "text",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 1
+   }
+  ]
+ },
+ "design.fonts": {
+  "families": [],
+  "font_faces": [],
+  "text_styles": [
+   {
+    "tag": "a",
+    "in_main": false,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 15,
+    "weight": 400,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgb(0, 0, 238)",
+    "chars": 14
+   },
+   {
+    "tag": "button",
+    "in_main": true,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 15,
+    "weight": 400,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgb(255, 255, 255)",
+    "chars": 12
+   }
+  ]
+ },
+ "design.assets": {
+  "assets": []
+ },
+ "design.tokens": {
+  "tokens": {
+   "site": "127.0.0.1",
+   "url": "http://fixture/annotate.html",
+   "date": "DATE",
+   "palette": [
+    {
+     "role": "primary",
+     "base": "#2563eb",
+     "steps": [
+      "#f1f5fd",
+      "#dde8fe",
+      "#c4d8fd",
+      "#9cbefe",
+      "#6f9ffd",
+      "#417dfc",
+      "#2563eb",
+      "#1a4dbc",
+      "#103993",
+      "#08266b",
+      "#021546"
+     ],
+     "uses": 1
+    },
+    {
+     "role": "neutral",
+     "base": "#ffffff",
+     "steps": [
+      "#ffffff",
+      "#e8e8e8",
+      "#d7d7d7",
+      "#bebebe",
+      "#a1a1a1",
+      "#868686",
+      "#6f6f6f",
+      "#585858",
+      "#424242",
+      "#2e2e2e",
+      "#1b1b1b"
+     ],
+     "uses": 1
+    }
+   ],
+   "semantic": [
+    [
+     "foreground",
+     "#ffffff"
+    ],
+    [
+     "primary",
+     "#2563eb"
+    ],
+    [
+     "primary-foreground",
+     "#ffffff"
+    ],
+    [
+     "ring",
+     "#2563eb"
+    ]
+   ],
+   "families": [],
+   "type_roles": [
+    [
+     "label",
+     {
+      "family": "system-ui",
+      "size": 15,
+      "weight": 400,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ]
+   ],
+   "type_scale": [],
+   "spacing_base": null,
+   "spacing": [
+    [
+     "xs",
+     10
+    ],
+    [
+     "sm",
+     15
+    ],
+    [
+     "md",
+     18
+    ],
+    [
+     "lg",
+     40
+    ]
+   ],
+   "radius": [
+    [
+     "sm",
+     "8px"
+    ]
+   ],
+   "shadows": [],
+   "breakpoints": [],
+   "variables": [],
+   "components": [
+    {
+     "name": "button-primary",
+     "props": [
+      [
+       "backgroundColor",
+       "{colors.primary}"
+      ],
+      [
+       "textColor",
+       "{colors.primary-foreground}"
+      ],
+      [
+       "typography",
+       "{typography.label}"
+      ],
+      [
+       "rounded",
+       "{rounded.sm}"
+      ],
+      [
+       "padding",
+       "10px 18px"
+      ],
+      [
+       "height",
+       "38px"
+      ]
+     ]
+    }
+   ],
+   "facts": {
+    "primary_buttons": 1,
+    "primary_links": 0,
+    "smallest_text": 15,
+    "dark": true,
+    "colors_seen": 3,
+    "body": null
+   }
+  }
+ },
+ "design.variables": {
+  "variables": []
+ },
+ "inspect body": {
+  "selector": "body",
+  "label": "body",
+  "rect": {
+   "x": 40,
+   "y": 40,
+   "width": 1201,
+   "height": 71
+  },
+  "box": {
+   "margin": [
+    40,
+    40,
+    40,
+    40
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui",
+   "used_family": "system-ui",
+   "size": 15,
+   "weight": 400,
+   "line_height": null,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 0)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgba(0, 0, 0, 0)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(0, 0, 0)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "block",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 21,
+   "large": false,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect h1": {
+  "error": "Nothing on the page matches “h1”."
+ },
+ "inspect #buy": {
+  "error": "Nothing on the page matches “#buy”."
+ },
+ "inspect .ghost": {
+  "error": "Nothing on the page matches “.ghost”."
+ },
+ "inspect #deep": {
+  "error": "Nothing on the page matches “#deep”."
+ },
+ "inspect .card": {
+  "error": "Nothing on the page matches “.card”."
+ },
+ "inspect a": {
+  "selector": "#two",
+  "label": "a#two",
+  "rect": {
+   "x": 40,
+   "y": 93.17,
+   "width": 104.41,
+   "height": 17.67
+  },
+  "box": {
+   "margin": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui",
+   "used_family": "system-ui",
+   "size": 15,
+   "weight": 400,
+   "line_height": null,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 238)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgba(0, 0, 0, 0)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(0, 0, 238)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "inline",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 9.4,
+   "large": false,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect input": {
+  "error": "Nothing on the page matches “input”."
+ },
+ "inspect #nope": {
+  "error": "Nothing on the page matches “#nope”."
+ },
+ "inspect html #buy": {
+  "error": "Nothing on the page matches “#buy”."
+ }
+}

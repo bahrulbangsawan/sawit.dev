@@ -1,6 +1,6 @@
 //! Lane 1 (mesurer-capture): what mesurer's world asks of the Mac. `clipboard.image` (a PNG to
 //! the pasteboard) and `file.save` (a download, saved under `.nyawit/browser/captures/`) in
-//! `capture/files.rs`; `capture.visible` and `capture.frame` (the page as WebKit draws it,
+//! `capture/files.rs`; `capture.codec` (the H.264 level a recording's frame needs) here; `capture.visible` and `capture.frame` (the page as WebKit draws it,
 //! `engine/capture.rs`) in `capture/shots.rs`; `color.sample` and `color.cancel` (`NSColorSampler`,
 //! `engine/color.rs`) in `capture/color.rs`.
 
@@ -37,8 +37,21 @@ pub(super) fn handle(
 ) {
     match message {
         FromMesurer::ClipboardImage { png_base64 } => files::copy_image(png_base64, reply, cx),
-        FromMesurer::FileSave { name, mime, base64 } => {
-            files::save(view, name, mime, base64, reply, cx)
+        FromMesurer::FileSave {
+            name,
+            mime,
+            base64,
+            href,
+        } => files::save(view, name, mime, base64, href, reply, cx),
+        FromMesurer::CaptureCodec {
+            codec,
+            width,
+            height,
+            fps,
+        } => {
+            let codec =
+                sawit_core::browser::mesurer::files::codec_for_page(&codec, width, height, fps);
+            reply.ok_value(&serde_json::json!({ "codec": codec }));
         }
         FromMesurer::CaptureVisible {} => shots::visible(view, reply, cx),
         FromMesurer::CaptureFrame { max_width, quality } => {

@@ -1,0 +1,643 @@
+{
+ "snapshot": {
+  "snapshot": "- navigation \"Global\" [ref=e1]:\n  - link /url: / [ref=e2]\n  - link \"Store\" /url: /store/ [ref=e3]\n- main [ref=e4]:\n  - navigation \"Breadcrumb\" [ref=e5]:\n    - link /url: / [ref=e6]\n    - text: \"›\"\n    - link \"Store\" /url: /store/ [ref=e7]\n  - paragraph \"A page whose header is a nav. The breadcrumb's home link and the footer mark aren't the logo.\" [ref=e8]\n- contentinfo [ref=e9]:\n  - link /url: / [ref=e10]",
+  "url": "http://fixture/design-nav.html",
+  "title": "Design nav · fixture",
+  "ready": "complete",
+  "refs": 10,
+  "truncated": false
+ },
+ "design.summary": {
+  "url": "http://fixture/design-nav.html",
+  "title": "Design nav · fixture",
+  "truncated": false,
+  "counts": {
+   "colors": 6,
+   "text_styles": 4,
+   "font_faces": 0,
+   "assets": 3,
+   "variables": 0,
+   "components": 2
+  },
+  "tokens": {
+   "site": "127.0.0.1",
+   "url": "http://fixture/design-nav.html",
+   "date": "DATE",
+   "palette": [
+    {
+     "role": "primary",
+     "base": "#0000ee",
+     "steps": [
+      "#f2f5fc",
+      "#dee8fd",
+      "#c6d8fc",
+      "#9dbdfe",
+      "#729efd",
+      "#457cfe",
+      "#1c58fe",
+      "#0000ee",
+      "#0228b1",
+      "#001982",
+      "#000957"
+     ],
+     "uses": 2
+    },
+    {
+     "role": "neutral",
+     "base": "#1d1d1f",
+     "steps": [
+      "#f5f5f5",
+      "#e8e8e8",
+      "#d7d7d8",
+      "#bdbdbf",
+      "#a1a1a3",
+      "#868688",
+      "#6e6e71",
+      "#58585a",
+      "#424244",
+      "#2e2e2f",
+      "#1d1d1f"
+     ],
+     "uses": 3
+    }
+   ],
+   "semantic": [
+    [
+     "background",
+     "#ffffff"
+    ],
+    [
+     "foreground",
+     "#1d1d1f"
+    ],
+    [
+     "primary",
+     "#0000ee"
+    ],
+    [
+     "primary-foreground",
+     "#ffffff"
+    ],
+    [
+     "ring",
+     "#0000ee"
+    ]
+   ],
+   "families": [
+    [
+     "sans",
+     "system-ui, sans-serif"
+    ]
+   ],
+   "type_roles": [
+    [
+     "body-md",
+     {
+      "family": "system-ui",
+      "size": 16,
+      "weight": 400,
+      "line_height": 1.5,
+      "letter_spacing": null
+     }
+    ]
+   ],
+   "type_scale": [
+    [
+     "base",
+     16
+    ]
+   ],
+   "spacing_base": 4,
+   "spacing": [
+    [
+     "xs",
+     12
+    ],
+    [
+     "sm",
+     16
+    ],
+    [
+     "md",
+     24
+    ]
+   ],
+   "radius": [],
+   "shadows": [],
+   "breakpoints": [],
+   "variables": [],
+   "components": [
+    {
+     "name": "nav-link",
+     "props": [
+      [
+       "textColor",
+       "{colors.primary}"
+      ],
+      [
+       "typography",
+       "{typography.body-md}"
+      ],
+      [
+       "rounded",
+       "0px"
+      ],
+      [
+       "height",
+       "18.84px"
+      ]
+     ]
+    }
+   ],
+   "facts": {
+    "primary_buttons": 0,
+    "primary_links": 2,
+    "smallest_text": 16,
+    "dark": false,
+    "colors_seen": 5,
+    "body": {
+     "family": "system-ui",
+     "size": 16,
+     "weight": 400,
+     "line_height": 1.5,
+     "letter_spacing": null
+    }
+   }
+  }
+ },
+ "design.colors": {
+  "colors": [
+   {
+    "value": "rgb(0, 0, 238)",
+    "role": "text",
+    "count": 2,
+    "on_button": 0,
+    "on_link": 2
+   },
+   {
+    "value": "rgb(29, 29, 31)",
+    "role": "text",
+    "count": 2,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(255, 255, 255)",
+    "role": "background",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(29, 29, 31)",
+    "role": "fill",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(110, 110, 115)",
+    "role": "fill",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(134, 134, 139)",
+    "role": "fill",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 0
+   }
+  ]
+ },
+ "design.fonts": {
+  "families": [
+   [
+    "sans",
+    "system-ui, sans-serif"
+   ]
+  ],
+  "font_faces": [],
+  "text_styles": [
+   {
+    "tag": "p",
+    "in_main": true,
+    "family": "system-ui, sans-serif",
+    "used_family": "system-ui",
+    "size": 16,
+    "weight": 400,
+    "line_height": 24,
+    "letter_spacing": null,
+    "color": "rgb(29, 29, 31)",
+    "chars": 93
+   },
+   {
+    "tag": "a",
+    "in_main": false,
+    "family": "system-ui, sans-serif",
+    "used_family": "system-ui",
+    "size": 16,
+    "weight": 400,
+    "line_height": 24,
+    "letter_spacing": null,
+    "color": "rgb(0, 0, 238)",
+    "chars": 5
+   },
+   {
+    "tag": "a",
+    "in_main": true,
+    "family": "system-ui, sans-serif",
+    "used_family": "system-ui",
+    "size": 16,
+    "weight": 400,
+    "line_height": 24,
+    "letter_spacing": null,
+    "color": "rgb(0, 0, 238)",
+    "chars": 5
+   },
+   {
+    "tag": "nav",
+    "in_main": true,
+    "family": "system-ui, sans-serif",
+    "used_family": "system-ui",
+    "size": 16,
+    "weight": 400,
+    "line_height": 24,
+    "letter_spacing": null,
+    "color": "rgb(29, 29, 31)",
+    "chars": 1
+   }
+  ]
+ },
+ "design.assets": {
+  "assets": [
+   {
+    "kind": "icon",
+    "url": null,
+    "svg": "<svg aria-label=\"Site\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"10\" fill=\"#1d1d1f\"></circle></svg>",
+    "label": "logo",
+    "width": 24,
+    "height": 24,
+    "used_on": [
+     "svg[aria-label=\"Site\"]"
+    ],
+    "logo": true
+   },
+   {
+    "kind": "icon",
+    "url": null,
+    "svg": "<svg aria-label=\"Home\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\"><rect x=\"2\" y=\"2\" width=\"12\" height=\"12\" fill=\"#6e6e73\"></rect></svg>",
+    "label": "Home",
+    "width": 16,
+    "height": 16,
+    "used_on": [
+     "svg[aria-label=\"Home\"]"
+    ],
+    "logo": false
+   },
+   {
+    "kind": "icon",
+    "url": null,
+    "svg": "<svg aria-label=\"Footer mark\" width=\"20\" height=\"20\" viewBox=\"0 0 20 20\"><polygon points=\"10,1 19,19 1,19\" fill=\"#86868b\"></polygon></svg>",
+    "label": "Footer mark",
+    "width": 20,
+    "height": 20,
+    "used_on": [
+     "svg[aria-label=\"Footer mark\"]"
+    ],
+    "logo": false
+   }
+  ]
+ },
+ "design.tokens": {
+  "tokens": {
+   "site": "127.0.0.1",
+   "url": "http://fixture/design-nav.html",
+   "date": "DATE",
+   "palette": [
+    {
+     "role": "primary",
+     "base": "#0000ee",
+     "steps": [
+      "#f2f5fc",
+      "#dee8fd",
+      "#c6d8fc",
+      "#9dbdfe",
+      "#729efd",
+      "#457cfe",
+      "#1c58fe",
+      "#0000ee",
+      "#0228b1",
+      "#001982",
+      "#000957"
+     ],
+     "uses": 2
+    },
+    {
+     "role": "neutral",
+     "base": "#1d1d1f",
+     "steps": [
+      "#f5f5f5",
+      "#e8e8e8",
+      "#d7d7d8",
+      "#bdbdbf",
+      "#a1a1a3",
+      "#868688",
+      "#6e6e71",
+      "#58585a",
+      "#424244",
+      "#2e2e2f",
+      "#1d1d1f"
+     ],
+     "uses": 3
+    }
+   ],
+   "semantic": [
+    [
+     "background",
+     "#ffffff"
+    ],
+    [
+     "foreground",
+     "#1d1d1f"
+    ],
+    [
+     "primary",
+     "#0000ee"
+    ],
+    [
+     "primary-foreground",
+     "#ffffff"
+    ],
+    [
+     "ring",
+     "#0000ee"
+    ]
+   ],
+   "families": [
+    [
+     "sans",
+     "system-ui, sans-serif"
+    ]
+   ],
+   "type_roles": [
+    [
+     "body-md",
+     {
+      "family": "system-ui",
+      "size": 16,
+      "weight": 400,
+      "line_height": 1.5,
+      "letter_spacing": null
+     }
+    ]
+   ],
+   "type_scale": [
+    [
+     "base",
+     16
+    ]
+   ],
+   "spacing_base": 4,
+   "spacing": [
+    [
+     "xs",
+     12
+    ],
+    [
+     "sm",
+     16
+    ],
+    [
+     "md",
+     24
+    ]
+   ],
+   "radius": [],
+   "shadows": [],
+   "breakpoints": [],
+   "variables": [],
+   "components": [
+    {
+     "name": "nav-link",
+     "props": [
+      [
+       "textColor",
+       "{colors.primary}"
+      ],
+      [
+       "typography",
+       "{typography.body-md}"
+      ],
+      [
+       "rounded",
+       "0px"
+      ],
+      [
+       "height",
+       "18.84px"
+      ]
+     ]
+    }
+   ],
+   "facts": {
+    "primary_buttons": 0,
+    "primary_links": 2,
+    "smallest_text": 16,
+    "dark": false,
+    "colors_seen": 5,
+    "body": {
+     "family": "system-ui",
+     "size": 16,
+     "weight": 400,
+     "line_height": 1.5,
+     "letter_spacing": null
+    }
+   }
+  }
+ },
+ "design.variables": {
+  "variables": []
+ },
+ "inspect body": {
+  "selector": "body",
+  "label": "body",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 1281,
+   "height": 231.91
+  },
+  "box": {
+   "margin": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui, sans-serif",
+   "used_family": "system-ui",
+   "size": 16,
+   "weight": 400,
+   "line_height": 24,
+   "letter_spacing": null,
+   "color": "rgb(29, 29, 31)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgb(255, 255, 255)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(29, 29, 31)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "block",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 16.83,
+   "large": false,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect h1": {
+  "error": "Nothing on the page matches “h1”."
+ },
+ "inspect #buy": {
+  "error": "Nothing on the page matches “#buy”."
+ },
+ "inspect .ghost": {
+  "error": "Nothing on the page matches “.ghost”."
+ },
+ "inspect #deep": {
+  "error": "Nothing on the page matches “#deep”."
+ },
+ "inspect .card": {
+  "error": "Nothing on the page matches “.card”."
+ },
+ "inspect a": {
+  "selector": "#globalnav > a:nth-of-type(1)",
+  "label": "a",
+  "rect": {
+   "x": 24,
+   "y": 20.53,
+   "width": 24,
+   "height": 18.84
+  },
+  "box": {
+   "margin": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui, sans-serif",
+   "used_family": "system-ui",
+   "size": 16,
+   "weight": 400,
+   "line_height": 24,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 238)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgba(0, 0, 0, 0)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(0, 0, 238)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "inline",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 9.4,
+   "large": false,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect input": {
+  "error": "Nothing on the page matches “input”."
+ },
+ "inspect #nope": {
+  "error": "Nothing on the page matches “#nope”."
+ },
+ "inspect html #buy": {
+  "error": "Nothing on the page matches “#buy”."
+ }
+}

@@ -330,6 +330,52 @@ fn sync_states_follow_the_last_sync() {
     );
 }
 
+/// Deletes since the last sync: a path synced before and now gone on one side only is a delete
+/// there (carried over by the next sync), unless the other side changed it since, which is a
+/// conflict. A path never synced stays "only here" or "only on GitHub".
+#[test]
+fn deletes_since_the_last_sync_are_carried_over() {
+    use std::collections::BTreeMap;
+    let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let local = map(&[
+        ("deleted-there", "1"),
+        ("changed-here", "2"),
+        ("new-here", "1"),
+    ]);
+    let remote = map(&[
+        ("deleted-here", "1"),
+        ("changed-there", "2"),
+        ("new-there", "1"),
+    ]);
+    let base = SyncBase {
+        files: map(&[
+            ("deleted-here", "1"),
+            ("deleted-there", "1"),
+            ("changed-here", "1"),
+            ("changed-there", "1"),
+        ]),
+        ..Default::default()
+    };
+    let plan: BTreeMap<String, FileState> = plan_sync(&local, &remote, &base).into_iter().collect();
+    assert_eq!(plan["deleted-here"], FileState::DeletedHere);
+    assert_eq!(plan["deleted-there"], FileState::DeletedOnGitHub);
+    assert_eq!(plan["changed-here"], FileState::ChangedOnBoth);
+    assert_eq!(plan["changed-there"], FileState::ChangedOnBoth);
+    assert_eq!(plan["new-here"], FileState::OnlyHere);
+    assert_eq!(plan["new-there"], FileState::OnlyOnGitHub);
+    assert!(FileState::DeletedHere.uploads() && !FileState::DeletedHere.downloads());
+    assert!(FileState::DeletedOnGitHub.downloads() && !FileState::DeletedOnGitHub.uploads());
+    assert_eq!(
+        serde_json::to_value(FileState::DeletedOnGitHub).unwrap(),
+        "deleted_on_github"
+    );
+}
+
 /// Git's blob hash, as GitHub's tree lists it (`git hash-object`), and base64 both ways as
 /// GitHub sends a blob (wrapped in lines).
 #[test]

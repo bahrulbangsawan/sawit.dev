@@ -73,10 +73,18 @@ pub(super) fn render(sel: &Rc<DesignSelection>, cx: &mut Context<BoardView>) -> 
     rows.push(export_button(sel.ids.len(), &this));
     // A frame also exports as code, as the bar over it does: two more formats.
     if let Some(frame) = sel.one_frame() {
-        let html =
-            crate::board::screens::export_button(this.clone(), "design-export-html", frame, false);
-        let react =
-            crate::board::screens::export_button(this.clone(), "design-export-react", frame, true);
+        let html = crate::board::screens::code_export_button(
+            this.clone(),
+            "design-export-html",
+            frame,
+            false,
+        );
+        let react = crate::board::screens::code_export_button(
+            this.clone(),
+            "design-export-react",
+            frame,
+            true,
+        );
         rows.push(
             row()
                 .items_center()

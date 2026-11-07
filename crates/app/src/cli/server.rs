@@ -70,12 +70,13 @@ pub fn serve(cx: &mut App) {
     let (tx, mut rx) = futures::channel::mpsc::unbounded::<(Incoming, UnixStream)>();
     let accept = move || {
         for mut stream in listener.incoming().flatten() {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-            let mut bytes = Vec::new();
-            // Canvas scenes and images can be large.
-            if (&stream).take(64 << 20).read_to_end(&mut bytes).is_err() {
-                continue;
-            }
+            let bytes = match read_request(&stream) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    reply(&mut stream, &format!("{REPLY_ERROR}{e}"));
+                    continue;
+                }
+            };
             let incoming = match app_control::decode(&bytes) {
                 Some(Ok(request)) => Incoming::Control(Box::new(request)),
                 Some(Err(e)) => {
@@ -111,6 +112,59 @@ pub fn serve(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// The largest request read: canvas scenes and images can be large.
+const REQUEST_LIMIT: usize = 64 << 20;
+
+/// How long [`read_request`] waits at most for a request to arrive whole.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long one read waits before [`read_request`] looks at what has come so far.
+const READ_SLICE: Duration = Duration::from_millis(100);
+
+/// Reads one request off `stream`: up to the client closing its sending half, as the protocol
+/// says, or, when that close is slow to arrive (seen under load: the whole request read and no
+/// end of stream for seconds), as soon as what has come is a whole request. Before, the read
+/// gave up after five seconds and the connection closed with no answer at all.
+fn read_request(stream: &UnixStream) -> Result<Vec<u8>, String> {
+    let _ = stream.set_read_timeout(Some(READ_SLICE));
+    let started = std::time::Instant::now();
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 64 << 10];
+    let mut reader = stream;
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(bytes),
+            Ok(n) => {
+                bytes.extend_from_slice(&chunk[..n]);
+                if bytes.len() > REQUEST_LIMIT {
+                    return Err("the request is too large".into());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if whole(&bytes) {
+                    return Ok(bytes);
+                }
+                if started.elapsed() >= REQUEST_TIMEOUT {
+                    return Err("the request didn't arrive whole in time".into());
+                }
+            }
+            Err(e) => return Err(format!("reading the request failed: {e}")),
+        }
+    }
+}
+
+/// Whether `bytes` is a whole request already: a control request whose JSON parses. (An open
+/// request from the CLI has no end of its own, a cut path still decodes, so it waits for the close.)
+fn whole(bytes: &[u8]) -> bool {
+    matches!(app_control::decode(bytes), Some(Ok(_)))
 }
 
 pub(super) fn reply(stream: &mut UnixStream, line: &str) {

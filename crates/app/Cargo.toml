@@ -31,6 +31,8 @@ tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# GIF recordings (already in the tree through image).
+gif = "0.14"
 sawit-core = { path = "../core" }
 # `sawit-mcp` is built into this binary; see `invoked_as_mcp` in main.rs.
 sawit-mcp = { path = "../mcp" }
@@ -45,19 +47,19 @@ log = "0.4"
 env_logger = { version = "0.11", default-features = false }
 # In-app video: AVPlayer frames painted through GPUI's surface().
 objc2 = "0.6"
-objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "objc2-core-foundation", "objc2-core-media", "objc2-core-video"] }
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "AVAssetWriter", "AVAssetWriterInput", "AVMediaFormat", "AVVideoSettings", "objc2-core-foundation", "objc2-core-media", "objc2-core-video"] }
 # CFNotificationCenter (and CFDictionary, which its callbacks name): the Design panel hears when
 # fonts are installed or removed (browser::engine::font_changes).
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFString", "CFCGTypes", "CFDictionary", "CFNotificationCenter"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
-objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBuffer", "CVImageBuffer", "CVPixelBuffer"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "NSValue", "NSObject", "NSData", "NSGeometry", "NSRange", "NSArray"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "NSValue", "NSObject", "NSData", "NSGeometry", "NSRange", "NSArray", "NSProcessInfo"] }
 tokio.workspace = true
 tokio-postgres.workspace = true
 wry = { version = "0.57", default-features = false, features = ["os-webview", "devtools"] }
 # Browser tab screenshots (WKWebView takeSnapshot → PNG) and mesurer's content world (WKContentWorld,
 # a script message handler with reply); same versions as wry's.
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration", "WKContentWorld", "WKUserContentController", "WKScriptMessage", "WKScriptMessageHandlerWithReply", "WKFrameInfo", "WKWebViewConfiguration"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration", "WKPDFConfiguration", "WKContentWorld", "WKUserContentController", "WKScriptMessage", "WKScriptMessageHandlerWithReply", "WKFrameInfo", "WKWebViewConfiguration"] }
 # NSWorkspace: whether VoiceOver or Switch Control is on (workspace::screen_reader_on). mesurer's
 # captures (a snapshot's CGImage encoded off the main thread) and its colour sampler
 # (NSColorSampler, the colour in sRGB): browser::engine::{capture, color}.
@@ -67,6 +69,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 # SAWIT_WEB_FRAMES=1; browser::engine::web_frame).
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGImage", "objc2", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDirectDisplay", "CGDisplayConfiguration"] }
 block2 = "0.6"
+# mmap and munmap for the allocator's large blocks (src/memory.rs); already in the tree.
+libc = "0.2"
 # Canvas screens' folders, watched so a change on disk shows (board::web::watch); the version
 # gpui-component already links.
 notify = "8.2.1"

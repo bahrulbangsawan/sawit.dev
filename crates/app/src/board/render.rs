@@ -113,20 +113,22 @@ impl BoardView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        // Follow agent moves the view before anything is laid out over it (B4.1).
+        self.follow_step(window, cx);
         let this = cx.entity().downgrade();
         let painted = this.clone();
         let cursor = self.cursor();
         // A screen selected alone has its own bar, with Preview, the downloads and Send to Agent;
         // a route frame its own, with Live, Reload and Open in Browser.
         let screen_bar = chrome
-            .then(|| screens::render_screen_bar(self, cx))
+            .then(|| screens::render_screen_bar(self, window, cx))
             .flatten();
         let route_bar = (chrome && screen_bar.is_none())
-            .then(|| routes::render_route_bar(self, cx))
+            .then(|| routes::render_route_bar(self, window, cx))
             .flatten();
         // An artboard selected alone has Export HTML and Export React.
         let frame_bar = (chrome && screen_bar.is_none() && route_bar.is_none())
-            .then(|| screens::render_frame_bar(self, cx))
+            .then(|| screens::render_frame_bar(self, window, cx))
             .flatten();
         let over_selection =
             (chrome && screen_bar.is_none() && route_bar.is_none() && frame_bar.is_none())
@@ -136,11 +138,18 @@ impl BoardView {
         let web_status = self.render_web_status(cx);
         // The design standard's failures each checked frame has, as a badge on it.
         let checks = self.render_check_badges(cx);
+        // Preview asked for by the e2e specs' `web` op, which has no window to build its view.
+        if let Some(frame) = self.screen_ui.open_preview.take() {
+            self.open_preview(frame, window, cx);
+        }
+        if let Some(typed) = self.screen_ui.custom_typed.take() {
+            self.preview_custom_typed(typed, window, cx);
+        }
         let preview = screens::render_preview(self, cx);
         let tools = chrome.then(|| toolbar::render_toolbar(self, window, cx));
         let toast = self.render_toast(chrome, cx);
         let facilitation = chrome
-            .then(|| facilitation::render_facilitation(self, cx))
+            .then(|| facilitation::render_facilitation(self, window, cx))
             .flatten();
         let agents = self.render_agents(cx);
         // Last, so the canvas's own chrome is under it: only what is drawn over the whole canvas

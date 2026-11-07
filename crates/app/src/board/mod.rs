@@ -41,6 +41,8 @@ mod design_panel;
 mod events;
 mod facilitation;
 mod find;
+mod float_bar;
+mod follow;
 mod frames;
 mod keymap;
 mod keys;
@@ -191,6 +193,7 @@ fn let_through() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-k t", NoAction, board),
         KeyBinding::new("cmd-k u", NoAction, board),
         KeyBinding::new("cmd-k w", NoAction, board),
+        KeyBinding::new("cmd-k o", NoAction, board),
         KeyBinding::new("cmd-k shift-enter", NoAction, board),
         KeyBinding::new("cmd-k cmd-s", NoAction, board),
         // Root's Tab (root::Tab, the next focus): FigCraft's select.next.
@@ -200,6 +203,8 @@ fn let_through() -> Vec<KeyBinding> {
         // Root's ⌘C (input::Copy): FigCraft's edit.copy.
         KeyBinding::new("cmd-c", NoAction, board),
         KeyBinding::new("cmd-b", NoAction, text),
+        // B5: ⌘U is the canvas's open and close key, but underline while text is edited.
+        KeyBinding::new("cmd-u", NoAction, text),
         KeyBinding::new("alt-cmd-t", NoAction, text),
         KeyBinding::new("shift-cmd-enter", NoAction, text),
     ]
@@ -354,6 +359,8 @@ pub struct BoardView {
     dev: design_panel::DevMode,
     /// The Design panel shows its Prototype tab, and the canvas the connections.
     proto_tab: bool,
+    /// Fitting the view when an agent starts, and Follow agent ([`follow`], B4.1).
+    follow: follow::Follow,
     /// The prototype player, while it shows ([`player`]).
     player: Option<player::PlayerUi>,
     /// The Comments window, while it is open ([`comments`]), and where the Comment tool asked for

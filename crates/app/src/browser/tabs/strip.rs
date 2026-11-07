@@ -1,6 +1,8 @@
 //! The browser's tab strip: each tab's title (cut short with its whole title in a tooltip) and its
 //! close button, the tab on show marked, tabs dragged to reorder, and New Tab at the end.
 
+use std::sync::Arc;
+
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
@@ -9,6 +11,8 @@ use gpui_kit::*;
 
 use super::{BrowserTabs, CloseTab, NewTab};
 
+/// A favicon's side, the size of the strip's other icons.
+const ICON_SIDE: f32 = 14.;
 /// The strip's height.
 const STRIP_HEIGHT: f32 = 30.;
 /// A tab's width bounds.
@@ -39,10 +43,31 @@ impl Render for DragLabel {
     }
 }
 
+/// The tab's resting icon: the page's favicon, else the globe. While the page loads,
+/// [`crate::activity::tab_icon`] turns the loader in its place. One box size, so the title
+/// doesn't move when it changes.
+fn tab_icon(favicon: Option<Arc<RenderImage>>, muted: Hsla) -> AnyElement {
+    let slot = div()
+        .size(px(ICON_SIDE))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center();
+    match favicon {
+        Some(image) => slot.child(
+            img(image)
+                .size(px(ICON_SIDE))
+                .object_fit(ObjectFit::Contain),
+        ),
+        None => slot.child(Icon::new(Lucide::Globe).xsmall().text_color(muted)),
+    }
+    .into_any_element()
+}
+
 impl BrowserTabs {
     pub(super) fn strip(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (border, muted) = (theme.border, theme.muted_foreground);
+        let (border, muted, danger) = (theme.border, theme.muted_foreground, theme.danger);
         let tabs = self.tabs.iter().enumerate().map(|(ix, tab)| {
             let v = tab.view.read(cx);
             let title: SharedString = match v.title.trim() {
@@ -54,6 +79,8 @@ impl BrowserTabs {
             };
             let active = ix == self.active;
             let loading = v.loading;
+            let favicon = v.favicon();
+            let recording = v.recording_time();
             let tip = title.clone();
             let dragged = DraggedTab {
                 from: ix,
@@ -64,6 +91,7 @@ impl BrowserTabs {
                 .debug_selector(move || format!("browser-tab-{ix}"))
                 .role(Role::Tab)
                 .aria_label(title.clone())
+                .when(loading, |el| el.aria_description("Loading"))
                 .aria_selected(active)
                 .flex_1()
                 .min_w(px(TAB_MIN))
@@ -83,15 +111,32 @@ impl BrowserTabs {
                 .when(!active, |el| {
                     el.bg(cx.theme().tab).text_color(cx.theme().tab_foreground)
                 })
-                .child(
-                    Icon::new(if loading {
-                        Lucide::LoaderCircle
-                    } else {
-                        Lucide::Globe
-                    })
-                    .xsmall()
-                    .text_color(muted),
-                )
+                .child(if recording.is_some() {
+                    // Recording (D6): a red dot in the icon's place, the time after the title.
+                    div()
+                        .size(px(ICON_SIDE))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(div().size(px(8.)).rounded_full().bg(danger))
+                        .into_any_element()
+                } else {
+                    // Busy while the page loads (B2): the loader turns in place of the page's
+                    // icon (B7: its favicon, else the globe).
+                    let activity = sawit_core::activity::browser(loading, false);
+                    div()
+                        .flex_none()
+                        .debug_selector(move || format!("browser-activity-{ix}-{}", activity.id()))
+                        .text_color(muted)
+                        .child(crate::activity::tab_icon(
+                            activity,
+                            tab_icon(favicon, muted),
+                            ("browser-activity", tab.id as usize),
+                            cx,
+                        ))
+                        .into_any_element()
+                })
                 .child(
                     div()
                         .flex_1()
@@ -101,6 +146,7 @@ impl BrowserTabs {
                         .whitespace_nowrap()
                         .child(title.clone()),
                 )
+                .children(recording.map(|time| div().flex_none().text_color(danger).child(time)))
                 .child(
                     Button::new(("browser-tab-close", tab.id as usize))
                         .ghost()

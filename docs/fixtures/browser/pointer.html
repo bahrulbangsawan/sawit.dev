@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- Fixture for agents' clicks and hovers (e2e/specs/pointer.test.js): it logs the pointer events
+     it gets, whether the browser made them (isTrusted), and shows :hover. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Pointer · fixture</title>
+    <style>
+      body { margin: 0; font: 16px system-ui; }
+      button, #hover { display: block; margin: 40px; padding: 16px 24px; font: inherit; }
+      #hover { background: rgb(200, 200, 200); }
+      #hover:hover { background: rgb(0, 128, 0); }
+      #far { margin-top: 1600px; }
+    </style>
+  </head>
+  <body>
+    <button id="once">Click me</button>
+    <button id="twice">Double-click me</button>
+    <div id="hover">Hover me</div>
+    <input id="field" aria-label="Field" />
+    <button id="far">Far down</button>
+    <script>
+      window.__log = [];
+      for (const type of ["mousemove", "mousedown", "mouseup", "click", "dblclick", "contextmenu", "pointerdown"]) {
+        addEventListener(type, (e) => {
+          const t = e.target && e.target.id;
+          if (type === "mousemove" && !t) return;
+          __log.push({ type, target: t || "", trusted: e.isTrusted, detail: e.detail });
+        }, true);
+      }
+    </script>
+  </body>
+</html>

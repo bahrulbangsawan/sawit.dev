@@ -22,6 +22,16 @@ pub struct PromptBackupArgs {
     )]
     #[serde(default)]
     pub overwrite: Vec<String>,
+    #[schemars(
+        description = "true: change nothing, only list what would be sent, brought in or deleted (and, for a backup, the lines that look like secrets). Default false"
+    )]
+    #[serde(default)]
+    pub dry_run: bool,
+    #[schemars(
+        description = "backup_prompts only: send prompts whose text looks like it holds a secret (an API key or token). Without it such a backup sends nothing and lists those lines: ask the user first. Default false"
+    )]
+    #[serde(default)]
+    pub allow_secrets: bool,
 }
 
 fn settings(a: &PromptBackupArgs, root: &std::path::Path) -> BackupSettings {
@@ -33,6 +43,48 @@ fn settings(a: &PromptBackupArgs, root: &std::path::Path) -> BackupSettings {
 }
 
 fn said(verb: &str, done: &SyncOutcome) -> String {
+    if done.held {
+        return format!(
+            "Nothing was backed up: these lines look like secrets and would go to {}:\n{}\nAsk the user; if they agree, call again with allow_secrets=true.",
+            done.repo,
+            done.secrets
+                .iter()
+                .map(|l| format!("- {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    if done.dry_run {
+        let list = |items: &[String]| {
+            if items.is_empty() {
+                "none".to_string()
+            } else {
+                items.join(", ")
+            }
+        };
+        let mut out = format!(
+            "Dry run, nothing changed ({}). Would {verb}: {}. Would delete {}: {}.",
+            done.repo,
+            list(&done.synced),
+            if verb == "back up" {
+                "on GitHub"
+            } else {
+                "here"
+            },
+            list(&done.deleted)
+        );
+        if !done.secrets.is_empty() {
+            out.push_str(&format!(
+                " Lines that look like secrets (a backup asks first): {}.",
+                done.secrets.join("; ")
+            ));
+        }
+        if !done.conflicts.is_empty() {
+            let names: Vec<String> = done.conflicts.iter().map(|c| c.title.clone()).collect();
+            out.push_str(&format!(" Changed on both sides: {}.", names.join(", ")));
+        }
+        return out;
+    }
     let mut out = if done.synced.is_empty() {
         format!("Nothing to {verb}: {} matches.", done.repo)
     } else {
@@ -51,6 +103,17 @@ fn said(verb: &str, done: &SyncOutcome) -> String {
     if done.created_repo {
         out = format!("Created the private repository {}. {out}", done.repo);
     }
+    if !done.deleted.is_empty() {
+        out.push_str(&format!(
+            " Deleted {} (deleted on the other side since the last sync): {}.",
+            if verb == "back up" {
+                "on GitHub"
+            } else {
+                "here"
+            },
+            done.deleted.join(", ")
+        ));
+    }
     if !done.conflicts.is_empty() {
         let list: Vec<String> = done
             .conflicts
@@ -68,7 +131,7 @@ fn said(verb: &str, done: &SyncOutcome) -> String {
 #[tool_router(router = prompt_backup_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "Back up the prompt library to a private GitHub repository of the user's (sawit-prompts by default, created on the first backup), one Markdown file per prompt with its name, tags and {{variables}} in the front matter, with Sawit's GitHub sign-in (only the user can sign in). Sends the prompts changed here since the last sync; prompts changed on GitHub too are listed, not overwritten, unless named in `overwrite`. Works without the app"
+        description = "Back up the prompt library to a private GitHub repository of the user's (sawit-prompts by default, created on the first backup), one Markdown file per prompt with its name, tags and {{variables}} in the front matter, with Sawit's GitHub sign-in (only the user can sign in). Sends the prompts changed here since the last sync and deletes on GitHub the ones deleted here since; prompts changed on GitHub too are listed, not overwritten, unless named in `overwrite`. Prompts whose text looks like a secret hold the backup back (listed) until allow_secrets. dry_run only says what would change. Works without the app"
     )]
     async fn backup_prompts(&self, Parameters(a): Parameters<PromptBackupArgs>) -> CallToolResult {
         let token = tri!(tri!(blocking(token).await));
@@ -77,15 +140,25 @@ impl Sawit {
         let s = settings(&a, &root);
         let state = root.join(prompt_sync::SYNC_STATE);
         let done = tri!(
-            prompt_sync::back_up(&token, &lib, &s, &state, &a.overwrite)
-                .await
-                .map_err(|e| e.to_string())
+            prompt_sync::back_up(
+                &token,
+                &lib,
+                &s,
+                &state,
+                &a.overwrite,
+                prompt_sync::Options {
+                    allow_secrets: a.allow_secrets,
+                    dry_run: a.dry_run,
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())
         );
         ok(said("back up", &done))
     }
 
     #[tool(
-        description = "Restore prompts from the user's private GitHub prompt repository (see backup_prompts): prompts changed on GitHub or only there replace or join the ones here, keeping their use counts; prompts changed here since the last sync stay; prompts changed on both sides are listed, not overwritten, unless named in `overwrite` (GitHub's version wins). Sawit's open prompt tabs reload. Works without the app"
+        description = "Restore prompts from the user's private GitHub prompt repository (see backup_prompts): prompts changed on GitHub or only there replace or join the ones here, keeping their use counts; prompts deleted on GitHub since the last sync are deleted here; prompts changed here since the last sync stay; prompts changed on both sides are listed, not overwritten, unless named in `overwrite` (GitHub's version wins). Sawit's open prompt tabs reload. Works without the app"
     )]
     async fn restore_prompts(&self, Parameters(a): Parameters<PromptBackupArgs>) -> CallToolResult {
         let token = tri!(tri!(blocking(token).await));
@@ -94,11 +167,11 @@ impl Sawit {
         let s = settings(&a, &root);
         let state = root.join(prompt_sync::SYNC_STATE);
         let done = tri!(
-            prompt_sync::restore(&token, &mut lib, &s, &state, &a.overwrite)
+            prompt_sync::restore(&token, &mut lib, &s, &state, &a.overwrite, a.dry_run)
                 .await
                 .map_err(|e| e.to_string())
         );
-        if done.synced.is_empty() {
+        if done.dry_run || (done.synced.is_empty() && done.deleted.is_empty()) {
             return ok(said("restore", &done));
         }
         if let Err(e) = self.save_library(&lib).await {

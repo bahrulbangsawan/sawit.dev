@@ -109,10 +109,15 @@ fn tilde(path: &Path) -> String {
 
 /// The shell line that creates `stack` in `location`: there, then [`stack_builder::run_command`].
 pub fn shell_line(location: &Path, stack: &Stack) -> String {
+    shell_line_at(location, stack, stack_builder::CLI_VERSION)
+}
+
+/// [`shell_line`] with the CLI's `version` ([`stack_builder::run_command_at`]).
+pub fn shell_line_at(location: &Path, stack: &Stack, version: &str) -> String {
     format!(
         "cd {} && {}",
         crate::package_manager::quote(&location.to_string_lossy()),
-        stack_builder::run_command(stack)
+        stack_builder::run_command_at(stack, version)
     )
 }
 
@@ -122,10 +127,11 @@ pub fn shell_line(location: &Path, stack: &Stack) -> String {
 pub async fn create(
     location: &Path,
     stack: &Stack,
+    version: &str,
     on_line: impl Fn(String) + Send + Sync,
 ) -> std::result::Result<PathBuf, String> {
     let dir = target(location, stack)?;
-    let line = shell_line(location, stack);
+    let line = shell_line_at(location, stack, version);
     let ran = crate::dev_tools::run_shell("new-project", "create-better-t-stack", &line, on_line)
         .await
         .map_err(|e| e.to_string());

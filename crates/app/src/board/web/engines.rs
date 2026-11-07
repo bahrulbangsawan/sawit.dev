@@ -12,6 +12,7 @@ use gpui_kit::*;
 use serde_json::{Value, json};
 
 use super::bench::Painted;
+use super::drawn::{RETAKE_AFTER, RETAKES, Rows};
 use super::pool::frame_of;
 use super::{BoardView, Phase, Settle, Texture, WebFrame, WebMsg, ms, web_frame, web_nodes};
 use crate::browser::engine::EngineEvent;
@@ -43,6 +44,10 @@ impl WebFrame {
             measured: false,
             relayout: false,
             fitted_to: None,
+            retakes: 0,
+            timed_out: false,
+            drawn: None,
+            retake_due: false,
         }
     }
 }
@@ -200,7 +205,7 @@ impl BoardView {
         let Some(web) = self.web.as_mut() else {
             return;
         };
-        let scale = web.snapshot_scale();
+        let scale = (web.frames.get(&id)).map_or(1.0, |f| web.snapshot_scale(f.spec.viewport));
         let live_width = [web.live.as_ref(), web.leaving.as_ref()]
             .into_iter()
             .flatten()
@@ -222,7 +227,7 @@ impl BoardView {
         let asked = Instant::now();
         engine.snapshot_cg(width, reply);
         cx.spawn(async move |this, cx| {
-            let (image, entry) = match answer.await {
+            let (picture, entry) = match answer.await {
                 Ok(Ok(snap)) => {
                     let ((w, h), space_name) = (snap.size(), snap.color_space());
                     let (took, unwrap) = (ms(snap.took), ms(snap.unwrap));
@@ -230,17 +235,18 @@ impl BoardView {
                         .background_spawn(async move {
                             let started = Instant::now();
                             let (w, h, bgra) = web_frame::to_bgra(&snap, space.as_deref()?)?;
+                            let rows = Rows::of(&bgra, w as usize, h as usize);
                             let pixels = image::RgbaImage::from_raw(w, h, bgra)?;
                             let image = RenderImage::new([image::Frame::new(pixels)]);
-                            Some((Arc::new(image), ms(started.elapsed())))
+                            Some((Arc::new(image), rows, ms(started.elapsed())))
                         })
                         .await;
-                    let convert = converted.as_ref().map(|(_, took)| *took);
+                    let convert = converted.as_ref().map(|(_, _, took)| *took);
                     let entry = json!({"event": "snapshot", "why": why, "id": id.0, "px": [w, h],
                         "points": width, "snapshot_ms": took, "cgimage_ms": unwrap,
                         "bgra_ms": convert, "total_ms": ms(asked.elapsed()),
                         "color_space": space_name});
-                    (converted.map(|(image, _)| image), entry)
+                    (converted.map(|(image, rows, _)| (image, rows)), entry)
                 }
                 Ok(Err(error)) => (
                     None,
@@ -252,7 +258,7 @@ impl BoardView {
                 ),
             };
             let _ = this.update(cx, |this, cx| {
-                this.web_texture(id, image, (points, css), entry, cx)
+                this.web_texture(id, picture, (points, css), entry, cx)
             });
         })
         .detach();
@@ -264,7 +270,7 @@ impl BoardView {
     fn web_texture(
         &mut self,
         id: figcraft_doc::NodeId,
-        image: Option<Arc<RenderImage>>,
+        picture: Option<(Arc<RenderImage>, Rows)>,
         (points, css): (f64, super::Viewport),
         entry: Value,
         cx: &mut Context<Self>,
@@ -273,6 +279,35 @@ impl BoardView {
             return;
         };
         web.note(entry);
+        // A half-drawn picture (its page caught drawing itself in) is taken again a moment later,
+        // a few times: the frame keeps the picture it had, or none (its skeleton and "Loading…").
+        // A live view's pictures, and one leaving live mode, are the user's page as it is.
+        let busy = [web.live.as_ref(), web.leaving.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|live| live.id == id);
+        let retake = web.frames.get_mut(&id).filter(|_| !busy).and_then(|frame| {
+            let rows = &picture.as_ref()?.1;
+            if frame.repeat > 0 {
+                return None;
+            }
+            let report = rows.report(frame.probe.as_ref());
+            let half = report["whole"] == json!(false);
+            frame.drawn = Some(report);
+            (half && frame.retakes < RETAKES).then(|| {
+                frame.retakes += 1;
+                RETAKE_AFTER * frame.retakes
+            })
+        });
+        if let Some(after) = retake {
+            web.note(json!({"event": "half_drawn", "id": id.0, "retake_in_ms": after.as_millis()}));
+            self.web_retake(id, after, cx);
+            return;
+        }
+        let image = picture.map(|(image, _)| image);
+        let Some(web) = self.web.as_mut() else {
+            return;
+        };
         let leaving = web.leaving.as_ref().is_some_and(|live| live.id == id);
         let live = web.live.as_ref().is_some_and(|live| live.id == id);
         let parking = web

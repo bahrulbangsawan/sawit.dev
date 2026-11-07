@@ -176,6 +176,13 @@ pub(super) fn render_toolbar(
     if shown.board {
         row = row.child(divider(line)).child(picker_button(picker, &this));
     }
+    // While an agent works on the canvas: Follow agent, which keeps the view on its changes
+    // (B4.1). A pan or zoom by hand turns it off, and the button shows that.
+    if view.follow.agent_active(std::time::Instant::now()) {
+        row = row
+            .child(divider(line))
+            .child(follow_button(view.follow.on, &this));
+    }
     // The part of the row the toolbar has room for. A swipe scrolls it sideways, and so does the
     // wheel: GPUI turns a vertical scroll into a sideways one in a box that only scrolls
     // sideways. The row is cut inside the toolbar's border, never over it. The toolbar's 6 px of
@@ -237,6 +244,29 @@ fn tool_button(
         .debug_selector(|| command.to_owned())
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |view, cx| view.choose(command, json!({}), cx));
+        })
+}
+
+/// Follow agent: on while the view follows what agents change.
+fn follow_button(on: bool, view: &WeakEntity<BoardView>) -> Button {
+    let view = view.clone();
+    let tip = match on {
+        true => "Following the agent: the view moves to what it changes. Pan or click to stop",
+        false => "Follow agent: move the view to what agents change",
+    };
+    Button::new("board-follow-agent")
+        .ghost()
+        .icon(match on {
+            true => Lucide::LocateFixed,
+            false => Lucide::Locate,
+        })
+        .selected(on)
+        .toggled(on)
+        .accessibility_label("Follow agent")
+        .tooltip(tip)
+        .debug_selector(|| "board-follow-agent".to_owned())
+        .on_click(move |_, _, cx| {
+            let _ = view.update(cx, |view, cx| view.toggle_follow(cx));
         })
 }
 

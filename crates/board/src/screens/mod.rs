@@ -19,6 +19,7 @@ pub mod css;
 pub mod export;
 pub mod files;
 pub mod inline;
+pub mod layers;
 pub mod react;
 pub mod serve;
 #[cfg(test)]

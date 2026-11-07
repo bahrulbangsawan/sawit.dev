@@ -12,11 +12,13 @@
 
 mod agents;
 mod annotate;
+mod capture;
 mod cover;
 mod design;
 mod device;
 pub(crate) mod engine;
 mod events;
+mod favicon;
 mod mesurer;
 mod modes;
 mod navigation;
@@ -24,8 +26,11 @@ mod notes;
 mod ops;
 mod panel;
 mod picking;
+mod pointer;
 mod presence;
 mod progress;
+mod render;
+mod seo;
 mod servers;
 mod shots;
 mod suspend;
@@ -44,8 +49,6 @@ use futures::channel::mpsc::{UnboundedSender, unbounded};
 use futures::channel::oneshot;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::browser::{BrowserOp, Logs, PageEvent, ViewportMode};
 use sawit_core::probe;
@@ -60,12 +63,11 @@ use engine::{Engine, EngineEvent};
 pub use modes::{Panel, PickMode};
 use navigation::ExternalGate;
 pub use navigation::address_url;
+use seo::{SeoEvent, SeoPanel};
 use shots::ShotGate;
 pub use tabs::{BrowserTabs, TabsEvent};
-use viewport::{CAPTION_BAND, caption};
 
 use crate::rt;
-use crate::states::Placeholder;
 use crate::terminal::RunningAgent;
 
 /// The tab's icon and title.
@@ -117,6 +119,8 @@ type OpResult = Result<Value, String>;
 enum FromPage {
     Event(PageEvent),
     Engine(EngineEvent),
+    /// The page's icon `<link>` tags, as JSON ([`favicon`]).
+    IconLinks(String),
     /// An element's box is known: capture it (or the whole view).
     Shoot {
         rect: Option<(f64, f64, f64, f64)>,
@@ -154,12 +158,16 @@ pub struct BrowserView {
     /// in its place meanwhile ([`cover`]).
     cover: crate::native_cover::Cover,
     frozen: cover::Frozen,
+    /// Until when a trusted press the page reports is an agent's real click ([`pointer`]).
+    agent_pointer_until: Option<std::time::Instant>,
     address: Entity<InputState>,
     url: String,
     /// WebKit's address as the toolbar was last drawn with it (the Explorer button and Open in
     /// Default Browser follow it); none before the first frame.
     drawn_url: Option<String>,
     title: String,
+    /// The page's favicon on its tab ([`favicon`]).
+    icon: favicon::TabIcon,
     loading: bool,
     /// How far the page in [`Self::loading`] has come, while it loads ([`progress`]).
     progress: progress::LoadProgress,
@@ -181,6 +189,15 @@ pub struct BrowserView {
     panel: Option<Panel>,
     annotate: Entity<AnnotatePanel>,
     design_panel: Entity<DesignPanel>,
+    /// The SEO panel ([`seo`]), the scan it last asked for, and a count that tells a scan's
+    /// answer from an older one's.
+    seo_panel: Entity<SeoPanel>,
+    seo_ask: seo::flow::SeoAsk,
+    seo_generation: u64,
+    /// The recording under way, and how the last one ended ([`capture::record`]).
+    recorder: capture::record::Recorder,
+    /// The capture menu's settings and the capture bar ([`capture::ui`]).
+    capture_ui: capture::ui::CaptureUi,
     /// Shots take turns: the overlay has one hidden flag.
     shots: ShotGate,
     pick: PickMode,
@@ -219,6 +236,7 @@ impl BrowserView {
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter address"));
         let annotate = cx.new(|cx| AnnotatePanel::new(window, cx));
         let design_panel = cx.new(|_| DesignPanel::new());
+        let seo_panel = cx.new(|_| SeoPanel::new());
         cx.default_global::<crate::local_explorer::Running>();
         let mut subscriptions = vec![
             // The Explorer button comes and goes with the page's dev server's Local Explorer.
@@ -232,6 +250,22 @@ impl BrowserView {
                 &design_panel,
                 window,
                 |this, _, event: &DesignEvent, _, cx| this.on_design(event, cx),
+            ),
+            cx.subscribe_in(
+                &seo_panel,
+                window,
+                |this, _, event: &SeoEvent, _, cx| match event {
+                    SeoEvent::Rescan => this.seo_rescan(cx),
+                    SeoEvent::ScanType(t) => {
+                        this.seo_ask.scan_type = *t;
+                        this.seo_rescan(cx);
+                    }
+                    SeoEvent::External(on) => {
+                        this.seo_ask.external = *on;
+                        this.seo_panel.update(cx, |p, cx| p.set_external(*on, cx));
+                        this.seo_rescan(cx);
+                    }
+                },
             ),
             cx.subscribe_in(
                 &address,
@@ -304,10 +338,12 @@ impl BrowserView {
             menu_open: false,
             cover: Default::default(),
             frozen: Default::default(),
+            agent_pointer_until: None,
             address,
             url: url.unwrap_or_else(|| "about:blank".into()),
             drawn_url: None,
             title: String::new(),
+            icon: Default::default(),
             loading: false,
             progress: Default::default(),
             servers: None,
@@ -320,6 +356,11 @@ impl BrowserView {
             panel: None,
             annotate,
             design_panel,
+            seo_panel,
+            seo_ask: Default::default(),
+            seo_generation: 0,
+            recorder: Default::default(),
+            capture_ui: Default::default(),
             shots: ShotGate::default(),
             pick: PickMode::Off,
             pick_waiting: false,
@@ -341,6 +382,8 @@ impl BrowserView {
         json!({
             "url": self.current_url(),
             "title": self.title,
+            // Whether the tab shows the page's favicon ([`favicon`]).
+            "favicon": self.icon.image.is_some(),
             "loading": self.loading,
             "progress": self.loading.then_some(self.progress.value),
             "viewport": self.viewport_json(),
@@ -348,6 +391,7 @@ impl BrowserView {
             "pick_mode": self.pick.as_str(),
             "last_pick": self.last_pick,
             "mesurer": self.mesurer_describe(),
+            "recording": self.record_status(),
             // Whether a menu, popover, dialog or notification covers the page, and whether the
             // webview is up (it steps back while something covers it).
             "covered": self.cover.covered,
@@ -398,81 +442,5 @@ impl Drop for BrowserView {
 impl Focusable for BrowserView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
-    }
-}
-
-impl Render for BrowserView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(error) = &self.error {
-            return Placeholder::error("The browser couldn't start")
-                .detail(error.clone())
-                .into_any_element();
-        }
-        let url = self.current_url();
-        self.drawn_url = Some(url.clone());
-        let this = cx.entity().downgrade();
-        let device = match &self.viewport {
-            ViewportMode::Fixed {
-                name,
-                width,
-                height,
-            } => Some(caption(name.as_deref(), *width, *height, self.scale())),
-            ViewportMode::Responsive => None,
-        };
-        let frozen = self.frozen_paint();
-        let page = div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .relative()
-            // The page hidden under the device menu leaves the same backdrop as a device's.
-            .when(
-                device.is_some() || self.menu_open || self.frozen.hidden,
-                |d| d.bg(cx.theme().muted),
-            )
-            .children(device.map(|text| {
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(CAPTION_BAND))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(text)
-            }))
-            .child(
-                canvas(
-                    move |bounds, window, cx| {
-                        let _ = this.update(cx, |this, cx| this.place(bounds, window, cx));
-                    },
-                    move |bounds, _, window, _| frozen.paint(bounds, window),
-                )
-                .size_full(),
-            )
-            .child(Self::cover_watch(cx));
-        let side = self.panel.map(|panel| self.side_panel(panel, cx));
-        v_flex()
-            .key_context(self.mesurer_key_context(window))
-            .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| {
-                this.annotate_key(cx);
-            }))
-            .map(|el| Self::with_mesurer_keys(el, cx))
-            .size_full()
-            .child(self.toolbar(&url, window, cx))
-            .map(|el| self.with_find(el, cx))
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .items_start()
-                    .child(page)
-                    .children(side),
-            )
-            .into_any_element()
     }
 }

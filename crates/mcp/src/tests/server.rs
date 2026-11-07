@@ -80,6 +80,9 @@ fn every_tool_is_routed() {
         "git_unstage",
         "git_commit",
         "git_switch",
+        "git_fetch",
+        "git_pull",
+        "git_push",
         // prompts
         "list_prompts",
         "get_prompt",
@@ -111,6 +114,7 @@ fn every_tool_is_routed() {
         "use_agent_account",
         "open_agent_account",
         "agent_account_sessions",
+        "account_pool",
         "sync_agent_settings",
         "backup_prompts",
         "restore_prompts",
@@ -169,10 +173,13 @@ fn every_tool_is_routed() {
         "canvas_progress",
         "canvas_screen_write",
         "canvas_screen_get",
+        "canvas_screen_to_layers",
         "canvas_screen_export",
         "canvas_handoff",
         "canvas_tabs",
         "canvas_settings",
+        "canvas_lint",
+        "canvas_starter_system",
         // browser
         "browser_navigate",
         "browser_snapshot",
@@ -188,16 +195,24 @@ fn every_tool_is_routed() {
         "browser_network",
         "browser_evaluate",
         "browser_resize",
+        "browser_record_start",
+        "browser_record_stop",
+        "browser_record_status",
+        "browser_record",
         "browser_annotations",
         "browser_mesurer",
         "browser_inspect",
         "browser_design",
+        "browser_seo",
         "browser_export_design",
         "browser_tabs",
         // keymap
         "keymap_list",
         "keymap_bind",
         "keymap_unbind",
+        // code mode
+        "search_api",
+        "run",
     ];
     expected.sort();
     assert_eq!(names, expected);

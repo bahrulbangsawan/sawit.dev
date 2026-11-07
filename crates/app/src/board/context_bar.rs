@@ -31,8 +31,8 @@ use super::BoardView;
 use super::option_icons::{self, OptionIcon};
 use super::toolbar::{self, SWATCH, divider, swatch};
 
-/// The bar's height.
-pub(super) const HEIGHT: f64 = 40.;
+/// The bar's height: the canvas's floating bars' ([`super::float_bar::HEIGHT`]).
+pub(super) const HEIGHT: f64 = super::float_bar::HEIGHT;
 /// The room between the bar's edge and its controls. Half of it is the bar's padding and half the
 /// padding of the strip its controls scroll in ([`render_context_bar`]).
 const PADDING: f64 = 6.;
@@ -199,7 +199,7 @@ pub(super) fn render_context_bar(
             .w(px(width as f32))
             .h(px(height as f32))
             .px(inset)
-            .rounded(px(10.))
+            .rounded(px(super::float_bar::RADIUS))
             .border_1()
             .border_color(theme.border)
             .bg(theme.popover)

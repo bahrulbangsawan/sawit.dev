@@ -72,6 +72,8 @@ impl BoardView {
             return;
         };
         self.close_menus(cx);
+        let screens = self.present_screen_ids();
+        self.web_present(&screens, Some(RENDER_SCALE), cx);
         self.player = Some(PlayerUi {
             player,
             pictures: Vec::new(),
@@ -85,6 +87,7 @@ impl BoardView {
 
     pub(super) fn close_player(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.player.take().is_some() {
+            self.web_present(&[], None, cx);
             window.focus(&self.focus, cx);
             cx.notify();
         }
@@ -138,6 +141,45 @@ impl BoardView {
     }
 }
 
+impl BoardView {
+    /// The screen frames on the page on show: Present may show any of them.
+    fn present_screen_ids(&self) -> Vec<NodeId> {
+        let Some(ds) = self.board().and_then(|b| b.session.ds().ok()) else {
+            return Vec::new();
+        };
+        super::web::web_nodes(&ds.doc, ds.page)
+            .iter()
+            .map(|n| n.id)
+            .collect()
+    }
+
+    /// The web frames inside frame `frame` (or `frame` itself) that have a picture: each picture,
+    /// its frame's box on the page, and the CSS size it was taken at.
+    fn present_webs(&self, frame: NodeId, _: &App) -> Vec<Pictured> {
+        let Some(ds) = self.board().and_then(|b| b.session.ds().ok()) else {
+            return Vec::new();
+        };
+        let Some(outer) = ds.doc.world_bounds(frame) else {
+            return Vec::new();
+        };
+        let inside =
+            |r: &[f64; 4]| r[0] < outer.x1 && outer.x0 < r[2] && r[1] < outer.y1 && outer.y0 < r[3];
+        let within = |id: NodeId| id == frame || ds.doc.ancestors(id).contains(&frame);
+        super::web::web_nodes(&ds.doc, ds.page)
+            .into_iter()
+            .filter(|node| within(node.id) && inside(&node.rect))
+            .filter_map(|node| {
+                let (image, css) = self.web_texture_of(node.id)?;
+                Some((image, node.rect, (css.w, css.h)))
+            })
+            .collect()
+    }
+}
+
+/// A screen's picture in Present: the image, its frame's box on the page, and the CSS size it was
+/// taken at.
+type Pictured = (Arc<RenderImage>, [f64; 4], (f64, f64));
+
 /// The player, while it shows, over the whole canvas tab.
 pub(super) fn render_player(
     view: &mut BoardView,
@@ -163,6 +205,10 @@ pub(super) fn render_player(
         .unwrap_or_default();
     let pictures = ui.pictures.clone();
     let can_back = !ui.player.history.is_empty() || ui.player.overlay.is_some();
+    let shown_frame = ui.player.frame;
+    // The screens in the frame on show (or the frame itself, a screen): the document has only
+    // their empty frames, so each is drawn from its page's picture, as on the canvas (B15).
+    let webs = view.present_webs(shown_frame, cx);
     let entity = cx.entity().downgrade();
     let stage = canvas(
         |_, _, _| {},
@@ -183,6 +229,22 @@ pub(super) fn render_player(
             );
             let at = Bounds::new(origin, size);
             let _ = window.paint_image(at, at, Corners::default(), frame.clone(), 0, false);
+            for (image, b, css_h) in &webs {
+                let x = origin.x + px(((b[0] - page[0]) as f32) * scale);
+                let y = origin.y + px(((b[1] - page[1]) as f32) * scale);
+                let shown = Bounds::new(point(x, y), size_of(b, scale));
+                // The picture keeps its own proportions from the frame's top, as on the canvas.
+                let w = f32::from(shown.size.width);
+                let (cw, ch) = *css_h;
+                let h = match cw > 0.0 {
+                    true => w * (ch / cw) as f32,
+                    false => f32::from(shown.size.height),
+                };
+                let image_at = Bounds::new(shown.origin, gpui_kit::size(px(w), px(h)));
+                let clip = shown.intersect(&at);
+                let _ =
+                    window.paint_image(clip, image_at, Corners::default(), image.clone(), 0, false);
+            }
             for (image, b) in pictures.iter().skip(1) {
                 let x = origin.x + px(((b[0] - page[0]) as f32) * scale);
                 let y = origin.y + px(((b[1] - page[1]) as f32) * scale);
@@ -229,7 +291,9 @@ pub(super) fn render_player(
                         Button::new("player-back")
                             .ghost()
                             .small()
+                            .icon(gpui_kit::assets::IconName::ArrowLeft)
                             .label("Back")
+                            .tooltip("Back (←)")
                             .disabled(!can_back)
                             .on_click(
                                 cx.listener(|view, _, window, cx| view.player_back(window, cx)),
@@ -239,7 +303,9 @@ pub(super) fn render_player(
                         Button::new("player-close")
                             .ghost()
                             .small()
+                            .icon(gpui_kit::assets::IconName::X)
                             .label("Close")
+                            .tooltip("Close (Escape)")
                             .on_click(
                                 cx.listener(|view, _, window, cx| view.close_player(window, cx)),
                             ),

@@ -15,7 +15,7 @@ mod timeline;
 mod token;
 
 pub use account::{Account, Repo, account, avatar, parse_account, parse_repos, repos};
-pub use backup::{Committed, OwnRepo, commit_files, create_private_repo, own_repo};
+pub use backup::{Committed, OwnRepo, commit_changes, commit_files, create_private_repo, own_repo};
 pub use http::{REVOKED, is_revoked};
 pub use issues::{
     Comment, Item, PullState, add_comment, comments, create_issue, create_pull, default_branch,

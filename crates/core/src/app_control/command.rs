@@ -142,6 +142,10 @@ pub enum Command {
         cwd: Option<PathBuf>,
         #[serde(default)]
         new_tab: bool,
+        /// A tab opened for the command closes itself once the command is done; its output
+        /// stays readable by the run's number (`TerminalRead`'s `run`).
+        #[serde(default)]
+        close_when_done: bool,
     },
     /// The text of a terminal pane, in the tab with this index (from
     /// `state`, default the active one): its scrollback tail and screen, up
@@ -155,6 +159,10 @@ pub enum Command {
         pane: Option<usize>,
         #[serde(default)]
         lines: Option<usize>,
+        /// A `TerminalRun`'s number (its answer's `run`): that run's terminal wherever it is
+        /// now, or its output once it closed. Takes the place of `tab` and `pane`.
+        #[serde(default)]
+        run: Option<u64>,
     },
     /// Sends raw input to a terminal: text as typed, or a key named in
     /// [`KEY_NAMES`](super::KEY_NAMES) (`ctrl-c`, `enter`, `up`). `sawit-mcp` always names the
@@ -353,6 +361,10 @@ pub enum Command {
         /// An op without it, from an older `sawit-mcp`, opens the project as before.
         #[serde(default = "opens")]
         open: bool,
+        /// The `create-better-t-stack` version to run (`x.y.z`), for this create only; without
+        /// it, the one the page uses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cli_version: Option<String>,
     },
 }
 

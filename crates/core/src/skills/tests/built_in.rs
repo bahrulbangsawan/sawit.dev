@@ -333,7 +333,7 @@ fn a_pack_of_several_built_in_skills() {
     use bundled::Held;
     let pack = get(SAWIT_PACK).unwrap();
     let n = pack.skills.len();
-    assert_eq!((pack.methods, n), (&[Method::Bundled][..], 5));
+    assert_eq!((pack.methods, n), (&[Method::Bundled][..], 10));
     assert_eq!(pack.bundled(), Some(pack.skills));
     let from =
         |skill: &str| format!("\"$HOME/Library/Application Support/sawit/bundled-skills/{skill}\"");

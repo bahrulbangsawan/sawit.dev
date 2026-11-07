@@ -14,12 +14,12 @@ use syntect::util::LinesWithEndings;
 
 use super::grammars::Highlights;
 use super::{
-    CHECKPOINT_LINES, LOCAL_MAX_BYTES, PARSE_DEBOUNCE, SYNC_MAX_BYTES, SYNTAXES, resolve_styles,
-    shift, splice,
+    CHECKPOINT_LINES, LOCAL_MAX_BYTES, PARSE_DEBOUNCE, SYNC_MAX_BYTES, resolve_styles, shift,
+    splice, syntaxes,
 };
 
 pub(super) fn find_syntax(language: &str) -> Option<&'static SyntaxReference> {
-    let syntaxes = &*SYNTAXES;
+    let syntaxes = syntaxes();
     let lower = language.to_lowercase();
     let alias = match lower.as_str() {
         "" | "text" | "plain" | "plaintext" => return None,
@@ -62,7 +62,7 @@ pub(super) struct Parsed {
 /// Parses `text` from `from` (a line start) up to the end of the line that
 /// contains `until`, saving a checkpoint every `CHECKPOINT_LINES` lines.
 pub(super) fn parse_lines(text: &str, from: Checkpoint, until: usize) -> Parsed {
-    let syntaxes = &*SYNTAXES;
+    let syntaxes = syntaxes();
     let Checkpoint {
         byte: start,
         mut parser,

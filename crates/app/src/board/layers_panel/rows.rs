@@ -14,9 +14,9 @@ use sawit_board::layers::{DropPos, LayerIcon, LayerRow, PageRow};
 use super::drag::{DragLabel, DraggedRow};
 use super::rename::rename_field;
 use super::{
-    ADD_PAGE_ICON, ARROW, CLOSED_ICON, DROP_MARK, HEADER, HIDDEN_ICON, INDENT, LOCKED_ICON,
-    NO_LAYERS, NO_MATCHES, OPEN_ICON, PAGES_SHOWN, PAGES_TITLE, PageAction, ROW, ROW_PAD, Renamed,
-    SHOWN_ICON, UNLOCKED_ICON, layer_icon,
+    ADD_PAGE_ICON, ARROW, CLOSED_ICON, CURRENT_PAGE_ICON, DROP_MARK, HEADER, HIDDEN_ICON, INDENT,
+    LOCKED_ICON, NO_LAYERS, NO_MATCHES, OPEN_ICON, PAGE_ICON, PAGES_SHOWN, PAGES_TITLE, PageAction,
+    ROW, ROW_PAD, Renamed, SHOWN_ICON, UNLOCKED_ICON, WIDTH, layer_icon,
 };
 use crate::board::{BoardView, option_icons};
 
@@ -140,8 +140,11 @@ impl BoardView {
             Some(input) => rename_field(&input, cx),
             None => {
                 // Frames and sections on the page stand out, as in FigCraft.
-                let top =
-                    row.depth == 0 && matches!(row.icon, LayerIcon::Frame | LayerIcon::Section);
+                let top = row.depth == 0
+                    && matches!(
+                        row.icon,
+                        LayerIcon::Frame | LayerIcon::Section | LayerIcon::Screen
+                    );
                 div()
                     .flex_1()
                     .min_w_0()
@@ -213,9 +216,11 @@ impl BoardView {
             .id(("layers-row", id.0))
             .debug_selector(move || format!("layers-row-{}", id.0))
             .relative()
-            .w_full()
+            .w(px(WIDTH - 8.0))
             .h(px(ROW))
-            .pl(px(left))
+            .mx_1()
+            .rounded(px(6.))
+            .pl(px(left - 4.0))
             .pr_1()
             .gap_1()
             .when(row.selected, |row| row.bg(selected_bg))
@@ -225,6 +230,27 @@ impl BoardView {
             .child(arrow)
             .child(Icon::new(layer_icon(row.icon)).xsmall().text_color(muted))
             .child(name)
+            // A screen's layers are its page's HTML: the row says so (B15).
+            .when(row.icon == LayerIcon::Screen, |el| {
+                el.child(
+                    div()
+                        .id(("layer-html", id.0))
+                        .flex_none()
+                        .px_1()
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .text_xs()
+                        .text_color(muted)
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(
+                                "HTML screen: its content is a web page. Select it and choose Convert to Layers to edit it here",
+                            )
+                            .build(window, cx)
+                        })
+                        .child("HTML"),
+                )
+            })
             .child(toggles)
             .children(landing)
             .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
@@ -320,6 +346,7 @@ impl BoardView {
         let (id, divider) = (page.id, page.divider);
         let theme = cx.theme();
         let (selected_bg, hover_bg, border) = (theme.list_active, theme.list_hover, theme.border);
+        let muted = theme.muted_foreground;
         let field = (self.layers.field.as_ref())
             .filter(|field| field.target == Renamed::Page(id))
             .map(|field| field.input.clone());
@@ -338,11 +365,21 @@ impl BoardView {
             .id(("layers-page", id.0))
             .debug_selector(move || format!("layers-page-{}", id.0))
             .flex_shrink_0()
-            .w_full()
+            .w(px(WIDTH - 16.0))
             .h(px(ROW))
-            .px_3()
+            .mx_2()
+            .px_2()
             .gap_2()
+            .rounded(px(6.))
             .when(page.current, |row| row.bg(selected_bg).font_medium())
+            .when(!divider, |row| {
+                let icon = if page.current {
+                    CURRENT_PAGE_ICON
+                } else {
+                    PAGE_ICON
+                };
+                row.child(Icon::new(icon).xsmall().text_color(muted))
+            })
             .when(!page.current && !divider, |row| {
                 row.hover(move |row| row.bg(hover_bg))
             })

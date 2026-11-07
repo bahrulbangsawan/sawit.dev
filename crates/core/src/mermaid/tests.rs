@@ -125,7 +125,8 @@ fn renders_and_reports_errors() {
 #[test]
 fn the_bundle_is_the_pele_version_named() {
     let banner = format!("/*! Pele {PELE_VERSION} | MIT License");
-    assert!(PELE_JS.starts_with(&banner), "{}", &PELE_JS[..80]);
+    let pele = pele_js();
+    assert!(pele.starts_with(&banner), "{}", &pele[..80]);
     let licence = include_str!("../../assets/pele/LICENSE");
     assert!(licence.starts_with("MIT License\n\nCopyright (c) 2026 kepano"));
 }
@@ -203,4 +204,15 @@ fn edges_take() {
                 .map_or_else(|e| e.clone(), |r| r.svg.len().to_string())
         );
     }
+}
+
+/// The engine gives Pele up when idle, and the next diagram loads it again and draws the same.
+#[test]
+fn a_diagram_after_the_engine_went_idle_draws_the_same() {
+    let source = "flowchart LR\n  A[Idle] --> B[Again]";
+    let first = render(source, &Palette::default()).unwrap();
+    // Past the test build's idle time (1 s): the worker has dropped the engine.
+    std::thread::sleep(std::time::Duration::from_millis(1_600));
+    let again = render(source, &Palette::default()).unwrap();
+    assert_eq!(first.svg, again.svg);
 }

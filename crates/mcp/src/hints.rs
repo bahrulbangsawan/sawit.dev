@@ -7,6 +7,7 @@
 const READ_ONLY: &[&str] = &[
     "list_agent_accounts",
     "agent_account_sessions",
+    "account_pool",
     "list_instances",
     "instance_logs",
     "check_port",
@@ -57,15 +58,19 @@ const READ_ONLY: &[&str] = &[
     "canvas_design_guide",
     "canvas_get",
     "canvas_commands",
+    "canvas_lint",
     "canvas_screen_get",
     "browser_snapshot",
     "browser_hover",
     "browser_scroll",
     "browser_wait_for",
+    "browser_record_status",
     "browser_resize",
     "browser_inspect",
     "browser_design",
+    "browser_seo",
     "keymap_list",
+    "search_api",
 ];
 
 /// The tools that can delete or replace what was there before the call (a database, rows, a file
@@ -110,6 +115,8 @@ const DESTRUCTIVE: &[&str] = &[
     "git_unstage",
     "git_commit",
     "git_switch",
+    // A fast-forward replaces the working tree's files with the remote's.
+    "git_pull",
     "update_prompt",
     "delete_prompt",
     "install_dev_tools",
@@ -149,6 +156,9 @@ const DESTRUCTIVE: &[&str] = &[
     "browser_press_key",
     "browser_select_option",
     "browser_screenshot",
+    "browser_record_start",
+    "browser_record_stop",
+    "browser_record",
     "browser_console",
     "browser_network",
     "browser_evaluate",
@@ -159,6 +169,8 @@ const DESTRUCTIVE: &[&str] = &[
     "keymap_unbind",
     "browser_tabs",
     "canvas_tabs",
+    // A script can call any tool, the destructive ones included.
+    "run",
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on
@@ -178,11 +190,17 @@ const ADDS: &[&str] = &[
     "refresh_materialized_view",
     "add_ssh_host",
     "git_stage",
+    // Remote refs are updated; a push only adds commits (it never forces).
+    "git_fetch",
+    "git_push",
     "create_prompt",
     "fill_prompt",
     "launch_app",
     "app_ssh_connect",
     "canvas_add_elements",
+    "canvas_starter_system",
+    // It renames the screen's frame too, which one undo puts back.
+    "canvas_screen_to_layers",
     "canvas_add_diagram",
     "canvas_add_mermaid",
     "canvas_begin",
@@ -194,6 +212,8 @@ const ADDS: &[&str] = &[
 /// may be a server elsewhere (a saved connection), a web page, or whatever a command they run
 /// reaches. MCP's `openWorldHint`; the others stay on this Mac.
 const OPEN_WORLD: &[&str] = &[
+    // Fetches the site's files, and with `external` asks an outside scanner.
+    "browser_seo",
     "agent_account_usage",
     "backup_prompts",
     "restore_prompts",
@@ -224,6 +244,8 @@ const OPEN_WORLD: &[&str] = &[
     "install_dev_tools",
     "upgrade_dev_tools",
     "install_skill",
+    // npm's latest create-better-t-stack, asked at most once a day.
+    "stack_options",
     "stack_create",
     "app_run_script",
     "app_ssh_connect",
@@ -254,6 +276,10 @@ const OPEN_WORLD: &[&str] = &[
     "browser_mesurer",
     "browser_export_design",
     "browser_tabs",
+    "git_fetch",
+    "git_pull",
+    "git_push",
+    "run",
 ];
 
 /// MCP's hints for the tool `name`, from [`READ_ONLY`], [`DESTRUCTIVE`], [`ADDS`] and

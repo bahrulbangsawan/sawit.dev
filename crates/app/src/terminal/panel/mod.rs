@@ -2,6 +2,7 @@
 //! reconnect with one click. Tabs are grouped by the
 //! window's project they started in.
 
+pub(crate) mod agent_runs;
 mod control;
 pub(super) mod ending;
 mod groups;
@@ -59,6 +60,8 @@ pub struct TerminalPanel {
     /// workspace's saved servers). Without it a session reconnects as it
     /// first connected.
     remotes: Option<RemoteSource>,
+    /// Agents' `terminal_run`s: which terminal each went to ([`agent_runs`]).
+    agent_runs: agent_runs::AgentRuns,
     /// New terminals fail to start, as when the shell can't be run (for
     /// tests: under a multiplexer every spawn goes through `env`, which
     /// always starts).
@@ -146,6 +149,7 @@ impl TerminalPanel {
             maximized: false,
             window: None,
             remotes: None,
+            agent_runs: Default::default(),
             #[cfg(test)]
             fail_spawns: false,
         };

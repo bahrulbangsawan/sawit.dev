@@ -98,14 +98,10 @@ impl DatabasePanel {
                             label: &'static str,
                             f: fn(&mut DatabasePanel, &mut Window, &mut Context<DatabasePanel>)| {
                     let view = view.clone();
-                    PopupMenuItem::element(move |_, _| {
-                        h_flex()
-                            .gap_2()
-                            .child(match kind {
-                                Some(kind) => logos::logo(kind, 14.),
-                                None => logos::cloudflare(14.),
-                            })
-                            .child(label)
+                    // The database's logo in the icon's slot, the label the item's name.
+                    PopupMenuItem::new(label).leading(move |_, _| match kind {
+                        Some(kind) => logos::logo(kind, 14.),
+                        None => logos::cloudflare(14.),
                     })
                     .on_click(move |_, window, cx| {
                         let _ = view.update(cx, |this, cx| f(this, window, cx));

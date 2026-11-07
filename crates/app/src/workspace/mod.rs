@@ -60,6 +60,7 @@ use sawit_core::recent::RecentProjects;
 use sawit_core::terminal::PaneId;
 use sawit_core::update::Version;
 
+mod accounts_page;
 mod areas;
 mod browser;
 mod canvas;
@@ -72,6 +73,7 @@ mod file_tabs;
 mod fill;
 mod find;
 mod force_close;
+mod hotkeys;
 mod keyboard;
 mod new_project;
 mod pages;
@@ -104,6 +106,10 @@ actions!(
         TogglePinTab,
         ToggleSidebar,
         ToggleTerminal,
+        /// Shows the browser's tab (opening it if the project has none), or hides it if it shows.
+        ToggleBrowser,
+        /// Shows the canvas's tab (opening it if the project has none), or hides it if it shows.
+        ToggleCanvas,
         ToggleCenter,
         ToggleMaximizePane,
         MaximizeTerminal,
@@ -118,6 +124,13 @@ actions!(
         CloseProject,
         CopyProjectPath,
         NewTerminal,
+        /// A new file in the folder selected in the file tree, else the project's root, its name
+        /// ready to type.
+        NewFileInProject,
+        /// The keyboard to the next panel: the terminal, then the tabs, and round.
+        FocusNextPanel,
+        /// The keyboard to the previous panel.
+        FocusPreviousPanel,
         ShowInstances,
         ShowFiles,
         ShowGit,
@@ -150,7 +163,8 @@ fn bindings() -> Vec<KeyBinding> {
     let ctx = Some("Workspace");
     vec![
         KeyBinding::new("cmd-w", CloseActiveTab, ctx),
-        KeyBinding::new("alt-cmd-t", CloseOtherTabs, ctx),
+        // Beside its siblings on ⌘K (B5: ⌥⌘T is New Terminal now).
+        KeyBinding::new("cmd-k o", CloseOtherTabs, ctx),
         KeyBinding::new("cmd-k e", CloseTabsLeft, ctx),
         KeyBinding::new("cmd-k t", CloseTabsRight, ctx),
         KeyBinding::new("cmd-k u", CloseCleanTabs, ctx),
@@ -159,9 +173,23 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-k shift-enter", TogglePinTab, ctx),
         KeyBinding::new("ctrl-tab", NextTab, ctx),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, ctx),
-        KeyBinding::new("cmd-b", ToggleSidebar, ctx),
-        KeyBinding::new("cmd-j", ToggleTerminal, ctx),
+        // B5: one key opens and closes each area, and with ⇧ fills the window with it. A place
+        // with its own use for the key keeps it while it has the keyboard (bold in canvas text,
+        // Edit in JSON in the keymap editor, a new tab in the browser's tab strip).
+        KeyBinding::new("cmd-t", ToggleTerminal, ctx),
+        KeyBinding::new("cmd-shift-t", MaximizeTerminal, ctx),
+        KeyBinding::new("alt-cmd-t", NewTerminal, ctx),
+        KeyBinding::new("cmd-u", ToggleCanvas, ctx),
+        KeyBinding::new("cmd-shift-c", MaximizeCanvas, ctx),
+        KeyBinding::new("cmd-b", ToggleBrowser, ctx),
+        KeyBinding::new("cmd-shift-b", MaximizeBrowser, ctx),
+        KeyBinding::new("cmd-e", ToggleSidebar, ctx),
         KeyBinding::new("cmd-shift-j", ToggleCenter, ctx),
+        KeyBinding::new("cmd-n", NewFileInProject, ctx),
+        KeyBinding::new("cmd-shift-n", OpenNewProject, ctx),
+        // Between the terminal and the tabs (⌘⇧Tab is macOS's app switcher).
+        KeyBinding::new("alt-tab", FocusNextPanel, ctx),
+        KeyBinding::new("alt-shift-tab", FocusPreviousPanel, ctx),
         KeyBinding::new("cmd-shift-enter", ToggleMaximizePane, ctx),
         // Free on the canvas (its panels are ⌥1–⌥3) and everywhere else: ⌃⌘ and a letter are the
         // pages', ⌘ and a digit the sidebar's panels.
@@ -171,7 +199,6 @@ fn bindings() -> Vec<KeyBinding> {
         // Only while a panel fills the window, and only where the panel has no use for Escape
         // (`fill`): a field, a menu or a dialog binds its own Escape, which runs first.
         KeyBinding::new("escape", RestoreLayout, Some("Workspace && maximized")),
-        KeyBinding::new("cmd-t", NewTerminal, ctx),
         KeyBinding::new("cmd-1", ShowInstances, ctx),
         KeyBinding::new("cmd-2", ShowFiles, ctx),
         KeyBinding::new("cmd-3", ShowGit, ctx),
@@ -190,7 +217,6 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-cmd-c", OpenCanvas, ctx),
         KeyBinding::new("ctrl-cmd-t", OpenDevTools, ctx),
         KeyBinding::new("ctrl-cmd-m", OpenMcp, ctx),
-        KeyBinding::new("ctrl-cmd-n", OpenNewProject, ctx),
         KeyBinding::new("ctrl-cmd-v", OpenChangelog, ctx),
         KeyBinding::new("ctrl-cmd-u", InstallUpdate, ctx),
         KeyBinding::new("ctrl-cmd-e", OpenLocalExplorer, ctx),

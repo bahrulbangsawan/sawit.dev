@@ -8,7 +8,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::browser::{DEVICES, ViewportMode};
+use sawit_core::browser::{DEVICES, DeviceClass, ViewportMode};
 
 use super::BrowserView;
 use super::viewport::{caption, device_of, rotated};
@@ -103,11 +103,16 @@ fn device_icon(mode: &ViewportMode) -> Lucide {
             ViewportMode::Fixed { .. } => Lucide::Proportions,
         };
     };
-    match device.name {
-        name if name.starts_with("iPad") => Lucide::Tablet,
-        "Laptop" => Lucide::Laptop,
-        "Desktop" => Lucide::Monitor,
-        _ => Lucide::Smartphone,
+    class_icon(device.class)
+}
+
+/// A device class's icon.
+pub(super) fn class_icon(class: DeviceClass) -> Lucide {
+    match class {
+        DeviceClass::Mobile => Lucide::Smartphone,
+        DeviceClass::Tablet => Lucide::Tablet,
+        DeviceClass::Laptop => Lucide::Laptop,
+        DeviceClass::Desktop => Lucide::Monitor,
     }
 }
 
@@ -122,7 +127,7 @@ fn device_checks(mode: &ViewportMode) -> (bool, Option<usize>, bool) {
     )
 }
 
-/// Responsive, the devices, and Rotate.
+/// Responsive, the devices by class (Mobile, Tablet, Laptop, Desktop), and Rotate.
 fn device_menu(
     menu: PopupMenu,
     view: WeakEntity<BrowserView>,
@@ -136,28 +141,36 @@ fn device_menu(
             let _ = view.update(cx, |this, cx| this.set_viewport(mode, cx));
         }
     };
-    let mut menu = menu.item(
+    // Twenty devices are taller than a small window: the menu scrolls within 600 px.
+    let mut menu = menu.scrollable(true).max_h(px(600.)).item(
         PopupMenuItem::new("Responsive")
+            .icon(device_icon(&ViewportMode::Responsive))
             .checked(responsive)
             .on_click(set(ViewportMode::Responsive)),
     );
-    for (ix, device) in DEVICES.iter().enumerate() {
-        let mode = ViewportMode::Fixed {
-            name: Some(device.name.to_string()),
-            width: device.width,
-            height: device.height,
-        };
-        menu = menu.item(
-            PopupMenuItem::new(format!(
-                "{} · {} × {}",
-                device.name, device.width, device.height
-            ))
-            .checked(device_ix == Some(ix))
-            .on_click(set(mode)),
-        );
+    for class in DeviceClass::ALL {
+        menu = menu.separator().label(class.name());
+        for (ix, device) in DEVICES.iter().enumerate().filter(|(_, d)| d.class == class) {
+            let mode = ViewportMode::Fixed {
+                name: Some(device.name.to_string()),
+                width: device.width,
+                height: device.height,
+            };
+            let icon = device_icon(&mode);
+            menu = menu.item(
+                PopupMenuItem::new(format!(
+                    "{} · {} × {}",
+                    device.name, device.width, device.height
+                ))
+                .icon(icon)
+                .checked(device_ix == Some(ix))
+                .on_click(set(mode)),
+            );
+        }
     }
     let rotate = rotated(current);
     let mut item = PopupMenuItem::new("Rotate")
+        .icon(Lucide::RotateCw)
         .checked(sideways)
         .disabled(rotate.is_none());
     if let Some(mode) = rotate {
@@ -196,20 +209,20 @@ mod tests {
         );
         assert_eq!(
             device_checks(&fixed(Some("iPhone 15"), 393, 852)),
-            (false, Some(0), false)
+            (false, Some(1), false)
         );
         assert_eq!(
             device_checks(&fixed(Some("iPhone 15"), 852, 393)),
-            (false, Some(0), true)
+            (false, Some(1), true)
         );
         // Laptop is wider than tall: turned, it stands up.
         assert_eq!(
             device_checks(&fixed(Some("Laptop"), 800, 1280)),
-            (false, Some(4), true)
+            (false, Some(11), true)
         );
         assert_eq!(
             device_checks(&fixed(Some("iPad Pro 11″"), 834, 1194)),
-            (false, Some(3), false)
+            (false, Some(8), false)
         );
         assert_eq!(device_checks(&fixed(None, 500, 700)), (false, None, false));
     }

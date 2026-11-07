@@ -28,10 +28,20 @@ impl Workspace {
                         false,
                     ),
                 };
+                // A canvas is busy while an agent draws on it (B2).
+                let activity = match &tab.item {
+                    PaneItem::Other { view, .. } => {
+                        view.clone().downcast::<BoardView>().ok().map(|b| {
+                            sawit_core::activity::canvas(b.read(cx).agents_at_work(cx).is_some())
+                        })
+                    }
+                    _ => None,
+                };
                 json!({
                     "index": ix,
                     "title": title,
                     "kind": kind,
+                    "activity": activity.map(|a| a.to_json()),
                     "path": path,
                     "active": ix == self.active,
                     "pinned": tab.pinned,
@@ -67,7 +77,7 @@ impl Workspace {
     /// The agents at work in this window, as `app_state.agents` lists them: on each canvas and
     /// browser where one acted in the last 30 s, its id, label, colour, the surface (`canvas` with
     /// its file, `browser` with its project), what it did last and how long ago.
-    fn describe_agents(&self, cx: &App) -> Vec<Value> {
+    pub(crate) fn describe_agents(&self, cx: &App) -> Vec<Value> {
         let boards = self.boards.iter().filter_map(|b| b.upgrade());
         let mut agents: Vec<Value> = boards
             .flat_map(|b| b.read(cx).describe_agents(cx))

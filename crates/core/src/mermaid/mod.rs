@@ -31,12 +31,15 @@ use pele::run;
 pub use flattening::flatten;
 pub use markdown::{Fence, IMAGE_SCHEME, SAVE_SCHEME, fences, index_in, rewrite_markdown};
 
-/// The version of Pele that [`PELE_JS`] is.
+/// The version of Pele that [`pele_js`] is.
 pub const PELE_VERSION: &str = "1.13.0";
 
 /// Pele 1.13.0, `dist/pele.global.js` (defines the global `pele`). The canvas
-/// turns the SVG this copy draws into shapes (`sawit_board::mermaid`).
-pub const PELE_JS: &str = include_str!("../../assets/pele/pele.global.js");
+/// turns the SVG this copy draws into shapes (`sawit_board::mermaid`). The
+/// binary carries it deflated: this inflates it, for the engine to load and drop.
+pub fn pele_js() -> String {
+    crate::embedded::inflate(crate::embedded::PELE)
+}
 
 /// Every diagram type Pele draws, by the keyword its Mermaid source starts
 /// with, and Pele's name for the type, which [`Diagram::kind`] is (Pele's
@@ -183,8 +186,9 @@ pub struct Diagram {
 }
 
 /// Renders Mermaid `source`. Blocks until done (well under a millisecond for
-/// typical diagrams; the first call also loads Pele, about 60 ms), so call it
-/// off the UI thread. The error is Pele's message, which quotes the source.
+/// typical diagrams; the first call also loads Pele, about 60 ms, as does the
+/// first after two idle minutes, when the engine gives its memory back), so call
+/// it off the UI thread. The error is Pele's message, which quotes the source.
 pub fn render(source: &str, palette: &Palette) -> Result<Diagram, String> {
     let raw = run(source.to_owned())?;
     Ok(Diagram {

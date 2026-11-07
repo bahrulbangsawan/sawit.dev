@@ -3,7 +3,7 @@
   const helpers = {};
   /*__SAWIT_MODULES__*/
 
-  const OPS = { snapshot, click, hover, type, press, select, scroll, query, rect, evaluate, settled, ...modules };
+  const OPS = { snapshot, click, hover, aim: aimOp, aimed, type, press, select, scroll, query, rect, evaluate, settled, ...modules };
   const run = (op) => {
     try {
       const f = OPS[op && op.op];

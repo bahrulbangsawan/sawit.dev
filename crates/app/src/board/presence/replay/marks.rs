@@ -79,7 +79,7 @@ pub(in crate::board) fn lane_marks(
     let white: Hsla = gpui_kit::hsla(0.0, 0.0, 1.0, 1.0);
     for t in &lane.tasks {
         // A screen's element: the live page under it hides until it plays, then fades in.
-        if t.task.cover {
+        if t.task.cover && !super::cover_expired(t, now) {
             let cover = match t.progress(now) {
                 None => 1.0,
                 Some(p) if p < 1.0 => 1.0,

@@ -4,6 +4,7 @@
 mod address;
 mod agent;
 mod base64;
+mod capture;
 mod design;
 mod evaluate;
 mod ipc;

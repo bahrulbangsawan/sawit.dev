@@ -15,6 +15,11 @@
 //! play at all. Nothing waits on the replay: the op's answer went before it began.
 
 pub(in crate::board) mod blueprint;
+mod covers;
+#[cfg(test)]
+#[cfg(test)]
+pub(in crate::board) use covers::COVER_LIMIT;
+pub(in crate::board) use covers::cover_expired;
 pub(in crate::board) mod marks;
 pub(in crate::board) mod script;
 #[cfg(test)]
@@ -78,6 +83,8 @@ const SNAP_AFTER: u8 = 3;
 #[derive(Clone, Debug)]
 pub(in crate::board) struct Timed {
     pub task: Task,
+    /// When its op was played: a cover lasts [`COVER_LIMIT`] from here at most.
+    pub made: Instant,
     pub from: (f64, f64),
     pub travel: Instant,
     pub start: Instant,
@@ -189,6 +196,10 @@ impl Replays {
         now: Instant,
         reduce: bool,
     ) {
+        // A newer write of the screen replaces what an older one still covers, in every lane: its
+        // covers go at once, never left over the live page (B17).
+        let frames: Vec<NodeId> = tasks.iter().map(|t| t.node).collect();
+        self.drop_covers(&frames);
         if reduce || self.speed == Speed::Off || tasks.is_empty() {
             return;
         }
@@ -213,6 +224,7 @@ impl Replays {
             .map(|task| {
                 let end = now + task.time;
                 Timed {
+                    made: now,
                     from: (task.rect[0], task.rect[1]),
                     travel: now,
                     start: now,
@@ -283,6 +295,7 @@ impl Replays {
         let speed = factor * 2f64.powi(i32::from(lane.level.min(2)));
         for task in tasks {
             let mut timed = Timed {
+                made: now,
                 from,
                 travel: at,
                 start: at,
@@ -349,7 +362,10 @@ impl Replays {
                     (None, None) => true,
                     _ => false,
                 };
-                t.end + linger(t) > now && same && !selected.contains(&node)
+                t.end + linger(t) > now
+                    && same
+                    && !selected.contains(&node)
+                    && !cover_expired(t, now)
             });
         }
         self.lanes.retain(|l| !l.tasks.is_empty());

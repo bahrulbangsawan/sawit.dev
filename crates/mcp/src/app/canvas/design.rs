@@ -32,6 +32,10 @@ pub struct Sent(Mutex<Seen>);
 struct Seen {
     digest: bool,
     sections: HashSet<String>,
+    /// Works begun in sketch mode (B12): the lint's warnings stay quiet for them.
+    sketches: HashSet<String>,
+    /// Works that are UI, whose writes answer a lint summary.
+    ui_works: HashSet<String>,
 }
 
 /// Words in a work's steps or name that call for a section of the guide.
@@ -98,6 +102,30 @@ const SECTION_WORDS: &[(&str, &[&str])] = &[
 ];
 
 impl Sent {
+    /// Notes work `work` as begun: a sketch's lint stays quiet; a UI work's writes are linted.
+    pub fn begun(&self, work: &str, ui: bool, sketch: bool) {
+        if let Ok(mut seen) = self.0.lock() {
+            if sketch {
+                seen.sketches.insert(work.to_string());
+            }
+            if ui {
+                seen.ui_works.insert(work.to_string());
+            }
+        }
+    }
+
+    /// Whether `work` was begun as a sketch.
+    pub fn is_sketch(&self, work: &str) -> bool {
+        self.0.lock().is_ok_and(|seen| seen.sketches.contains(work))
+    }
+
+    /// Whether `work` is UI that isn't a sketch: its writes answer a lint summary.
+    pub fn lints(&self, work: &str) -> bool {
+        self.0
+            .lock()
+            .is_ok_and(|seen| seen.ui_works.contains(work) && !seen.sketches.contains(work))
+    }
+
     /// The digest, the first time a UI work asks.
     pub fn digest(&self) -> Option<&'static str> {
         let mut seen = self.0.lock().ok()?;
@@ -176,11 +204,12 @@ fn words(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// What a screen-sized frame drawn from shapes is told.
-pub const USE_A_SCREEN: &str = "This frame is a screen's size: build UI as a screen \
-     (canvas_begin {kind: \"screen\"}, then canvas_screen_write), which previews live, exports \
-     to HTML and React and hands off to a coding agent. Keep vector frames for diagrams, \
-     wireframes the user asked to be sketchy, and illustrations.";
+/// What a screen-sized frame of layers is told (B15: layers are UI's default).
+pub const BUILD_WITH_LAYERS: &str = "This frame is a screen's size: build it from the file's \
+     components (instance.create) with auto layout (layout.add), and bind colours, gaps and \
+     radii to its tokens; start with canvas_starter_system when the file has none. The user \
+     selects and edits every layer, and Export HTML / React (canvas_screen_export {id}) gives \
+     code.";
 
 /// A guide section's text, without the checklist the digest already holds.
 pub fn section_text(name: &str) -> Option<String> {
@@ -346,4 +375,100 @@ pub fn prompt(name: &str, what: Option<&str>) -> Result<GetPromptResult, String>
     let mut result = GetPromptResult::new(vec![PromptMessage::new_text(Role::User, text)]);
     result.description = Some("Design UI on Sawit's canvas with Sawit's design standard".into());
     Ok(result)
+}
+
+impl Sawit {
+    /// The lint summary of work `work` after a write (B12): the counts and the first three
+    /// findings, kept short. `None` for a work that isn't linted, or when the lint fails.
+    pub(super) async fn lint_summary(
+        &self,
+        project: Option<String>,
+        file: Option<String>,
+        work: Option<&str>,
+    ) -> Option<Value> {
+        let work = work.filter(|w| self.agent.design.lints(w))?;
+        let found = self
+            .canvas(project, file, json!({"op": "lint", "work": work}))
+            .await
+            .ok()?;
+        let first: Vec<Value> = (found["findings"].as_array().into_iter().flatten())
+            .take(3)
+            .map(
+                |f| json!({"rule": f["rule"], "layer": f["layer"], "id": f["id"], "fix": f["fix"]}),
+            )
+            .collect();
+        Some(json!({
+            "errors": found["errors"], "warnings": found["warnings"], "first": first,
+            "more": "canvas_lint {work} lists every finding with its fix",
+        }))
+    }
+}
+
+impl Sawit {
+    /// `canvas_begin`'s design status (B12): the work noted as UI or a sketch, and for UI that
+    /// isn't a sketch, where the file is in the workflow, with a warning for a skipped step.
+    pub(super) async fn begin_design_status(
+        &self,
+        project: Option<String>,
+        file: Option<String>,
+        v: &mut Value,
+        ui: bool,
+        screen: bool,
+        sketch: bool,
+    ) {
+        if let Some(work) = v["work"].as_str() {
+            self.agent.design.begun(work, ui && !screen, sketch);
+        }
+        if !ui || sketch {
+            return;
+        }
+        let Ok(mut status) = self
+            .canvas(project, file, json!({"op": "design_status"}))
+            .await
+        else {
+            return;
+        };
+        if status.get("stage").is_none() {
+            return;
+        }
+        if let Some(map) = status.as_object_mut() {
+            map.remove("ok");
+        }
+        let missing = match status["stage"].as_str() {
+            Some("no system") => Some("no design system yet"),
+            Some("system") => Some("tokens but no components yet"),
+            _ => None,
+        };
+        if let Some(missing) = missing {
+            let next = status["next"].as_str().unwrap_or_default();
+            v["design_warning"] = json!(format!("This file has {missing}: {next}"));
+        }
+        v["design_status"] = status;
+    }
+
+    /// `v`, a write's reply, with the lint summary of its work when that work is linted.
+    pub(super) async fn with_lint(
+        &self,
+        project: Option<String>,
+        file: Option<String>,
+        work: Option<String>,
+        mut v: Value,
+    ) -> Value {
+        if let Some(lint) = self.lint_summary(project, file, work.as_deref()).await {
+            v["lint"] = lint;
+        }
+        v
+    }
+
+    /// `canvas_lint`: the design lint of a frame, a work's frame or the page on show.
+    pub(super) async fn canvas_lint_tool(
+        &self,
+        a: super::CanvasLintArgs,
+    ) -> rmcp::model::CallToolResult {
+        let op = json!({"op": "lint", "work": a.work, "frame": a.id, "sketch": a.sketch});
+        match self.canvas(a.project, a.file, op).await {
+            Ok(v) => crate::ok(super::super::pretty(&v)),
+            Err(e) => crate::fail(e),
+        }
+    }
 }

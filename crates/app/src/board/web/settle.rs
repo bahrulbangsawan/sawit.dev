@@ -13,9 +13,11 @@ use super::{BoardView, Phase, Settle, WebMsg, ms};
 
 /// Injected into every web frame's page, before its own scripts:
 /// - Escape in the page leaves live mode and Preview;
-/// - `__sawitSettle(token)` waits for the page's fonts, then for its animations that end (an
-///   endless spinner doesn't count; at most 2 s), then for two animation frames, and posts
-///   `sawit-web:settled:<token>`;
+/// - `__sawitSettle(token)` waits for the page's fonts and its images (decoded), then for its
+///   animations and transitions that end (an endless spinner doesn't count) for up to 1.2 s; what
+///   still runs is then finished, so the picture shows the page as it ends, not halfway through a
+///   staggered entrance (B17); then it waits two animation frames, finishes what those set off,
+///   waits two more and posts `sawit-web:settled:<token>`;
 /// - a change the user makes in a live page (typing, a click, a scroll, a change of its DOM) posts
 ///   `sawit-web:changed` once things are quiet for 250 ms, so its picture stays up to date;
 /// - a change of its DOM at rest (a hot update), or a dev server's update or reload message on its
@@ -28,16 +30,22 @@ pub(in crate::board) const INIT: &str = r#"(() => {
   let hush = 0;
   const hushFor = (ms) => { hush = Math.max(hush, Date.now() + ms); };
   addEventListener('visibilitychange', () => hushFor(600), true);
+  const within = (p, ms) => Promise.race([p, new Promise(r => setTimeout(r, ms))]);
+  const frames = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const ending = () => (document.getAnimations ? document.getAnimations() : []).filter(a => {
+    const t = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming() : null;
+    return t && Number.isFinite(t.endTime) && a.playState !== 'finished' && a.playState !== 'idle';
+  });
+  const finish = () => { for (const a of ending()) { try { a.finish(); } catch (_) {} } };
   window.__sawitSettle = async (token) => {
     hushFor(60000);
-    try { await document.fonts.ready; } catch (_) {}
-    const ending = (document.getAnimations ? document.getAnimations() : []).filter(a => {
-      const t = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming() : null;
-      return t && Number.isFinite(t.endTime);
-    });
-    const ended = Promise.all(ending.map(a => a.finished.catch(() => {})));
-    await Promise.race([ended, new Promise(r => setTimeout(r, 2000))]);
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    try { await within(document.fonts.ready, 3000); } catch (_) {}
+    await within(Promise.all([...document.images].map(i => i.decode ? i.decode().catch(() => {}) : null)), 2500);
+    await within(Promise.all(ending().map(a => a.finished.catch(() => {}))), 1200);
+    finish();
+    await frames();
+    finish();
+    await frames();
     post('sawit-web:settled:' + token);
     hush = Date.now() + 400;
   };
@@ -68,11 +76,22 @@ pub(in crate::board) const INIT: &str = r#"(() => {
 })();"#;
 /// Read before each settled snapshot: what ran in the page (the test pages' `__probe`), and how
 /// tall the page is (`pageHeight`) in its viewport (`innerHeight`), which a full-page route frame
-/// grows to ([`super::fit`]).
+/// grows to ([`super::fit`]), and how far down the viewport its text, pictures and fields go
+/// (`contentBottom`, whatever their opacity), which tells a half-drawn snapshot ([`super::drawn`]).
 pub(super) const PROBE: &str = "JSON.stringify(Object.assign({visibility: document.visibilityState, \
                      innerWidth: innerWidth, innerHeight: innerHeight, dpr: devicePixelRatio, \
                      pageHeight: Math.max(document.documentElement.scrollHeight, \
-                     document.body ? document.body.scrollHeight : 0)}, window.__probe || {}))";
+                     document.body ? document.body.scrollHeight : 0), \
+                     contentBottom: (() => { let b = 0; \
+                       const all = document.body ? document.body.querySelectorAll('*') : []; \
+                       for (let i = 0; i < all.length && i < 4000; i++) { const el = all[i]; \
+                         const media = /^(img|svg|video|canvas|picture|input|textarea|select)$/i.test(el.tagName); \
+                         const own = !media && [...el.childNodes].some(c => c.nodeType === 3 && c.textContent.trim()); \
+                         if (!media && !own) continue; \
+                         const r = el.getBoundingClientRect(); if (r.width < 2 || r.height < 2) continue; \
+                         const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden') continue; \
+                         b = Math.max(b, r.bottom); } \
+                       return Math.round(Math.min(b, innerHeight)); })()}, window.__probe || {}))";
 
 impl BoardView {
     /// A frame's page has loaded (or loaded again): it settles, shown off the canvas unless
@@ -114,6 +133,7 @@ impl BoardView {
         };
         frame.phase = Phase::Settling;
         frame.settle = frame.settle.wrapping_add(1);
+        frame.retakes = 0;
         let token = frame.settle;
         if config.settle != Settle::Hidden {
             engine.set_visible(true);
@@ -159,6 +179,22 @@ impl BoardView {
         let Some(frame) = web.frames.get(&id) else {
             return;
         };
+        // The page's answer came after the settle timed out and its snapshot was taken: the page
+        // has finished now, so it is pictured again (B17: a picture taken at the timeout may be
+        // half-drawn).
+        let late = why == "settled"
+            && frame.engine.is_some()
+            && frame.phase == Phase::Idle
+            && frame.settle == token
+            && frame.timed_out;
+        if late {
+            if let Some(frame) = web.frames.get_mut(&id) {
+                frame.timed_out = false;
+            }
+            web.note(json!({"event": "settled_late", "id": id.0}));
+            self.web_snapshot(id, "late", cx);
+            return;
+        }
         if frame.engine.is_none() || frame.phase != Phase::Settling || frame.settle != token {
             return;
         }
@@ -172,6 +208,9 @@ impl BoardView {
             json!({"event": "settled", "id": id.0, "how": why, "after_load_ms": waited,
                         "measuring": measuring}),
         );
+        if let Some(frame) = web.frames.get_mut(&id) {
+            frame.timed_out = why == "timeout";
+        }
         if measuring {
             // A full-page frame's page at its viewport's height: measured, then it takes the
             // page's height and settles again there before its snapshot ([`super::fit`]).

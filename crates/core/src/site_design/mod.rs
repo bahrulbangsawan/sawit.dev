@@ -1,7 +1,9 @@
 pub mod assets;
 pub mod color;
+pub mod computed;
 pub mod export;
 pub mod inspect;
+pub mod page;
 pub mod scan;
 pub mod tailwind;
 pub mod tokens;

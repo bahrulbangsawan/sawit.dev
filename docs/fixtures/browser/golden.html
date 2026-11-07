@@ -1,0 +1,125 @@
+<!doctype html>
+<!-- Fixture for the page-script golden check (e2e/specs/page-golden.test.js): the design scan, the
+     element snapshot and inspect read this page, and their answers must stay the same as the page
+     logic moves from JavaScript to Rust. It holds the colour syntaxes WebKit computes (oklch, lab,
+     display-p3, translucent layers), shadows and gradients, focus rings, form controls in every
+     state, ARIA roles, a shadow root, a slot and an open dialog. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Golden · fixture</title>
+    <link rel="icon" href="favicon.svg" sizes="32x32" />
+    <link rel="manifest" href="missing.webmanifest" />
+    <style>
+      :root { --accent: oklch(0.623 0.214 259.815); --ink: lab(20 0 0); --space: 12px; }
+      html { background: #fafafa; }
+      body { margin: 0; color: var(--ink); font: 16px/1.5 system-ui, sans-serif; letter-spacing: -0.012em; }
+      header { padding: 8px 20px; background: color(display-p3 0.98 0.98 1); border-bottom: 1px solid oklch(0.9 0 0); }
+      main { padding: 24px 20px; }
+      h1 { font-size: 34px; line-height: 40px; font-weight: 650; letter-spacing: -0.5px; }
+      h2 { font-size: 22px; color: oklch(0.45 0.12 30); }
+      .layer { background: rgb(0 0 0 / 4%); padding: 10px; }
+      .layer .inner { background: oklch(0.7 0.15 150 / 0.25); padding: 6px 9px 6px 9px; }
+      .primary { background: var(--accent); color: oklch(0.985 0 0); border: 0; border-radius: 10px; padding: 9px 18px; font-weight: 600; }
+      .primary:hover { background: oklch(0.55 0.22 260); }
+      .primary:focus-visible { outline: 2px solid oklch(0.623 0.214 259.815); }
+      .ghost { background: transparent; color: lch(40 60 290); border: 1px solid lch(40 60 290 / 0.5); border-radius: 10px; padding: 9px 18px; }
+      .ghost:focus { outline-color: transparent; }
+      .grey { background: hsl(0 0% 92%); color: #222; border: 0; border-radius: 6px; padding: 7px 14px; }
+      .card { max-width: 340px; border-radius: 14px; padding: 20px; margin: 16px 0; box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px oklch(0.5 0.1 260 / 0.15); }
+      .grad { height: 24px; background: linear-gradient(90deg, oklab(0.7 0.1 -0.1), #ff6a00 60%, color(srgb 0.2 0.4 0.8)); }
+      .pill { display: inline-block; color: color(srgb-linear 0.5 0.1 0.1); border: 2px dashed #0a7; border-radius: 999px; padding: 2px 8px; margin: 4px; }
+      .tiny { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: rgb(110 110 115 / 0.9); }
+      svg.icon path { fill: oklch(0.6 0.2 30); stroke: #333; }
+      a { color: color(display-p3 0 0.4 0.8); }
+      a.plain { text-decoration: none; font-weight: 500; }
+      label { display: block; margin: 8px 0 2px; }
+      input, select, textarea { font: inherit; border: 1px solid #ccd; border-radius: 6px; padding: 6px 8px; }
+      .hidden { display: none; }
+      .invisible { visibility: hidden; }
+      dialog { border: 0; border-radius: 12px; box-shadow: 0 20px 40px rgb(0 0 0 / 0.25); }
+      @media (min-width: 640px) { main { padding: 32px; } }
+      @media (max-width: 1024px) { header { padding: 8px 12px; } }
+      @supports (display: grid) { .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a href="/"><svg class="logo" aria-label="Golden" width="28" height="28" viewBox="0 0 28 28"><rect width="28" height="28" rx="7" fill="oklch(0.623 0.214 259.815)" /></svg></a>
+      <nav aria-label="Main"><a class="plain" href="#a">Overview</a> <a class="plain" href="#b">Pricing</a> <a class="plain" href="javascript:void 0">Run</a></nav>
+    </header>
+    <main>
+      <h1>Golden fixture</h1>
+      <p class="tiny">Small caps note</p>
+      <p>A paragraph with <a href="https://example.com/docs?x=1#y">a link inside</a> and <strong>strong text</strong>, long enough to wrap on a narrow window and keep going for a while so that clipping is exercised in the outline: the quick brown fox jumps over the lazy dog, again and again and again until the line is far longer than two hundred characters in total.</p>
+      <div class="layer"><div class="inner"><span id="deep">Text on translucent layers</span></div></div>
+      <div class="grid">
+        <section aria-label="Actions">
+          <h2>Actions</h2>
+          <button class="primary" id="buy">Buy now</button>
+          <button class="primary">Buy later</button>
+          <button class="ghost" aria-expanded="false">More</button>
+          <button class="grey" disabled>Disabled</button>
+          <div role="button" tabindex="0" class="grey" aria-pressed="true">Fake button</div>
+          <span class="pill">pill one</span><span class="pill">pill two</span>
+        </section>
+        <article class="card">
+          <h3>Card title</h3>
+          <img src="hero.png" alt="Hero image" width="120" height="40" />
+          <img src="hero.png" alt="" width="10" height="10" />
+          <p>Card body with <em>emphasis</em>.</p>
+          <div class="grad"></div>
+        </article>
+      </div>
+      <form>
+        <label for="email">Email</label>
+        <input id="email" type="email" placeholder="you@example.com" required value="a@b.co" />
+        <label for="pw">Password</label>
+        <input id="pw" type="password" value="hunter22" />
+        <label for="plan">Plan</label>
+        <select id="plan"><option value="free">Free</option><option value="pro" selected>Pro</option></select>
+        <select id="many" multiple aria-label="Many"><option selected>One</option><option>Two</option></select>
+        <label><input type="checkbox" checked /> Accept</label>
+        <label><input type="radio" name="r" /> Radio A</label>
+        <input type="range" aria-label="Volume" value="30" />
+        <input type="number" aria-label="Count" value="4" />
+        <input type="search" aria-label="Find" />
+        <textarea aria-label="Notes">Some notes</textarea>
+        <div contenteditable="true" aria-label="Editor">Editable <b>rich</b> text</div>
+        <fieldset><legend>Shipping</legend><input type="text" aria-label="Street" /></fieldset>
+        <input type="submit" />
+        <input type="reset" value="" />
+      </form>
+      <ul role="tablist"><li role="tab" aria-selected="true">Tab one</li><li role="tab">Tab two</li></ul>
+      <ol><li>First</li><li>Second <a href="#n">nested link</a></li></ol>
+      <table><tr><th>Head</th></tr><tr><td>Cell</td></tr></table>
+      <details><summary>Summary</summary><p>Inside details</p></details>
+      <p aria-hidden="true">Hidden from the tree</p>
+      <p class="hidden">Not displayed</p>
+      <p class="invisible">Invisible</p>
+      <div style="display: contents"><span>In contents</span></div>
+      <div onclick="void 0" style="cursor: pointer">Clickable div <span>child</span></div>
+      <h4 aria-level="5">Aria level five</h4>
+      <progress value="40" max="100"></progress>
+      <hr />
+      <x-host></x-host>
+      <svg class="icon" width="20" height="20" viewBox="0 0 20 20"><path d="M2 2h16v16H2z" /></svg>
+    </main>
+    <footer><p>Footer text <a href="/legal">Legal</a></p></footer>
+    <dialog open aria-label="Welcome"><p>Hello there</p><button>Close</button></dialog>
+    <script>
+      customElements.define(
+        "x-host",
+        class extends HTMLElement {
+          connectedCallback() {
+            const root = this.attachShadow({ mode: "open" });
+            root.innerHTML =
+              '<style>.s{color:oklch(0.5 0.2 140);background:rgb(255 255 0 / 0.3)}</style>' +
+              '<div class="s"><button>Shadow button</button><slot></slot></div>';
+          }
+        },
+      );
+    </script>
+  </body>
+</html>

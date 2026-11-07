@@ -56,6 +56,10 @@ pub enum LayerIcon {
     Ink,
     Stamp,
     Table,
+    /// A UI screen: an HTML page shown in its frame (B15).
+    Screen,
+    /// A route frame: a dev server's page.
+    Web,
     /// Slices, and anything else the panel has no picture for.
     Other,
 }
@@ -149,7 +153,7 @@ pub fn rows(
         rows.push(LayerRow {
             id,
             depth,
-            name: display_name(node).to_owned(),
+            name: display_name(doc, node),
             icon: icon_of(node),
             visible: node.visible,
             locked: node.locked,
@@ -203,17 +207,53 @@ pub fn reveal(doc: &Document, ids: &[NodeId]) -> HashSet<NodeId> {
     open
 }
 
-/// What a row calls its layer: the name, or the kind when it has no name worth showing.
-fn display_name(node: &Node) -> &str {
-    if node.name.trim().is_empty() {
-        node.kind.label()
-    } else {
-        &node.name
+/// What a row calls its layer: the name, or the kind when it has no name worth showing. A sticky,
+/// a shape or a label still called by its kind ("Sticky") is called by its text's first words,
+/// so two stickies aren't two rows alike (B15).
+fn display_name(doc: &Document, node: &Node) -> String {
+    let unnamed =
+        node.name.trim().is_empty() || node.name == node.kind.label() || node.name == "Sticky";
+    if unnamed
+        && node.board.as_ref().is_some_and(BoardItem::has_text)
+        && let Some(words) = first_words(doc, node)
+    {
+        return words;
     }
+    if node.name.trim().is_empty() {
+        node.kind.label().to_owned()
+    } else {
+        node.name.clone()
+    }
+}
+
+/// The first words of a board item's text (its first text layer), 32 characters at most.
+fn first_words(doc: &Document, node: &Node) -> Option<String> {
+    let text = node
+        .children
+        .iter()
+        .find_map(|c| match &doc.node(*c)?.kind {
+            NodeKind::Text(t) => Some(t.characters.clone()),
+            _ => None,
+        })?;
+    let line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        return None;
+    }
+    let cut: String = line.chars().take(32).collect();
+    Some(match cut.len() < line.len() {
+        true => format!("{}…", cut.trim_end()),
+        false => cut,
+    })
 }
 
 /// The icon of a layer: its board item's, else its kind's.
 fn icon_of(node: &Node) -> LayerIcon {
+    if node.plugin_data.contains_key(crate::screens::SCREEN_KEY) {
+        return LayerIcon::Screen;
+    }
+    if node.plugin_data.contains_key(crate::routes::WEB_KEY) {
+        return LayerIcon::Web;
+    }
     if let Some(item) = &node.board {
         return match item {
             BoardItem::Sticky { .. } => LayerIcon::Sticky,
@@ -260,7 +300,7 @@ fn found_with_holders(doc: &Document, page: NodeId, query: &str) -> HashSet<Node
         .unwrap_or_default();
     while let Some(id) = pending.pop() {
         let Some(node) = doc.node(id) else { continue };
-        if display_name(node).to_lowercase().contains(query) {
+        if display_name(doc, node).to_lowercase().contains(query) {
             // The layer and the ones holding it, up to the first that is in already: it was
             // added with everything above it.
             let mut up = Some(id);

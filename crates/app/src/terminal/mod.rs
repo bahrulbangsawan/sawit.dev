@@ -1,7 +1,7 @@
 //! Bottom-dock terminal: tabs of real terminals (shell or SSH), each showing the coding agents
 //! (Claude Code, Codex, …) running in it by their logos.
 
-mod agents;
+pub(crate) mod agents;
 mod guard;
 mod panel;
 mod tab;
@@ -95,4 +95,10 @@ actions!(
 
 pub fn init(cx: &mut gpui_kit::App) {
     cx.bind_keys(view::bindings());
+}
+
+/// The terminal's own key bindings, for the app-wide key tests (`crate::keys_tests`).
+#[cfg(test)]
+pub(crate) fn key_bindings() -> Vec<gpui_kit::KeyBinding> {
+    view::bindings()
 }

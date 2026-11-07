@@ -94,8 +94,9 @@ impl BrowserView {
             // while the tab is hidden: nobody can press in a hidden page, and the keyboard
             // would leave the terminal or field that has it for a view that isn't drawn, which
             // the workspace then takes it from (`workspace::KeyboardHome`).
+            // An agent's real click (`pointer`) is no press of the user's: it moves nothing.
             FromPage::Event(PageEvent::Pressed) => {
-                if self.page_shown() {
+                if self.page_shown() && !self.agent_pointing() {
                     self.focus.focus(window, cx);
                 }
             }
@@ -112,6 +113,7 @@ impl BrowserView {
                 self.show_address(window, cx);
                 // Route changes without a load still move to another page.
                 let url = self.current_url();
+                self.favicon_url_changed(&url);
                 self.sync_page_info(&url, cx);
                 self.sync_markers(cx);
             }
@@ -163,6 +165,10 @@ impl BrowserView {
                 self.sync_page_info(&url, cx);
                 if !started {
                     self.mesurer_after_load(cx);
+                    self.favicon_after_load(cx);
+                    self.seo_after_load(cx);
+                } else {
+                    self.favicon_url_changed(&url);
                 }
             }
             // mesurer's world says something, or asks: answered by `mesurer/`, drawing nothing.
@@ -184,6 +190,7 @@ impl BrowserView {
             }
             FromPage::Engine(EngineEvent::External(url)) => self.open_external(url, window, cx),
             FromPage::Shoot { rect, reply } => self.shoot(rect, reply, cx),
+            FromPage::IconLinks(json) => self.favicon_links(json, cx),
         }
         if !quiet || self.address_moved() {
             cx.notify();

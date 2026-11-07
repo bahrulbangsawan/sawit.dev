@@ -33,6 +33,13 @@ pub(super) struct PromptsGitHub {
     /// The library as last backed up or restored, so an automatic backup skips no-ops.
     pub synced_library: Option<sawit_core::prompts::Library>,
     pub auto_scheduled: bool,
+    /// A backup held back because prompts look like they hold secrets: those lines, and the
+    /// Keep Mine choices it carried, for Back Up Anyway.
+    pub held: Option<(Vec<String>, Vec<String>)>,
+    /// Whether the repository exists on GitHub, once asked (for the empty library's Restore).
+    pub repo_exists: Option<bool>,
+    /// The pull on launch (automatic backup on) or the repository check has run.
+    pub launched: bool,
 }
 
 fn settings_path() -> PathBuf {
@@ -60,6 +67,9 @@ impl PromptsGitHub {
             conflicts: Vec::new(),
             synced_library: None,
             auto_scheduled: false,
+            held: None,
+            repo_exists: None,
+            launched: false,
         }
     }
 }
@@ -77,9 +87,20 @@ impl PromptsPanel {
         self.github.settings.clone()
     }
 
-    /// Back Up Now (and the automatic backup): the prompts changed here go up. `keep_local`: ids
-    /// changed on both sides whose version here wins (Keep Mine).
+    /// Back Up Now (and the automatic backup): the prompts changed here go up, and the ones
+    /// deleted here are deleted there. `keep_local`: ids changed on both sides whose version here
+    /// wins (Keep Mine). Prompts that look like they hold a secret hold it back, saying which,
+    /// until Back Up Anyway (`allow_secrets`).
     pub(super) fn back_up(&mut self, keep_local: Vec<String>, cx: &mut Context<Self>) {
+        self.back_up_with(keep_local, false, cx);
+    }
+
+    pub(super) fn back_up_with(
+        &mut self,
+        keep_local: Vec<String>,
+        allow_secrets: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(token) = account::global(cx).read(cx).token().map(String::from) else {
             return;
         };
@@ -90,12 +111,26 @@ impl PromptsPanel {
         let library = self.store.read(cx).library.clone();
         self.github.busy = Some("Backing Up…");
         self.github.message = None;
+        self.github.held = None;
         cx.notify();
+        let opts = prompt_sync::Options {
+            allow_secrets,
+            dry_run: false,
+        };
         let rx = rt::spawn(cx, {
             let token = token.clone();
             let library = library.clone();
+            let keep_local = keep_local.clone();
             async move {
-                prompt_sync::back_up(&token, &library, &settings, &state_path(), &keep_local).await
+                prompt_sync::back_up(
+                    &token,
+                    &library,
+                    &settings,
+                    &state_path(),
+                    &keep_local,
+                    opts,
+                )
+                .await
             }
         });
         cx.spawn(async move |this, cx| {
@@ -103,8 +138,12 @@ impl PromptsPanel {
             let _ = this.update(cx, |this, cx| {
                 this.github.busy = None;
                 match outcome {
+                    Ok(done) if done.held => {
+                        this.github.held = Some((done.secrets.clone(), keep_local));
+                    }
                     Ok(done) => {
                         this.github.synced_library = Some(library);
+                        this.github.repo_exists = Some(true);
                         this.done(&done, "Backed up", cx);
                     }
                     Err(e) => this.failed(e, &token, cx),
@@ -132,7 +171,7 @@ impl PromptsPanel {
         let settings = self.backup_settings(cx);
         let detail = if keep_github.is_empty() {
             format!(
-                "Prompts changed on GitHub (github.com/…/{}) replace the ones here, and prompts only on GitHub come back. Prompts you changed here since the last backup stay as they are.",
+                "Prompts changed on GitHub (github.com/…/{}) replace the ones here, prompts only on GitHub come back, and prompts deleted on GitHub since the last sync are deleted here. Prompts you changed here since the last backup stay as they are.",
                 settings.repo
             )
         } else {
@@ -159,6 +198,7 @@ impl PromptsPanel {
                         &settings,
                         &state_path(),
                         &keep_github,
+                        false,
                     )
                     .await;
                     done.map(|d| (d, library))
@@ -171,13 +211,7 @@ impl PromptsPanel {
                 this.github.busy = None;
                 match outcome {
                     Ok(Ok((done, restored))) => {
-                        this.store.update(cx, |s, cx| {
-                            for p in restored.items {
-                                if done.synced_ids.contains(&p.id) {
-                                    s.put(p, cx);
-                                }
-                            }
-                        });
+                        this.apply_restored(&done, restored, cx);
                         this.github.synced_library = Some(this.store.read(cx).library.clone());
                         this.done(&done, "Restored", cx);
                     }
@@ -204,6 +238,12 @@ impl PromptsPanel {
         };
         if done.created_repo {
             text = format!("Created the private repository {}. {text}", done.repo);
+        }
+        if !done.deleted.is_empty() {
+            text.push_str(&match done.deleted.len() {
+                1 => " Deleted 1 prompt deleted on the other side.".to_string(),
+                n => format!(" Deleted {n} prompts deleted on the other side."),
+            });
         }
         if !done.conflicts.is_empty() {
             text.push_str(&format!(
@@ -327,6 +367,9 @@ impl PromptsPanel {
                             cx.notify();
                         })),
                 )
+            })
+            .when_some(self.github.held.clone(), |el, (secrets, keep)| {
+                el.child(self.render_held(secrets, keep, cx))
             })
             .when_some(self.github.message.clone(), |el, (text, error)| {
                 el.child(

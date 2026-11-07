@@ -1,4 +1,5 @@
 mod accounts;
+mod activity;
 mod agents;
 mod assets;
 mod board;
@@ -16,10 +17,14 @@ mod find;
 mod git;
 mod highlight;
 mod keymap;
+#[cfg(test)]
+mod keys_tests;
 mod layout;
 mod local_explorer;
 mod login_item;
 mod mcp_page;
+mod memory;
+mod menu_icons;
 #[cfg(test)]
 mod menu_tests;
 mod menus;
@@ -51,6 +56,10 @@ mod welcome;
 mod workspace;
 
 use sawit_core::rt::Runtime;
+
+/// Large blocks go back to the system when freed ([`memory`]).
+#[global_allocator]
+static ALLOCATOR: memory::SawitAlloc = memory::SawitAlloc;
 
 /// GUI apps launched from Finder get a minimal PATH; adopt the login shell's
 /// so docker, brew and friends are found (as Zed does).

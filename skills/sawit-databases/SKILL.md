@@ -1,6 +1,6 @@
 ---
 name: sawit-databases
-description: Local databases through Sawit instead of Docker, docker compose, Postgres.app or brew services. Use it when a project needs a PostgreSQL database for development or tests, a DATABASE_URL in .env, a schema, migration or seed applied, or rows read or changed, or when it uses Cloudflare D1 or a SQLite file. Works through the sawit MCP server's database tools (create_instance, start_instance, query, execute_sql, write_env, detect_databases).
+description: Local databases through Sawit instead of Docker, docker compose, Postgres.app or brew services. Use it when a project needs a PostgreSQL database for development or tests, a DATABASE_URL in .env, a schema, migration or seed applied, rows read or changed, data exported, backed up or imported, or when it uses Cloudflare D1 or a SQLite file. Works through the sawit MCP server's database tools (create_instance, start_instance, query, execute_sql, write_env, detect_databases), without the app.
 ---
 
 # Databases with Sawit
@@ -21,9 +21,21 @@ Sawit runs PostgreSQL itself, versions 16 to 18, with no Docker and no container
 - `execute_sql`: read-write with full privileges, several statements allowed. Only for changes the task needs, never on data the user didn't ask you to touch.
 - `describe_schema`, `describe_table`, `list_databases` and `list_connections` show the shape before you write SQL; `database` picks one other than `postgres`.
 - `schema_diagram` draws the tables and foreign keys (`format`: mermaid, dbml or svg).
-- `instance_logs` when the server misbehaves; `list_instances`, `stop_instance` and `restart_instance` for the rest.
-- `export_table` and `export_query` (CSV or Excel), `backup_database` (pg_dump) and `import_csv` move data out and in.
-- `app_open_table` and `app_open_sql` show it to the user in the app.
+- `instance_logs` when the server misbehaves; `list_instances`, `stop_instance` and `restart_instance` for the rest; `list_postgres_binaries` shows the PostgreSQL versions on this Mac.
+- `export_table` and `export_query` (CSV or Excel, to `path`), `backup_database` (pg_dump; a `schema` or `table` alone) and `import_csv` (all rows or none) move data out and in. They never write over a file unless `overwrite`.
+- `refresh_materialized_view` refreshes one view.
+- `app_open_table`, `app_open_sql` and `app_open_diagram` show it to the user in the app; `app_instance` starts or stops an instance from its tab.
+
+## Saved connections
+
+`list_connections` lists the user's saved connections (a server elsewhere, a staging database). `save_connection` with `name` and `url` adds one, and its password goes to the Keychain; `remove_connection` needs `confirm` equal to the name. Pass a connection's name as `target` like an instance's. A saved connection may be a shared or production server: read with `query`, and ask before any write.
+
+## Destructive tools
+
+Each needs `confirm`, the name typed again: ask the user first, and name exactly what goes.
+
+- `drop_database` deletes a database; `drop_relation` a table, view or sequence (`cascade` takes what depends on it too); `truncate_table` empties a table.
+- `remove_instance` deletes an instance; `delete_data` also deletes its data folder, which can't be undone.
 
 ## D1 and SQLite
 

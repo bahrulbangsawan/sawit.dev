@@ -9,6 +9,7 @@ use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
 use sawit_core::app_control::{self, Command};
 use sawit_core::new_project;
+use sawit_core::stack_builder::version::{self, CliVersions};
 use sawit_core::stack_builder::{self, Category, Choices, PRESETS, Resolved, Stack};
 use serde_json::{Map, Value, json};
 
@@ -85,6 +86,10 @@ pub struct StackCreateArgs {
     )]
     pub open: Option<bool>,
     #[schemars(
+        description = "The create-better-t-stack version to run (x.y.z), for this create only. Default: the one the New Project page uses (stack_options' cli.in_use: the pinned one, or the newer one the user chose with Upgrade). Only the user changes the page's version"
+    )]
+    pub cli_version: Option<String>,
+    #[schemars(
         description = "Must be true: creating downloads create-better-t-stack and the project's packages from the internet, and runs their install scripts"
     )]
     pub confirm: bool,
@@ -118,7 +123,7 @@ impl StackArgs {
 
 /// Every category with its options, the presets and the default stack, as `stack_options`
 /// answers.
-pub fn options_json() -> Value {
+pub fn options_json(cli: &CliVersions) -> Value {
     let categories: Vec<Value> = Category::ALL
         .iter()
         .map(|&c| {
@@ -144,7 +149,15 @@ pub fn options_json() -> Value {
         })
         .collect();
     json!({
-        "cli": format!("create-better-t-stack {}", stack_builder::CLI_VERSION),
+        "cli": {
+            "package": "create-better-t-stack",
+            "in_use": cli.in_use(),
+            "pinned": stack_builder::CLI_VERSION,
+            "latest": cli.latest,
+            "upgrade_available": cli.upgrade(),
+            "options_diff": cli.diff.as_ref().filter(|_| cli.chosen.is_some()),
+            "note": "Only the user upgrades, with the New Project page's Upgrade button; stack_create's cli_version runs another version for one create.",
+        },
         "upstream_commit": stack_builder::UPSTREAM_COMMIT,
         "categories": categories,
         "presets": presets,
@@ -176,6 +189,14 @@ pub fn check_json(resolved: &Resolved) -> Value {
     })
 }
 
+/// Seconds since 1970, for the daily version check.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 impl Sawit {
     pub async fn stack_check_tool(&self, a: StackArgs) -> CallToolResult {
         let stack = tri!(a.choices().stack());
@@ -191,6 +212,21 @@ impl Sawit {
         let location = expand_home(a.location.trim());
         let stack = tri!(a.stack.choices().stack());
         let resolved = stack_builder::resolve(&stack);
+        let cli = CliVersions::load(&self.paths);
+        let version = match a.cli_version.as_deref().map(str::trim) {
+            Some(v) if version::stable(v).is_none() => {
+                return fail(format!(
+                    "cli_version is a release such as 3.49.0, not “{v}”."
+                ));
+            }
+            Some(v) => v.to_string(),
+            None => cli.in_use().to_string(),
+        };
+        if cli.chosen.as_deref() == Some(version.as_str())
+            && let Some(why) = cli.refuses(&resolved.stack)
+        {
+            return fail(format!("Nothing was created: {why}"));
+        }
         // Checked here too, so an agent hears it before the app is involved.
         let dir = tri!(new_project::target(&location, &resolved.stack));
         if app_control::is_running(&self.paths) {
@@ -198,6 +234,7 @@ impl Sawit {
                 location,
                 stack: resolved.stack.clone(),
                 open: a.open.unwrap_or(true),
+                cli_version: a.cli_version.as_ref().map(|_| version.clone()),
             };
             let mut reply = tri!(self.app_call(None, command).await);
             if !resolved.changes.is_empty() {
@@ -207,7 +244,7 @@ impl Sawit {
         }
         let lines = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = lines.clone();
-        let made = new_project::create(&location, &resolved.stack, move |line| {
+        let made = new_project::create(&location, &resolved.stack, &version, move |line| {
             let mut lines = sink.lock().unwrap_or_else(|e| e.into_inner());
             lines.push(line);
             if lines.len() > OUTPUT_LINES {
@@ -216,7 +253,7 @@ impl Sawit {
         })
         .await;
         let output = lines.lock().unwrap_or_else(|e| e.into_inner()).join("\n");
-        let command = new_project::shell_line(&location, &resolved.stack);
+        let command = new_project::shell_line_at(&location, &resolved.stack, &version);
         match made {
             Ok(dir) => ok(format!(
                 "Created {} (the Sawit app isn't running, so it ran here).\n$ {command}\n{output}\n\nOpen it with app_open or `sawit {}`.",
@@ -238,10 +275,12 @@ impl Sawit {
 #[tool_router(router = new_project_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "List the New Project page's stack builder (Better-T-Stack's, create-better-t-stack 3.49.0): every category in order with its options (id, name, description, whether it is the default or experimental, whether the category takes several), the presets (MERN, PERN, T3, Uniwind) with their stacks and commands, and the default stack. Works without the app"
+        description = "List the New Project page's stack builder (Better-T-Stack's, ported from create-better-t-stack 3.49.0): `cli` says the version in use (the pinned one, or a newer one the user chose with Upgrade), npm's latest (asked at most once a day) and what the version in use dropped; then every category in order with its options (id, name, description, whether it is the default or experimental, whether the category takes several), the presets (MERN, PERN, T3, Uniwind) with their stacks and commands, and the default stack. Works without the app"
     )]
     async fn stack_options(&self) -> CallToolResult {
-        ok(pretty(&options_json()))
+        let paths = self.paths.clone();
+        let cli = version::check(&paths, unix_now()).await;
+        ok(pretty(&options_json(&cli)))
     }
 
     #[tool(
@@ -278,7 +317,7 @@ mod tests {
     /// Every category and option, the four presets with their commands, and the default stack.
     #[test]
     fn the_options_list_everything_the_page_shows() {
-        let options = options_json();
+        let options = options_json(&CliVersions::default());
         let categories = options["categories"].as_array().unwrap();
         assert_eq!(categories.len(), 17);
         assert_eq!(categories[0]["id"], "webFrontend");
@@ -361,12 +400,18 @@ mod tests {
                 ..Default::default()
             },
             open: None,
+            cli_version: None,
             confirm,
         };
         let r = sawit.stack_create_tool(create("shop", false)).await;
         assert_eq!(r.is_error, Some(true));
         assert!(said(&r).contains("confirm=true"), "{}", said(&r));
         let r = sawit.stack_create_tool(create("taken", true)).await;
+        // A version that isn't a release never reaches a shell.
+        let mut odd = create("shop", true);
+        odd.cli_version = Some("3.49.0; rm -rf ~".into());
+        let refused = said(&sawit.stack_create_tool(odd).await);
+        assert!(refused.contains("cli_version is a release"), "{refused}");
         assert_eq!(r.is_error, Some(true));
         assert!(said(&r).contains("already exists"), "{}", said(&r));
         assert!(!dir.join("shop").exists());

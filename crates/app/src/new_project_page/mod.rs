@@ -10,6 +10,7 @@ mod create;
 mod left;
 mod render;
 mod stack;
+mod upgrade;
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -140,6 +141,8 @@ pub struct NewProjectPage {
     last_filter: String,
     /// Where the choices are kept between openings; none in tests.
     paths: Option<AppPaths>,
+    /// The CLI's versions: in use, latest, an upgrade ([`upgrade`]).
+    cli: upgrade::CliState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -158,7 +161,8 @@ impl NewProjectPage {
             .filter(|l| l.is_dir())
             .unwrap_or_else(|| new_project::default_location(open_project.as_deref(), &home));
         let mut this = Self::blank(kept.stack, location, cx);
-        this.paths = Some(paths);
+        this.paths = Some(paths.clone());
+        this.check_cli(paths, cx);
         this.make_inputs(window, cx);
         this.detect(cx);
         Self::register(window, cx);
@@ -187,6 +191,7 @@ impl NewProjectPage {
             filter: None,
             last_filter: String::new(),
             paths: None,
+            cli: Default::default(),
             _subscriptions: Vec::new(),
         }
     }

@@ -1,26 +1,16 @@
-//! The bar over a selected artboard (a frame of layers right on its page), in the screen bar's
-//! place and style: Export HTML, Export React and Send to Agent…. Over several frames selected
-//! (screens or artboards) it holds Send Flow to Agent…, which hands them off as one flow, in
-//! canvas order.
+//! The bar over a selected artboard (a frame of layers right on its page), on the canvas's one
+//! floating bar like the screen bar (B13): Export ▾ (HTML, React, PNG, SVG) | Send to Agent ▾.
+//! Over several frames selected (screens or artboards) it holds Send Flow to Agent ▾, which hands
+//! them off as one flow, in canvas order.
 
 use figcraft_doc::NodeId;
-use gpui_kit::component::*;
 use gpui_kit::*;
-use sawit_board::context_bar as model;
 use sawit_board::{frame_code, screens};
 
-use gpui_kit::component::button::*;
-use gpui_kit::component::menu::DropdownMenu as _;
-
-use super::bar::{agents_menu, export_button};
+use super::bar::{export_button, send_button};
 use crate::board::BoardView;
-use crate::board::toolbar::{self, divider};
-
-/// The bar's height and widths (one frame, a flow), and the room above the frames.
-const HEIGHT: f64 = 40.;
-const WIDTH: f64 = 360.;
-const FLOW_WIDTH: f64 = 220.;
-const ABOVE: f64 = 34.;
+use crate::board::float_bar::{self, FloatBar};
+use crate::board::toolbar;
 
 impl BoardView {
     /// The frames the frame bar is for: one artboard selected alone, or several frames (screens
@@ -53,6 +43,7 @@ impl BoardView {
 /// text or busy with a gesture.
 pub(in crate::board) fn render_frame_bar(
     view: &mut BoardView,
+    window: &mut Window,
     cx: &mut Context<BoardView>,
 ) -> Option<impl IntoElement + use<>> {
     if view.editing_text() || view.preview_open() {
@@ -76,55 +67,26 @@ pub(in crate::board) fn render_frame_bar(
     let (x1, _) = ds.view.page_to_screen(bx1, by0);
     let under = f64::from(toolbar::BOTTOM + toolbar::HEIGHT);
     let canvas = (ds.view.vw, ds.view.vh - under);
-    let flow = frames.len() > 1;
-    let width = if flow { FLOW_WIDTH } else { WIDTH }
-        .min(canvas.0 - 2.0 * model::MARGIN)
-        .max(0.0);
-    let (x, y) = model::clamp_anchor(
-        ((x0 + x1) / 2.0, y0 - ABOVE - HEIGHT),
-        (width, HEIGHT),
-        canvas,
-    );
+    let top_centre = ((x0 + x1) / 2.0, y0 - float_bar::ABOVE - float_bar::HEIGHT);
     view.find_agents(cx);
     let agents = view.screen_ui.agents.clone();
+    let folder = view.handoff_folder(&frames);
     let this = cx.entity().downgrade();
-    let theme = cx.theme();
-    let line = theme.border;
-    let label = if flow {
-        "Send Flow to Agent…"
-    } else {
-        "Send to Agent…"
+    let label = match frames.len() > 1 {
+        true => "Send Flow to Agent",
+        false => "Send to Agent",
     };
-    let (to_agent, targets) = (this.clone(), frames.clone());
-    let send = Button::new("frame-bar-send")
-        .ghost()
-        .small()
-        .label(label)
-        .dropdown_caret(true)
-        .dropdown_menu(move |menu, _, _| agents_menu(menu, &targets, &agents, &to_agent));
-    let mut bar = h_flex()
-        .id("frame-bar")
-        .debug_selector(|| "frame-bar".into())
-        .occlude()
-        .absolute()
-        .left(px((x - width / 2.0) as f32))
-        .top(px(y as f32))
-        .w(px(width as f32))
-        .h(px(HEIGHT as f32))
-        .px_1()
-        .gap_0p5()
-        .rounded(px(10.))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.popover)
-        .text_color(theme.popover_foreground)
-        .shadow_md()
-        .overflow_x_scroll();
+    let mut bar = FloatBar::new("frame-bar");
     if let [frame] = frames.as_slice() {
         bar = bar
-            .child(export_button(this.clone(), "frame-bar-html", *frame, false))
-            .child(export_button(this, "frame-bar-react", *frame, true))
-            .child(divider(line));
+            .button(export_button(
+                this.clone(),
+                "frame-bar-export",
+                *frame,
+                false,
+            ))
+            .divider();
     }
-    Some(bar.child(send))
+    let send = send_button("frame-bar-send", label, frames, agents, folder, this);
+    Some(bar.button(send).render(top_centre, canvas, window, cx))
 }

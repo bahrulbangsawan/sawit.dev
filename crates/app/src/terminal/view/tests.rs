@@ -78,7 +78,8 @@ const SHELL_KEYS: &[&str] = &[
 ];
 
 /// Non-⌘ keys the app deliberately takes over a focused terminal.
-const APP_KEYS: &[&str] = &["ctrl-tab", "ctrl-shift-tab"];
+// ⌥Tab and ⌥⇧Tab move between the terminal and the tabs (B5); few programs use them.
+const APP_KEYS: &[&str] = &["ctrl-tab", "ctrl-shift-tab", "alt-tab", "alt-shift-tab"];
 
 /// Shell keys the terminal takes only at a shell prompt, and only in a split tab: anywhere
 /// else their action hands the key on to the program (see the tab's tests).

@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Escape, Input};
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
@@ -20,6 +20,10 @@ use super::{
     Request, RevealInFinder, Row, RowsOf, Trash, TrashWithoutAsking, Undo, ViewHistory,
 };
 use crate::states::{Banner, Placeholder};
+
+mod menu;
+
+use menu::file_menu;
 
 const ROW_HEIGHT: f32 = 22.;
 
@@ -422,41 +426,4 @@ pub(super) struct MenuState {
     undo: bool,
     redo: bool,
     pub(super) git: bool,
-}
-
-fn file_menu(menu: PopupMenu, focus: FocusHandle, can: MenuState) -> PopupMenu {
-    menu.action_context(focus)
-        .menu("New File", Box::new(NewFile))
-        .menu("New Folder", Box::new(NewFolder))
-        .separator()
-        .menu("Reveal in Finder", Box::new(RevealInFinder))
-        .menu("Open in Default App", Box::new(OpenInDefaultApp))
-        .menu("Open in Terminal", Box::new(OpenInTerminal))
-        .separator()
-        .menu("Find in Folder…", Box::new(FindInFolder))
-        .separator()
-        .menu("Cut", Box::new(Cut))
-        .menu("Copy", Box::new(CopyEntry))
-        .menu("Duplicate", Box::new(Duplicate))
-        .menu_with_disabled("Paste", Box::new(Paste), !can.paste)
-        .menu_with_disabled("Undo", Box::new(Undo), !can.undo)
-        .menu_with_disabled("Redo", Box::new(Redo), !can.redo)
-        .separator()
-        .menu("Copy Path", Box::new(CopyPath))
-        .menu("Copy Relative Path", Box::new(CopyRelativePath))
-        .separator()
-        .menu_with_disabled("Add to .gitignore", Box::new(AddToGitignore), !can.git)
-        .menu_with_disabled(
-            "Add to .git/info/exclude",
-            Box::new(AddToGitExclude),
-            !can.git,
-        )
-        .menu_with_disabled("View History", Box::new(ViewHistory), !can.git)
-        .separator()
-        .menu("Rename", Box::new(Rename))
-        .menu("Trash", Box::new(Trash))
-        .menu("Delete", Box::new(Delete))
-        .separator()
-        .menu("Expand All", Box::new(ExpandAll))
-        .menu("Collapse All", Box::new(CollapseAll))
 }

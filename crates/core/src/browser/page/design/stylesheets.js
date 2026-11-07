@@ -12,7 +12,10 @@
     }
   };
   const isRootSelector = (sel) => (sel || "").split(",").some((part) => /^\s*(:root|html)\s*$/i.test(part));
-  const newRules = () => ({ faces: [], faceKeys: new Set(), variables: new Map(), breakpoints: new Set(), focusVisible: null, focus: null });
+  const newRules = () => ({ faces: [], faceKeys: new Set(), variables: new Map(), breakpoints: new Set(), rings: { visible: [], plain: [] }, ringFound: {} });
+  // A ring as normColor writes an opaque colour: Rust takes the first ring that isn't
+  // transparent, so the rules after it don't matter.
+  const OPAQUE_RING = /^rgb\(\d+, \d+, \d+\)$/;
   // Reads one sheet's rules into `acc`; nested sheets (@import) a page can't read go to `blocked`.
   const readRules = (rules, base, acc, blocked) => {
     for (const rule of rules) {
@@ -41,7 +44,7 @@
           const re = /url\(\s*(["']?)(.*?)\1\s*\)/g;
           let m;
           while ((m = re.exec(st.getPropertyValue("src")))) {
-            if (m[2].startsWith("data:") && m[2].length > MAX_DATA_URL) continue;
+            if (m[2].startsWith("data:") && m[2].length > LIMITS.data_url) continue;
             src.push(absUrl(m[2], base));
           }
           acc.faceKeys.add(key);
@@ -54,7 +57,8 @@
           const st = rule.style;
           if (isRootSelector(sel)) {
             const root = getComputedStyle(document.documentElement);
-            for (let i = 0; i < st.length && acc.variables.size < MAX_VARIABLES; i++) {
+            // Every variable: Rust keeps the first ones (site_design::page::MAX_VARIABLES).
+            for (let i = 0; i < st.length; i++) {
               const name = st[i];
               if (!name.startsWith("--") || acc.variables.has(name)) continue;
               const value = root.getPropertyValue(name).trim() || st.getPropertyValue(name).trim();
@@ -62,10 +66,13 @@
             }
           }
           if (/:focus(-visible)?(?![\w-])/.test(sel)) {
-            const which = sel.includes(":focus-visible") ? "focusVisible" : "focus";
-            if (!acc[which]) {
+            const which = sel.includes(":focus-visible") ? "visible" : "plain";
+            if (!acc.ringFound[which]) {
               const ring = normColor(st.getPropertyValue("outline-color"));
-              if (ring && !transparent(ring)) acc[which] = ring;
+              if (ring) {
+                acc.rings[which].push(ring);
+                if (OPAQUE_RING.test(ring)) acc.ringFound[which] = true;
+              }
             }
           }
           if (rule.cssRules && rule.cssRules.length) readRules(rule.cssRules, base, acc, blocked);
@@ -76,11 +83,12 @@
       } catch (_) {}
     }
   };
-  const rulesOut = (acc) => ({
+  // `note` keeps the rings' readings (see newReadings).
+  const rulesOut = (acc, note) => ({
     font_faces: acc.faces,
     variables: [...acc.variables],
-    breakpoints: [...acc.breakpoints].sort((a, b) => a - b),
-    focus_ring: acc.focusVisible || acc.focus,
+    breakpoints: [...acc.breakpoints],
+    focus_rings: { visible: acc.rings.visible.map(note), plain: acc.rings.plain.map(note) },
   });
   // The page's own sheets, with the ones it can't read (cross-origin) apart.
   const pageSheets = () => {

@@ -4,7 +4,7 @@
   // this world's `getDisplayMedia` is a canvas stream fed by the app's JPEG frames, pulled one at
   // a time and drawn through `createImageBitmap` (no data: URL a CSP could block). WebKit's WebM
   // can't be seeked, so MediaRecorder has none and records MP4; VideoEncoder gets an H.264 level
-  // that fits the frame (Rust: `mesurer::files::avc_codec_for`).
+  // that fits the frame, which Rust works out (`mesurer::files::codec_for_page`).
   PROPS.captureVisibleTab = async () => {
     const shot = await bridge("capture.visible");
     return new Blob([base64ToBytes(shot.png_base64)], { type: "image/png" });
@@ -87,33 +87,13 @@
     const supported = MediaRecorder.isTypeSupported.bind(MediaRecorder);
     Object.defineProperty(MediaRecorder, "isTypeSupported", method((type) => !/webm/i.test(String(type)) && supported(type)));
   }
-  // H.264's levels (Table A-1): level_idc, the most macroblocks in a frame and in a second.
-  const AVC_LEVELS = [[10, 99, 1485], [11, 396, 3000], [12, 396, 6000], [13, 396, 11880], [20, 396, 11880],
-    [21, 792, 19800], [22, 1620, 20250], [30, 1620, 40500], [31, 3600, 108000], [32, 5120, 216000],
-    [40, 8192, 245760], [41, 8192, 245760], [42, 8704, 522240], [50, 22080, 589824], [51, 36864, 983040],
-    [52, 36864, 2073600], [60, 139264, 4177920], [61, 139264, 8355840], [62, 139264, 16711680]];
-  const avcFits = (level, width, height, fps) => {
-    const row = AVC_LEVELS.find((l) => l[0] === level);
-    if (!row) return false;
-    const w = Math.ceil(width / 16);
-    const h = Math.ceil(height / 16);
-    const side = Math.sqrt(row[1] * 8);
-    return w * h <= row[1] && w <= side && h <= side && w * h * (fps > 0 ? fps : 30) <= row[2];
-  };
-  // `codec` itself when it isn't AVC or fits; else its profile at the lowest level that fits.
-  const avcCodecFor = (codec, width, height, fps) => {
-    const m = /^avc1\.([0-9a-f]{4})([0-9a-f]{2})$/i.exec(String(codec));
-    if (!m) return codec;
-    const level = parseInt(m[2], 16);
-    if (avcFits(level, width, height, fps)) return codec;
-    const up = AVC_LEVELS.find((l) => l[0] > level && avcFits(l[0], width, height, fps));
-    return up ? `avc1.${m[1]}${up[0].toString(16).padStart(2, "0")}` : null;
-  };
   if (typeof VideoEncoder === "function" && typeof VideoEncoder.isConfigSupported === "function") {
     const ask = VideoEncoder.isConfigSupported.bind(VideoEncoder);
+    // The level comes from Rust (`capture.codec`); a codec that isn't a string is asked as it is.
     Object.defineProperty(VideoEncoder, "isConfigSupported", method(async (config) => {
-      if (!config) return ask(config);
-      const codec = avcCodecFor(config.codec, config.width, config.height, config.framerate);
+      if (!config || typeof config.codec !== "string") return ask(config);
+      const frame = { codec: config.codec, width: Number(config.width), height: Number(config.height), fps: Number(config.framerate) };
+      const { codec } = await bridge("capture.codec", frame);
       if (codec === null) return { supported: false, config };
       return ask(codec === config.codec ? config : Object.assign({}, config, { codec }));
     }));

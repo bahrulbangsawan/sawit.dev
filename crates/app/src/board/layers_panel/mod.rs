@@ -3,10 +3,11 @@
 //! makes its rows and works out where a dragged layer lands; this draws them, and runs what a
 //! click, a name typed or a drop asks for.
 //!
-//! - **Pages.** The page list comes first, under a header that folds it away and adds a page. A
+//! - **Find.** In the panel's head, under the Layers and Assets tabs (B15).
+//! - **Pages.** The page list comes next, under a header that folds it away and adds a page. A
 //!   click opens a page, a double-click renames it, and its context menu renames, duplicates or
 //!   deletes it ([`PageAction`]). A divider (an empty page named with a leading hyphen) is a line.
-//! - **Filter.** Under the pages, a field filters the layers by name. What it finds is listed under
+//! - **Filter.** The Find field filters the layers by name. What it finds is listed under
 //!   the layers that hold it, open, without changing which layers are open (ruling P4-C5): their
 //!   arrows do nothing while it filters, and clearing it gives the tree back as it was. A filter
 //!   that finds nothing says so.
@@ -97,6 +98,9 @@ const CLOSED_ICON: Lucide = Lucide::ChevronRight;
 const ADD_PAGE_ICON: Lucide = Lucide::Plus;
 /// The picture in the filter field.
 const FILTER_ICON: Lucide = Lucide::Search;
+/// A page's row, and the page on show's.
+const PAGE_ICON: Lucide = Lucide::File;
+const CURRENT_PAGE_ICON: Lucide = Lucide::Check;
 
 /// Every icon the panel shows but the layers' own ([`layer_icon`]), for the test that they are
 /// all embedded.
@@ -217,6 +221,8 @@ fn layer_icon(icon: LayerIcon) -> Lucide {
         LayerIcon::Ink => Lucide::PenLine,
         LayerIcon::Stamp => Lucide::Stamp,
         LayerIcon::Table => Lucide::Table,
+        LayerIcon::Screen => Lucide::AppWindow,
+        LayerIcon::Web => Lucide::Globe,
         LayerIcon::Other => Lucide::Slice,
     }
 }
@@ -420,26 +426,21 @@ pub(super) fn render_layers_panel(
         .text_color(theme.foreground)
         .text_sm()
         .child(tabs)
-        .children(header)
-        .children(pages)
+        // Find, in the panel's head: it filters the layers, or the assets (B15).
         .child(
-            div()
-                .flex_shrink_0()
-                .w_full()
-                .px_2()
-                .py_1p5()
-                .border_t_1()
-                .border_color(theme.border)
-                .child(
-                    div().debug_selector(|| "layers-filter".into()).child(
-                        Input::new(&filter).small().cleanable(true).prefix(
-                            Icon::new(FILTER_ICON)
-                                .xsmall()
-                                .text_color(theme.muted_foreground),
-                        ),
+            div().flex_shrink_0().w_full().px_2().pb_2().child(
+                div().debug_selector(|| "layers-filter".into()).child(
+                    Input::new(&filter).small().cleanable(true).prefix(
+                        Icon::new(FILTER_ICON)
+                            .xsmall()
+                            .text_color(theme.muted_foreground),
                     ),
                 ),
+            ),
         )
+        .children(header)
+        .children(pages)
+        .child(div().flex_shrink_0().h(px(1.)).mx_2().bg(theme.border))
         .child(tree)
 }
 

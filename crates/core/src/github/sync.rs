@@ -27,6 +27,11 @@ pub enum FileState {
     OnlyHere,
     #[serde(rename = "only_on_github")]
     OnlyOnGitHub,
+    /// Synced before, now gone here and unchanged on GitHub: an upload deletes it there.
+    DeletedHere,
+    /// Synced before, now gone on GitHub and unchanged here: a download deletes it here.
+    #[serde(rename = "deleted_on_github")]
+    DeletedOnGitHub,
 }
 
 impl FileState {
@@ -39,17 +44,25 @@ impl FileState {
             FileState::ChangedOnBoth => "Changed on Both",
             FileState::OnlyHere => "Only Here",
             FileState::OnlyOnGitHub => "Only on GitHub",
+            FileState::DeletedHere => "Deleted Here",
+            FileState::DeletedOnGitHub => "Deleted on GitHub",
         }
     }
 
     /// An upload would send it without overwriting a change made on GitHub.
     pub fn uploads(self) -> bool {
-        matches!(self, FileState::ChangedHere | FileState::OnlyHere)
+        matches!(
+            self,
+            FileState::ChangedHere | FileState::OnlyHere | FileState::DeletedHere
+        )
     }
 
     /// A download would bring it in without overwriting a change made here.
     pub fn downloads(self) -> bool {
-        matches!(self, FileState::ChangedOnGitHub | FileState::OnlyOnGitHub)
+        matches!(
+            self,
+            FileState::ChangedOnGitHub | FileState::OnlyOnGitHub | FileState::DeletedOnGitHub
+        )
     }
 }
 
@@ -123,8 +136,19 @@ pub fn plan_sync(
                     Some(b) if b == r => FileState::ChangedHere,
                     _ => FileState::ChangedOnBoth,
                 },
-                (Some(_), None) => FileState::OnlyHere,
-                (None, _) => FileState::OnlyOnGitHub,
+                // Synced before and gone on one side: a delete there, carried over when the
+                // other side hasn't changed since; changed there, it is a conflict.
+                (Some(l), None) => match then {
+                    Some(b) if b == l => FileState::DeletedOnGitHub,
+                    Some(_) => FileState::ChangedOnBoth,
+                    None => FileState::OnlyHere,
+                },
+                (None, Some(r)) => match then {
+                    Some(b) if b == r => FileState::DeletedHere,
+                    Some(_) => FileState::ChangedOnBoth,
+                    None => FileState::OnlyOnGitHub,
+                },
+                (None, None) => FileState::OnlyOnGitHub,
             };
             (path.clone(), state)
         })

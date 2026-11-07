@@ -1,8 +1,14 @@
   // ---- scan ----
 
   const ASSET_LABEL_ATTRS = ["alt", "aria-label", "title"];
-  const scan = () => {
+  // What the last scan left for `scan_samples`: its button looks' elements, and the input,
+  // card, nav and link it picked.
+  let toSample = null;
+  const scan = (op) => {
+    useLimits(op);
     resetFonts();
+    const readings = newReadings();
+    const note = readings.note;
     const colors = new Map();
     const texts = new Map();
     const spacing = new Map();
@@ -25,9 +31,10 @@
       }
       return entry;
     };
+    // Every colour, transparent ones too: Rust drops those (site_design::page::plan).
     const addColor = (value, role, ctx) => {
-      if (transparent(value)) return;
-      const c = bump(colors, value + "\n" + role, () => ({ value, role, count: 0, on_button: 0, on_link: 0 }));
+      if (!value) return;
+      const c = bump(colors, value + "\n" + role, () => ({ value: note(value), role, count: 0, on_button: 0, on_link: 0 }));
       c.count++;
       if (ctx && buttonLike(ctx)) c.on_button++;
       else if (ctx && ctx.localName === "a") c.on_link++;
@@ -63,11 +70,11 @@
       return (url && fileName(url)) || (el ? el.localName : "asset");
     };
     const addAsset = (kind, url, svg, el, extra) => {
-      if (url && url.startsWith("data:") && url.length > MAX_DATA_URL) return;
+      if (url && url.startsWith("data:") && url.length > LIMITS.data_url) return;
       const key = kind === "lottie" || kind === "icon" || kind === "video" ? kind + "\n" + (url || svg) : (url || svg);
       let a = assetByKey.get(key);
       if (!a) {
-        if (assets.length >= MAX_ASSETS) return;
+        if (assets.length >= LIMITS.assets) return;
         const logo = !!el && isLogo(el, url);
         a = {
           kind,
@@ -96,7 +103,7 @@
         if (url) addAsset(isSvgUrl(url) ? "svg" : "image", url, null, el, { width: el.naturalWidth, height: el.naturalHeight });
       } else if (tag === "svg" && !el.ownerSVGElement) {
         const markup = el.outerHTML || "";
-        if (markup && markup.length <= MAX_SVG) {
+        if (markup && markup.length <= LIMITS.svg) {
           const icon = rect.width <= 48 && rect.height <= 48;
           addAsset(icon ? "icon" : "svg", null, markup, el, { width: rect.width, height: rect.height });
         }
@@ -125,15 +132,21 @@
       const c = bump(map, key, () => ({ el, count: 0 }));
       c.count++;
     };
-    const componentsOf = (el, s, rect) => {
+    // A button look counts the elements that are filled or have a border; which are filled
+    // waits on Rust's reading of the background, so both counts go, with where each starts.
+    const componentsOf = (el, s, rect, at) => {
       const tag = el.localName;
       if (buttonLike(el)) {
         const bg = s.backgroundColor;
-        const filled = !transparent(bg);
-        if (filled || hasBorder(s)) {
-          const key = [bg, s.color, radiusOf(s), shorthand(sides(s, "padding", ""))].join("|");
-          const c = bump(buttons, key, () => ({ el, count: 0, chromatic: filled && chroma(bg) >= 0.03 }));
-          c.count++;
+        const key = [bg, s.color, radiusOf(s), shorthand(sides(s, "padding", ""))].join("|");
+        const c = bump(buttons, key, () => ({ background: note(bg), count: 0, first: at, bordered: 0, first_bordered: null, el, elBordered: null }));
+        c.count++;
+        if (hasBorder(s)) {
+          if (!c.bordered) {
+            c.first_bordered = at;
+            c.elBordered = el;
+          }
+          c.bordered++;
         }
       } else if (tag === "a" && (!hasMain || el.closest("main, [role=main]"))) {
         addCandidate(links, [s.color, s.textDecorationLine, s.fontWeight, s.fontSize].join("|"), el);
@@ -161,7 +174,7 @@
       let walked = 0;
       let el = walker.currentNode;
       while (el) {
-        if (++walked > MAX_WALKED || visited >= MAX_ELEMENTS) {
+        if (++walked > LIMITS.walked || visited >= LIMITS.elements) {
           truncated = true;
           break;
         }
@@ -195,20 +208,17 @@
               addColor(s.color, "text", ctx);
               const bucket = buttonLike(ctx) ? "button" : tag;
               const inMain = !!el.closest("main, [role=main]");
-              const size = num(s.fontSize);
-              const weight = Math.round(num(s.fontWeight)) || 400;
-              const lh = s.lineHeight === "normal" ? null : round3(num(s.lineHeight));
-              const ls = s.letterSpacing === "normal" ? null : round3(num(s.letterSpacing));
-              const key = [bucket, s.fontFamily, size, weight, lh, ls, s.color, inMain].join("\n");
+              // As computed: Rust reads the numbers and groups them (site_design::page).
+              const key = [bucket, s.fontFamily, s.fontSize, s.fontWeight, s.lineHeight, s.letterSpacing, s.color, inMain].join("\n");
               const t = bump(texts, key, () => ({
                 tag: bucket,
                 in_main: inMain,
                 family: s.fontFamily,
                 used_family: usedFamily(s.fontFamily),
-                size,
-                weight,
-                line_height: lh,
-                letter_spacing: ls,
+                size: s.fontSize,
+                weight: s.fontWeight,
+                line_height: s.lineHeight,
+                letter_spacing: s.letterSpacing,
                 color: s.color,
                 chars: 0,
               }));
@@ -231,13 +241,13 @@
             }
             // Spacing, radii, shadows.
             for (const v of [...sides(s, "margin", ""), ...sides(s, "padding", ""), num(s.rowGap), num(s.columnGap)]) {
-              if (v > 0) count(spacing, round(v, 0.5));
+              if (v > 0) count(spacing, v);
             }
             const radius = radiusOf(s);
             if (!zeroRadius(radius)) count(radii, radius);
             if (s.boxShadow && s.boxShadow !== "none") count(shadows, s.boxShadow);
             assetsOf(el, s, rect);
-            componentsOf(el, s, rect);
+            componentsOf(el, s, rect, visited);
           }
         } catch (_) {}
         el = walker.nextNode();
@@ -282,108 +292,99 @@
         readRules(list, base, acc, blocked);
       } catch (_) {}
     }
-    const sheetRules = rulesOut(acc);
+    const sheetRules = rulesOut(acc, note);
 
-    // Body background: the body's, else the root's.
-    let bodyBackground = null;
+    // Body background: the body's, else the root's (Rust picks).
+    let bodyBackgrounds = [];
     try {
       const b = document.body && getComputedStyle(document.body).backgroundColor;
       const h = getComputedStyle(document.documentElement).backgroundColor;
-      bodyBackground = !transparent(b) ? b : !transparent(h) ? h : null;
+      bodyBackgrounds = [note(b) || null, note(h) || null];
     } catch (_) {}
 
     let manifest = null;
     const manifestLink = document.querySelector("link[rel~=manifest][href]");
     if (manifestLink) manifest = absUrl(manifestLink.getAttribute("href"));
 
-    // Components: one sample each.
-    const top = (map, ok) => {
-      let best = null;
-      for (const [key, c] of map) if ((!ok || ok(c, key)) && (!best || c.count > best[1].count)) best = [key, c];
-      return best;
-    };
-    const components = [];
-    const sample = (kind, el) => {
-      if (!el) return;
-      try {
-        const s = getComputedStyle(el);
-        components.push({
-          kind,
-          selector: helpers.selectorFor(el),
-          html: inlinedHtml(el),
-          style: {
-            background: s.backgroundColor,
-            color: s.color,
-            radius: radiusOf(s),
-            padding: shorthand(sides(s, "padding", "")),
-            font_family: s.fontFamily,
-            font_size: num(s.fontSize),
-            font_weight: Math.round(num(s.fontWeight)) || 400,
-            height: round3(el.getBoundingClientRect().height),
-            border: s.borderTopWidth + " " + s.borderTopStyle + " " + s.borderTopColor,
-          },
-        });
-      } catch (_) {}
-    };
-    const primary = top(buttons, (c) => c.chromatic);
-    if (primary) {
-      sample("button", primary[1].el);
-      const secondary = top(buttons, (_, key) => key !== primary[0]);
-      if (secondary) sample("button-secondary", secondary[1].el);
-    }
-    sample("input", input);
-    const card = top(cards);
-    if (card) sample("card", card[1].el);
+    // Components: Rust picks the button look, the card and the link (`scan_samples` samples
+    // them), the page the input and the nav.
     const visible = (el) => {
       if (!el || skipped(el)) return false;
       const r = el.getBoundingClientRect();
       return r.width > 0 && r.height > 0;
     };
-    const nav = [...document.querySelectorAll("header nav")].find(visible) || [...document.querySelectorAll("nav")].find(visible);
-    sample("nav", nav || null);
-    const link = top(links);
-    if (link) sample("link", link[1].el);
+    toSample = {
+      buttons: [...buttons.values()],
+      input,
+      cards: [...cards.values()],
+      nav: [...document.querySelectorAll("header nav")].find(visible) || [...document.querySelectorAll("nav")].find(visible) || null,
+      links: [...links.values()],
+    };
 
-    const byCount = (map) => [...map].sort((a, b) => b[1] - a[1]);
-    const out = {
+    return {
       url: location.href,
       title: document.title,
       viewport: [innerWidth, innerHeight],
       truncated,
-      colors: [...colors.values()].sort((a, b) => b.count - a.count).slice(0, MAX_COLORS),
-      texts: [...texts.values()].sort((a, b) => b.chars - a.chars).slice(0, MAX_TEXTS),
-      spacing: byCount(spacing),
-      radii: byCount(radii),
-      shadows: byCount(shadows),
-      body_background: bodyBackground,
-      focus_ring: sheetRules.focus_ring,
+      colors: [...colors.values()],
+      texts: [...texts.values()],
+      spacing: [...spacing],
+      radii: [...radii],
+      shadows: [...shadows],
+      body_backgrounds: bodyBackgrounds,
+      focus_rings: sheetRules.focus_rings,
       font_faces: sheetRules.font_faces,
       variables: sheetRules.variables,
       breakpoints: sheetRules.breakpoints,
       assets,
-      components,
+      buttons: [...buttons.values()].map((b) => ({ background: b.background, count: b.count, first: b.first, bordered: b.bordered, first_bordered: b.first_bordered })),
+      cards: [...cards.values()].map((c) => c.count),
+      links: [...links.values()].map((c) => c.count),
       blocked_sheets: [...blocked],
       manifest,
+      color_fallbacks: readings.fallbacks,
     };
-    // Over budget: halve the heaviest list until it fits.
-    const LISTS = ["assets", "components", "texts", "colors", "variables", "font_faces", "shadows", "radii", "spacing"];
-    const encoder = new TextEncoder();
-    const bytes = (v) => encoder.encode(JSON.stringify(v)).length;
-    let size = bytes(out);
-    for (let i = 0; i < 40 && size > MAX_ANSWER; i++) {
-      let heaviest = null;
-      let weight = 0;
-      for (const name of LISTS) {
-        const w = out[name].length ? bytes(out[name]) : 0;
-        if (w > weight) {
-          weight = w;
-          heaviest = name;
-        }
-      }
-      if (!heaviest) break;
-      out[heaviest] = out[heaviest].slice(0, Math.floor(out[heaviest].length / 2));
-      out.truncated = true;
-      size = bytes(out);
-    }
-    return out;
+  };
+  const sample = (into, kind, el) => {
+    if (!el) return;
+    try {
+      const s = getComputedStyle(el);
+      into.push({
+        kind,
+        selector: helpers.selectorFor(el),
+        html: inlinedHtml(el),
+        style: {
+          background: s.backgroundColor,
+          color: s.color,
+          radius: radiusOf(s),
+          padding: shorthand(sides(s, "padding", "")),
+          font_family: s.fontFamily,
+          font_size: num(s.fontSize),
+          font_weight: Math.round(num(s.fontWeight)) || 400,
+          height: round3(el.getBoundingClientRect().height),
+          border: s.borderTopWidth + " " + s.borderTopStyle + " " + s.borderTopColor,
+        },
+      });
+    } catch (_) {}
+  };
+  // {button, secondary, card, link}: what Rust picked. A button look is `{id, bordered}` (its
+  // index in the scan's `buttons`, and whether its first element with a border stands for it),
+  // a card or link its index in the scan's `cards` or `links`; null for none.
+  const scanSamples = (op) => {
+    useLimits(op);
+    const from = toSample;
+    if (!from) throw new Error("Scan the page first.");
+    const button = (pick) => {
+      const look = pick && from.buttons[pick.id];
+      return look ? (pick.bordered ? look.elBordered : look.el) : null;
+    };
+    const components = [];
+    sample(components, "button", button(op.button));
+    sample(components, "button-secondary", button(op.secondary));
+    sample(components, "input", from.input);
+    const at = (list, i) => (Number.isInteger(i) && list[i] ? list[i].el : null);
+    sample(components, "card", at(from.cards, op.card));
+    sample(components, "nav", from.nav);
+    sample(components, "link", at(from.links, op.link));
+    return { components };
   };

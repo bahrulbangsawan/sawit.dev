@@ -3,6 +3,7 @@
 //! selects text and copies it on release; Shift+drag selects even while a
 //! program (vim, Claude Code) has the mouse. Dropped files are typed as paths.
 
+mod activity;
 mod agent;
 mod copy_out;
 mod find;
@@ -19,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui_kit::*;
+use sawit_core::activity::Activity;
 use sawit_core::terminal::{
     AgentKind, MouseButton as TermButton, Palette, ProcessArgs, ScrollAccumulator, Session,
     TermEvent,
@@ -47,6 +49,8 @@ pub enum TerminalEvent {
     /// A coding agent started or ended in the foreground ([`TerminalView::agent`]).
     AgentChanged,
     Exited,
+    /// The pane's activity ([`TerminalView::activity`]) changed: its tab redraws its icon.
+    ActivityChanged,
     /// A right-click asked for the pane menu, at this window position.
     MenuRequested(Point<Pixels>),
     /// The terminal took the keyboard without a click on its pane (files
@@ -110,6 +114,18 @@ pub struct TerminalView {
     keyboard_at: Option<Instant>,
     /// The find bar and its matches ([`find`]).
     find: find::TerminalFind,
+    /// How the program ended, once the PTY saw it end with a status.
+    exit_status: Option<std::process::ExitStatus>,
+    /// The bell rang since the pane last drew with the keyboard in it.
+    bell: bool,
+    /// When the program last printed, not counting the echo of what the user typed.
+    last_output: Option<Instant>,
+    /// When the user last typed or pasted here: output right after is its echo.
+    typed_at: Cell<Option<Instant>>,
+    /// The pane's state as its tab's icon shows it, as last worked out.
+    activity: Activity,
+    /// A look at the activity, due once an agent's output has been quiet a while.
+    quiet_check: Option<Task<()>>,
     /// Stands in for what runs in the foreground (for tests).
     #[cfg(test)]
     fake_agent: Option<Option<AgentKind>>,
@@ -148,7 +164,11 @@ impl TerminalView {
                 let alive = this.update(cx, |this, cx| {
                     for event in batch {
                         match event {
-                            TermEvent::Wakeup | TermEvent::Bell => {}
+                            TermEvent::Wakeup => this.saw_output(cx),
+                            TermEvent::Bell => {
+                                this.bell = true;
+                                this.refresh_activity(cx);
+                            }
                             TermEvent::Title(t) => {
                                 if !t.is_empty() {
                                     this.title = t.into();
@@ -157,9 +177,15 @@ impl TerminalView {
                                 }
                             }
                             TermEvent::Copy(text) => this.copy(text, cx),
-                            TermEvent::Exit => {
+                            TermEvent::Exit(status) => {
+                                // The loop's own stop comes after the child's: keep its status.
+                                this.exit_status = status.or(this.exit_status);
+                                let first = !this.exited;
                                 this.exited = true;
-                                cx.emit(TerminalEvent::Exited);
+                                this.refresh_activity(cx);
+                                if first {
+                                    cx.emit(TerminalEvent::Exited);
+                                }
                             }
                         }
                     }
@@ -200,6 +226,12 @@ impl TerminalView {
             agent_check: None,
             keyboard_at: None,
             find: Default::default(),
+            exit_status: None,
+            bell: false,
+            last_output: None,
+            typed_at: Cell::new(None),
+            activity: Activity::Idle,
+            quiet_check: None,
             #[cfg(test)]
             fake_agent: None,
             _events: task,
@@ -213,6 +245,7 @@ impl TerminalView {
     /// Sends raw input to the program, jumping back to the live screen.
     pub fn write(&self, bytes: Vec<u8>) {
         // Return at the shell's prompt starts a command: its output begins on the next row.
+        self.typed_at.set(Some(Instant::now()));
         if bytes.contains(&b'\r') && self.at_prompt() {
             self.command_mark.set(Some(self.session.cursor_mark()));
         }

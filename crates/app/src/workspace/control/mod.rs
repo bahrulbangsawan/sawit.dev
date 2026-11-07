@@ -137,24 +137,49 @@ impl Workspace {
                 command,
                 cwd,
                 new_tab,
+                close_when_done,
             } => {
                 let cwd = shell_folder(cwd)?;
-                let (tab, pane) = if cwd.is_some() || new_tab {
-                    self.leave_welcome(TERMINAL_ONLY, cx);
-                    self.layout.terminal = true;
-                    let dir = agent_shell_folder(cwd, &self.roots(cx), agent_folder, self.root(cx));
-                    self.terminal.update(cx, |t, cx| {
-                        t.run_in_new(dir, &command, Origin::Agent, window, cx)
-                    })?
-                } else {
-                    self.run_in_terminal(&command, Origin::Agent, window, cx)?
-                };
-                let pane = self.terminal.read(cx).pane_index(tab, pane, cx);
-                done(json!({ "terminal": tab, "pane": pane }))
+                self.leave_welcome(TERMINAL_ONLY, cx);
+                self.layout.terminal = true;
+                // A new tab without a folder starts in the agent's own project.
+                let new_dir =
+                    agent_shell_folder(None, &self.roots(cx), agent_folder, self.root(cx));
+                let agent_id = agent.map(|a| a.id.as_str());
+                let ran = self.terminal.update(cx, |t, cx| {
+                    t.run_for_agent(
+                        &command,
+                        cwd,
+                        new_dir,
+                        new_tab,
+                        close_when_done,
+                        agent_id,
+                        window,
+                        cx,
+                    )
+                })?;
+                cx.notify();
+                let pane = self.terminal.read(cx).pane_index(ran.tab, ran.pane, cx);
+                done(json!({
+                    "terminal": ran.tab,
+                    "pane": pane,
+                    "run": ran.run,
+                    "reused": ran.reused,
+                    "closes": ran.closes,
+                }))
             }
-            Command::TerminalRead { tab, pane, lines } => {
+            Command::TerminalRead {
+                tab,
+                pane,
+                lines,
+                run,
+            } => {
                 let lines = lines.unwrap_or(READ_LINES).clamp(1, MAX_READ_LINES);
-                let text = self.terminal.read(cx).text(tab, pane, lines, cx)?;
+                let terminal = self.terminal.read(cx);
+                let text = match run {
+                    Some(run) => terminal.run_text(run, lines, cx)?,
+                    None => terminal.text(tab, pane, lines, cx)?,
+                };
                 done(json!({ "text": text }))
             }
             Command::TerminalInput {
@@ -435,7 +460,8 @@ impl Workspace {
                 location,
                 stack,
                 open,
-            } => done(self.agent_new_project(location, stack, open, window, cx)?),
+                cli_version,
+            } => done(self.agent_new_project(location, stack, open, cli_version, window, cx)?),
         };
         cx.notify();
         result

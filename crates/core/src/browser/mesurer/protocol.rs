@@ -35,12 +35,29 @@ pub enum FromMesurer {
     /// A PNG for the pasteboard (a region screenshot). Lane 1.
     #[serde(rename = "clipboard.image")]
     ClipboardImage { png_base64: String },
-    /// A download (a screenshot or a recording). Lane 1; replies `{path}`.
+    /// A download (a screenshot or a recording). Lane 1; replies `{path}`. Its bytes come as
+    /// `base64` with their `mime`, or, for a `data:` link, as that address (`href`), read in Rust.
     #[serde(rename = "file.save")]
     FileSave {
         name: String,
+        #[serde(default)]
         mime: String,
+        #[serde(default)]
         base64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        href: Option<String>,
+    },
+    /// The codec `VideoEncoder` is asked for, given the frame (`files::codec_for_page`). Lane 1;
+    /// replies `{codec}`, null when no level fits.
+    #[serde(rename = "capture.codec")]
+    CaptureCodec {
+        codec: String,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
+        #[serde(default)]
+        fps: Option<f64>,
     },
     /// The visible page, as `captureVisibleTab` gives it. Lane 1.
     #[serde(rename = "capture.visible")]
@@ -86,7 +103,7 @@ pub enum ClearWhat {
 pub enum Lane {
     /// ready, log, store.*, clipboard.text.
     Foundation,
-    /// clipboard.image, file.save, capture.*, color.* (`browser/mesurer/capture.rs`).
+    /// clipboard.image, file.save, capture.* (codec, visible, frame), color.* (`browser/mesurer/capture.rs`).
     Capture,
     /// comments.* (`browser/mesurer/agents.rs`).
     Agents,
@@ -106,6 +123,7 @@ impl FromMesurer {
             Self::ClipboardText { .. } => "clipboard.text",
             Self::ClipboardImage { .. } => "clipboard.image",
             Self::FileSave { .. } => "file.save",
+            Self::CaptureCodec { .. } => "capture.codec",
             Self::CaptureVisible {} => "capture.visible",
             Self::CaptureFrame { .. } => "capture.frame",
             Self::ColorSample {} => "color.sample",
@@ -128,6 +146,7 @@ impl FromMesurer {
             | Self::ClipboardText { .. } => Lane::Foundation,
             Self::ClipboardImage { .. }
             | Self::FileSave { .. }
+            | Self::CaptureCodec { .. }
             | Self::CaptureVisible {}
             | Self::CaptureFrame { .. }
             | Self::ColorSample {}

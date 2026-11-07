@@ -237,11 +237,21 @@ impl Engine {
                 let _: () = msg_send![&*wk, _setOverrideDeviceScaleFactor: factor];
             }
         }
+        if has {
+            self.device_scale.set(factor);
+        }
         has
     }
 
     /// The backing scale of the screen the view is on (2 on a Retina screen), 2 while it is in no
     /// window.
+    /// How many pixels WebKit draws per view point: the device scale set, else the screen's.
+    pub fn pixels_per_point(&self) -> f64 {
+        self.device_scale
+            .get()
+            .unwrap_or_else(|| self.screen_scale())
+    }
+
     pub fn screen_scale(&self) -> f64 {
         let wk = self.webview.webview();
         wk.window().map_or(2., |w| w.backingScaleFactor())
