@@ -7,7 +7,7 @@ export function Hero() {
     <>
       <div className="newsb">
         <p className="news w">
-          <span>News:</span> the terminal now splits into panes, and agents address each one.{' '}
+          <span>News:</span> Agent Accounts, one ⌘F find bar everywhere, and canvas designs exported as HTML or React.{' '}
           <a href="/changelog">Read the changelog →</a>
         </p>
       </div>

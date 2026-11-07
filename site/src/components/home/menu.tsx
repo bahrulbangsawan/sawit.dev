@@ -42,6 +42,26 @@ const menu = [
       { cmd: 'sawit cabut bun', means: 'uninstall', note: 'Only the copy its installer, Homebrew or npm put there' },
     ],
   },
+  {
+    group: 'Mandor',
+    gloss: 'the foreman',
+    items: [
+      { cmd: 'sawit account list', means: 'accounts', note: 'Claude Code accounts, who is signed in, and 5-hour and 7-day usage' },
+      { cmd: 'sawit account use work', means: 'switch', note: 'A plain claude in a new terminal starts as that account' },
+      { cmd: 'sawit permissions', means: 'rules', note: 'Claude Code’s rules per settings file, and Sawit’s confirm tools' },
+      { cmd: 'sawit permissions add allow "Bash(npm test)"', means: 'allow', note: 'Shows the diff, asks, and keeps a backup' },
+    ],
+  },
+  {
+    group: 'Gudang',
+    gloss: 'the storehouse',
+    items: [
+      { cmd: 'sawit shell', means: 'status', note: 'How each shell file stands against your GitHub copy' },
+      { cmd: 'sawit shell upload .zshrc', means: 'upload', note: 'Asks first, and refuses lines that look like secrets' },
+      { cmd: 'sawit prompts backup', means: 'backup', note: 'The prompt library to your private repository' },
+      { cmd: 'sawit prompts restore', means: 'restore', note: 'GitHub’s prompts back here, after asking' },
+    ],
+  },
 ]
 
 export function Menu() {

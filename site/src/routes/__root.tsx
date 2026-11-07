@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
 import appCss from '../styles.css?url'
 import { Page } from '../components/chrome'
-import { DESCRIPTION, SITE } from '../content'
+import { DESCRIPTION, MEDIA } from '../content'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -18,7 +18,7 @@ export const Route = createRootRoute({
       { property: 'og:site_name', content: 'Sawit' },
       { property: 'og:title', content: 'Sawit' },
       { property: 'og:description', content: DESCRIPTION },
-      { property: 'og:image', content: `${SITE}/media/welcome.jpg` },
+      { property: 'og:image', content: `${MEDIA}/welcome.jpg` },
       { property: 'og:image:width', content: '1600' },
       { property: 'og:image:height', content: '1001' },
       { property: 'og:image:alt', content: 'Sawit’s welcome screen: start actions, recent folders, PostgreSQL instances and database connections' },

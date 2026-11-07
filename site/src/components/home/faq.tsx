@@ -22,6 +22,14 @@ const faq = [
     a: 'After the first install the app updates itself. To install a given release instead of the latest, put SAWIT_VERSION=vX.Y.Z (a tag from the releases page) before sh.',
   },
   {
+    q: 'How much memory does it use?',
+    a: 'About 115 MB idle with one window and a terminal. Only the browser tab on show keeps a live page, so a busy session gives memory back instead of piling it up.',
+  },
+  {
+    q: 'I use Claude Pool. What now?',
+    a: 'Agent Accounts on the Accounts page takes over. Import from Claude Pool copies your accounts, settings and usage history, and Sawit offers to remove Claude Pool once nothing needs it. Sign-ins are never touched.',
+  },
+  {
     q: 'Can I edit a single cell in the grid?',
     a: 'Not yet. The grid deletes rows or sets one column on the rows you select; single cells go through the SQL editor.',
   },

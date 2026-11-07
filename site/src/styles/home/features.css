@@ -67,3 +67,7 @@
   padding: 0 var(--space-6) var(--space-6);
   font-size: 13px;
 }
+/* an expander with no screenshot: the text alone, at a readable measure */
+.acc-body.text {
+  grid-template-columns: minmax(0, 68ch);
+}

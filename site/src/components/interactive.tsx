@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { INSTALL } from '../content'
+import { INSTALL, MEDIA } from '../content'
 
 // The element holding the install command on the page, which a copy the browser refuses selects.
 export const COMMAND_ID = 'install-command'
@@ -102,8 +102,8 @@ export function DemoVideo() {
     <>
       <video
         ref={ref}
-        src="/media/demo.mp4"
-        poster="/media/demo-poster.jpg"
+        src={`${MEDIA}/demo.mp4`}
+        poster={`${MEDIA}/demo-poster.jpg`}
         width={1280}
         height={802}
         muted
