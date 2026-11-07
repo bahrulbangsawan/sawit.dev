@@ -40,6 +40,7 @@ mod number_field;
 mod paints;
 mod position;
 mod prototype;
+mod screen;
 mod scrub;
 mod type_details;
 mod typography;
@@ -242,8 +243,29 @@ pub(super) fn render_design_panel(
                 .child(NOTHING_SELECTED),
         );
     };
-    let mut panel = panel.child(header(&sel, cx));
-    for section in sel.sections() {
+    // An HTML screen gets only what applies to it: its page covers the frame (B15).
+    if let Some(screen) = view.selected_screen() {
+        let position = screen::position(view, &sel, window, cx);
+        let about = screen::render(view, &sel, screen.frame, cx);
+        return panel
+            .child(header(&sel, Some("Screen"), true, cx))
+            .child(position)
+            .child(about);
+    }
+    let mut panel = panel.child(header(&sel, None, false, cx));
+    let mut sections = sel.sections();
+    // Text gets its type and its colour first, a component its properties (already first)
+    // (B15).
+    if sel.layers_are_text() {
+        let first = [Section::Typography, Section::Fill];
+        let kept: Vec<Section> = first.into_iter().filter(|f| sections.contains(f)).collect();
+        sections.retain(|s| !first.contains(s));
+        let at = (sections.iter())
+            .position(|s| *s == Section::Position)
+            .unwrap_or(0);
+        sections.splice(at..at, kept);
+    }
+    for section in sections {
         let shown = match section {
             // Drawn above.
             Section::Header => None,
@@ -278,11 +300,36 @@ fn header_text(sel: &DesignSelection) -> (String, Option<String>) {
     (sel.header(), name)
 }
 
-/// The panel's header: the kind of the one layer selected and its name, or how many layers are.
-fn header(sel: &DesignSelection, cx: &App) -> Div {
+/// The panel's header: the kind of the one layer selected (or `kind`) and its name, cut short
+/// with the whole name in its tooltip, and an "HTML" tag for a screen; or how many layers are.
+fn header(sel: &DesignSelection, kind: Option<&str>, html: bool, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
-    let (kind, name) = header_text(sel);
+    let (said, name) = header_text(sel);
+    let kind = kind.map_or(said, str::to_string);
+    let name = name.map(|name| {
+        let tip = SharedString::from(name.clone());
+        div()
+            .id("design-header-name")
+            .min_w_0()
+            .font_medium()
+            .truncate()
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+            })
+            .child(name)
+    });
+    let tag = html.then(|| {
+        div()
+            .flex_shrink_0()
+            .px_1p5()
+            .rounded(px(4.))
+            .bg(theme.secondary)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child("HTML")
+    });
     h_flex()
+        .id("design-header")
         .debug_selector(|| "design-header".into())
         .w_full()
         .h(px(40.))
@@ -296,7 +343,8 @@ fn header(sel: &DesignSelection, cx: &App) -> Div {
                 .text_color(theme.muted_foreground)
                 .child(kind),
         )
-        .children(name.map(|name| div().min_w_0().font_medium().truncate().child(name)))
+        .children(name)
+        .children(tag)
 }
 
 /// Every icon the panel shows, for the test that they are all embedded (ruling P5-C11).

@@ -93,3 +93,26 @@ impl BoardView {
         Some(texture.image.clone())
     }
 }
+
+/// The group a device of width `width` belongs to in the size menus (Preview's, the Design
+/// panel's): Mobile, Tablet, Laptop or Desktop.
+pub(in crate::board) fn device_group(width: u32) -> &'static str {
+    match width {
+        0..600 => "Mobile",
+        600..1100 => "Tablet",
+        1100..1500 => "Laptop",
+        _ => "Desktop",
+    }
+}
+
+/// The picture of device `name`, `width` wide: a phone, a tablet, a laptop or a screen.
+pub(in crate::board) fn device_icon(name: &str, width: u32) -> gpui_kit::assets::IconName {
+    use gpui_kit::assets::IconName as Lucide;
+    match device_group(width) {
+        _ if name.starts_with("iPad") => Lucide::Tablet,
+        "Mobile" => Lucide::Smartphone,
+        "Tablet" => Lucide::Tablet,
+        "Laptop" => Lucide::Laptop,
+        _ => Lucide::Monitor,
+    }
+}

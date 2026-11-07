@@ -251,6 +251,11 @@ impl DesignSelection {
             .collect()
     }
 
+    /// Whether every selected layer is a text (and one is): the panel shows its type first.
+    pub fn layers_are_text(&self) -> bool {
+        !self.layers.is_empty() && self.layers.iter().all(|layer| layer.text)
+    }
+
     /// The one frame selected (a frame, a component, an instance), which exports as code.
     pub fn one_frame(&self) -> Option<NodeId> {
         match (self.ids.as_slice(), self.layers.as_slice()) {
