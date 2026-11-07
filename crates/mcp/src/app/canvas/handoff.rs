@@ -82,6 +82,7 @@ impl Sawit {
                 command: command.clone(),
                 cwd,
                 new_tab: true,
+                close_when_done: false,
             };
             match self.app_call(a.project, run).await {
                 Ok(started) => done["terminal"] = started,

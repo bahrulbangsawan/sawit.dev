@@ -192,7 +192,8 @@ impl Sawit {
                 Command::TerminalRun {
                     command,
                     cwd,
-                    new_tab: true
+                    new_tab: true,
+                    close_when_done: false,
                 }
             )
             .await
