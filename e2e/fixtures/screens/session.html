@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Session</title>
+<style>
+  body { margin: 0; background: #101114; color: #f2f3f5; font: 16px/1.4 -apple-system, system-ui, sans-serif; }
+  header { padding: 52px 20px 12px; }
+  header h1 { margin: 0; font-size: 28px; }
+  header p { margin: 4px 0 0; color: #9aa0ab; }
+  .set { margin: 0 20px 10px; padding: 16px; border-radius: 14px; background: #1c1e24; display: flex; justify-content: space-between;
+         opacity: 0; transform: translateY(10px); transition: opacity .5s, transform .5s; }
+  .set.in { opacity: 1; transform: none; }
+  .timer { margin: 24px 20px; height: 120px; border-radius: 20px; background: #24324a; display: grid; place-items: center; font-size: 44px; font-weight: 700;
+           opacity: 0; transition: opacity .6s; }
+  .timer.in { opacity: 1; }
+</style>
+</head>
+<body>
+  <header><h1>Back squat</h1><p>Lift 1 of 4</p></header>
+  <div class="set"><span>Set 1</span><span>6 × 80 kg</span></div>
+  <div class="set"><span>Set 2</span><span>6 × 80 kg</span></div>
+  <div class="set"><span>Set 3</span><span>6 × 80 kg</span></div>
+  <div class="set"><span>Set 4</span><span>6 × 80 kg</span></div>
+  <div class="timer">2:30</div>
+  <script>
+    // Revealed by timers, one after another, as script-driven entrances do.
+    document.querySelectorAll('.set, .timer').forEach((el, i) => setTimeout(() => el.classList.add('in'), 900 + i * 450));
+  </script>
+</body>
+</html>

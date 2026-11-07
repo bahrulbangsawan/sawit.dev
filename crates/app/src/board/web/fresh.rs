@@ -15,6 +15,9 @@ use gpui_kit::*;
 use serde_json::json;
 
 use super::servers::origin;
+
+/// How long after its load a screen's page that changes itself is pictured again.
+const SCREEN_GRACE: Duration = Duration::from_secs(10);
 use super::{BoardView, Phase, Settle, Source};
 
 impl BoardView {
@@ -29,12 +32,19 @@ impl BoardView {
         let Some(frame) = web.frames.get(&id) else {
             return;
         };
-        let Source::Url(url) = &frame.spec.source else {
-            return;
-        };
         if live || frame.engine.is_none() {
             return;
         }
+        let url = match &frame.spec.source {
+            Source::Url(url) => url,
+            // A screen's page that changes itself soon after it loaded is still drawing itself in
+            // (a reveal on a timer, B17): it is pictured again once it is quiet. Later changes are
+            // its own animations, which its picture doesn't follow.
+            Source::Screen(_) if frame.built.is_some_and(|at| at.elapsed() < SCREEN_GRACE) => {
+                return self.web_screen_dirty(id, cx);
+            }
+            _ => return,
+        };
         let server = origin(url);
         // The server's other pages changed too: those whose views went are built again.
         for other in web.frames.values_mut() {
@@ -44,6 +54,19 @@ impl BoardView {
             }
         }
         let Some(frame) = web.frames.get_mut(&id) else {
+            return;
+        };
+        if frame.phase != Phase::Idle {
+            frame.owed = true;
+            return;
+        }
+        self.web_refresh(id, "dirty", cx);
+    }
+
+    /// Screen `id`'s page changed itself while young: it settles again and is snapshotted once at
+    /// rest, within the storm guard, as a route frame's would.
+    fn web_screen_dirty(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let Some(frame) = self.web.as_mut().and_then(|web| web.frames.get_mut(&id)) else {
             return;
         };
         if frame.phase != Phase::Idle {
