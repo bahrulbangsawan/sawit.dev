@@ -20,6 +20,7 @@ mod layout;
 mod local_explorer;
 mod login_item;
 mod mcp_page;
+mod menu_icons;
 #[cfg(test)]
 mod menu_tests;
 mod menus;

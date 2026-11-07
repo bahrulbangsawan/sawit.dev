@@ -176,7 +176,37 @@ gpui_kit::assets::icon_assets!(
         Clapperboard,
         // The New Project page (src/new_project_page/).
         FolderPlus,
-        ListChecks
+        ListChecks,
+        // Menus and floating bars (B16, src/menu_icons.rs, src/board/menus/icons.rs).
+        AppWindow,
+        ArrowLeftRight,
+        ArrowLeftToLine,
+        ArrowRightToLine,
+        BringToFront,
+        ChartColumn,
+        ChevronsDownUp,
+        ClipboardCopy,
+        ClipboardPaste,
+        Cloud,
+        Crop,
+        FilePlus,
+        FlipHorizontal2,
+        FlipVertical2,
+        GitBranchPlus,
+        MousePointerClick,
+        MoveRight,
+        PinOff,
+        Pipette,
+        Rows2,
+        Scissors,
+        Send,
+        SendToBack,
+        SquareMinus,
+        SquarePen,
+        Timer,
+        Ungroup,
+        Variable,
+        Vote
     ]
 );
 
