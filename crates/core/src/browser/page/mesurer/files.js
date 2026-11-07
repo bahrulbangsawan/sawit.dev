@@ -19,16 +19,12 @@
       return revoke.call(URL, url);
     }));
   }
-  // A data: address's bytes, read here: a page's CSP can't stop it.
-  const dataBlob = (href) => {
-    const comma = href.indexOf(",");
-    const head = href.slice(5, comma);
-    const body = decodeURIComponent(href.slice(comma + 1));
-    const bytes = /;base64$/i.test(head) ? base64ToBytes(body) : new TextEncoder().encode(body);
-    return new Blob([bytes], { type: head.split(";")[0] || "application/octet-stream" });
-  };
+  // A data: address goes as it is, and Rust reads it (`mesurer::files::data_url`): no fetch a
+  // page's CSP could stop.
   const saveDownload = async (name, href) => {
-    const blob = BLOBS.get(href) || (/^data:/i.test(href) ? dataBlob(href) : await (await fetch(href)).blob());
+    const kept = BLOBS.get(href);
+    if (!kept && /^data:/i.test(href)) return bridge("file.save", { name, href });
+    const blob = kept || (await (await fetch(href)).blob());
     return bridge("file.save", { name, mime: blob.type || "", base64: await blobBase64(blob) });
   };
   if (typeof HTMLAnchorElement === "function") {
