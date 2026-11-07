@@ -60,6 +60,7 @@ use sawit_core::recent::RecentProjects;
 use sawit_core::terminal::PaneId;
 use sawit_core::update::Version;
 
+mod accounts_page;
 mod areas;
 mod browser;
 mod canvas;
