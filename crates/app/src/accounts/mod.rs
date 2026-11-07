@@ -2,6 +2,7 @@
 //! folder and sign-in), the title bar's account chip, and the model both follow. It takes over
 //! from Claude Pool. Nothing here reads a sign-in: Claude Code's own commands do that.
 
+mod agents_seen;
 mod card;
 mod chip;
 mod detail;
@@ -9,6 +10,8 @@ mod list;
 mod login;
 mod ops;
 mod page;
+mod pool_model;
+mod pool_tabs;
 mod pool_ui;
 mod rows;
 mod settings_tab;
@@ -28,6 +31,7 @@ use sawit_core::agent_accounts::{
 
 use crate::rt;
 
+pub use agents_seen::{SeenAgent, TerminalAgent, collect as agents_seen_collect};
 pub use chip::account_chip;
 pub use page::{AccountsEvent, AccountsPage};
 
@@ -89,10 +93,12 @@ pub struct AccountsModel {
     pub login: Option<login::LoginState>,
     /// The `claude` Sawit runs; none in tests unless a test gives a stand-in.
     pub claude: Option<PathBuf>,
+    /// The account pool across agents, for the pool tabs (read when one opens).
+    pub pool: pool_model::PoolState,
     _poll: Task<()>,
 }
 
-struct GlobalAccounts(Entity<AccountsModel>);
+pub(crate) struct GlobalAccounts(pub(crate) Entity<AccountsModel>);
 
 impl Global for GlobalAccounts {}
 
@@ -142,6 +148,7 @@ impl AccountsModel {
             alerts_sent: Default::default(),
             alerts_primed: false,
             login: None,
+            pool: Default::default(),
             _poll: Task::ready(()),
         };
         this.reload();
@@ -158,6 +165,10 @@ impl AccountsModel {
                     m.read_usage(cx);
                     if sync {
                         m.sync_shared(cx);
+                        // The pool, once a pool tab has read it: new readings and notices.
+                        if m.pool.data.is_some() {
+                            m.refresh_pool(cx);
+                        }
                     }
                 });
                 if alive.is_err() {
