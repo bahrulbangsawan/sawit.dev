@@ -120,18 +120,39 @@ impl Sawit {
     async fn list_prompts_tool(&self, query: Option<&str>) -> CallToolResult {
         let lib = tri!(self.library());
         let found = lib.search(query.unwrap_or_default());
+        let sync = self.prompt_sync_line();
         if found.is_empty() {
-            return ok(if lib.items.is_empty() {
-                "The prompt library is empty."
-            } else {
-                "No prompts match."
-            });
+            return ok(format!(
+                "{}\n{sync}",
+                if lib.items.is_empty() {
+                    "The prompt library is empty."
+                } else {
+                    "No prompts match."
+                }
+            ));
         }
-        ok(found
-            .iter()
-            .map(|p| summary(p))
-            .collect::<Vec<_>>()
-            .join("\n"))
+        let mut lines: Vec<String> = found.iter().map(|p| summary(p)).collect();
+        lines.push(sync);
+        ok(lines.join("\n"))
+    }
+
+    /// The library's GitHub sync, as `list_prompts` ends with it: the repository, when it last
+    /// synced from this Mac, and whether automatic backup is on.
+    fn prompt_sync_line(&self) -> String {
+        use sawit_core::github::SyncBase;
+        use sawit_core::prompt_sync::{self, BackupSettings};
+        let settings = BackupSettings::load(&self.paths.root.join(prompt_sync::SETTINGS));
+        let base = SyncBase::load(&self.paths.root.join(prompt_sync::SYNC_STATE));
+        let when = base
+            .synced_at
+            .map(|t| format!("last synced {} UTC", crate::utc_time(t)))
+            .unwrap_or_else(|| "never synced from this Mac".into());
+        format!(
+            "GitHub sync: repository {} (github.com/<login>/{}), {when}, automatic backup {}. backup_prompts and restore_prompts sync it (dry_run lists what would change).",
+            settings.repo,
+            settings.repo,
+            if settings.auto { "on" } else { "off" }
+        )
     }
 
     async fn get_prompt_tool(&self, id: &str) -> CallToolResult {

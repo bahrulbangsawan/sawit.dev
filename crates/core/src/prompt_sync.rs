@@ -258,19 +258,98 @@ pub struct SyncOutcome {
     pub synced_ids: Vec<String>,
     /// Changed on both sides: neither was overwritten.
     pub conflicts: Vec<PromptSync>,
+    /// Prompts deleted on the other side since the last sync, deleted here too (a restore) or
+    /// there (a backup), by id.
+    pub deleted: Vec<String>,
+    /// Lines of the prompts to send that look like secrets, as `Title: line 3 OPENAI_API_KEY`.
+    pub secrets: Vec<String>,
+    /// Nothing was sent: the prompts to send look like they hold secrets, and the caller didn't
+    /// allow them ([`Options::allow_secrets`]).
+    pub held: bool,
+    /// Only planned ([`Options::dry_run`]): `synced` and `deleted` say what would change.
+    pub dry_run: bool,
     pub created_repo: bool,
 }
 
+/// How a backup or a restore runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Options {
+    /// Send prompts whose text looks like it holds a secret (the user said yes).
+    pub allow_secrets: bool,
+    /// Change nothing: only say what would change.
+    pub dry_run: bool,
+}
+
+/// The lines of the prompts `ids` that look like secrets ([`crate::shell_config::find_secrets`]),
+/// as `Title: line 3 OPENAI_API_KEY`.
+pub fn secret_lines(library: &Library, ids: &[String]) -> Vec<String> {
+    ids.iter()
+        .filter_map(|id| library.get(id))
+        .flat_map(|p| {
+            crate::shell_config::find_secrets(&p.body)
+                .into_iter()
+                .map(move |(line, name)| format!("{}: line {line} {name}", p.title))
+        })
+        .collect()
+}
+
 /// Sends the prompts changed here (and those only here) to the repository, creating it the
-/// first time, with the README. `keep_local`: ids changed on both sides whose version here wins.
+/// first time, with the README, and deletes there the prompts deleted here since the last sync.
+/// `keep_local`: ids changed on both sides whose version here wins. Prompts that look like they
+/// hold secrets hold the backup back unless `opts` allows them; a dry run only plans.
 pub async fn back_up(
     token: &str,
     library: &Library,
     settings: &BackupSettings,
     state: &Path,
     keep_local: &[String],
+    opts: Options,
 ) -> Result<SyncOutcome> {
     let (login, found) = fetch_backup(token, &settings.repo).await?;
+    let base = SyncBase::load(state);
+    let tree = found.as_ref().map(|b| b.tree.clone()).unwrap_or_default();
+    let plan = plan_prompts(library, &tree, &base);
+    let files = library_files(library);
+    let mut out = SyncOutcome {
+        repo: format!("{login}/{}", settings.repo),
+        dry_run: opts.dry_run,
+        ..Default::default()
+    };
+    let mut send = Vec::new();
+    let mut deletes = Vec::new();
+    for p in plan {
+        let chosen = p.state == FileState::ChangedOnBoth && keep_local.contains(&p.id);
+        if p.state.uploads() || chosen {
+            match files.get(&p.path) {
+                Some(bytes) => {
+                    out.synced.push(p.title.clone());
+                    out.synced_ids.push(p.id.clone());
+                    send.push((p.path.clone(), bytes.clone()));
+                }
+                // Deleted here since the last sync: deleted on GitHub too.
+                None if p.remote.is_some() => {
+                    out.deleted.push(p.id.clone());
+                    deletes.push(p.path.clone());
+                }
+                None => {}
+            }
+        } else if p.state == FileState::ChangedOnBoth {
+            out.conflicts.push(p);
+        }
+    }
+    let mut synced: Vec<(String, Option<String>)> = send
+        .iter()
+        .map(|(path, bytes)| (path.clone(), Some(github::blob_sha(bytes))))
+        .chain(deletes.iter().map(|path| (path.clone(), None)))
+        .collect();
+    out.secrets = secret_lines(library, &out.synced_ids);
+    if opts.dry_run {
+        return Ok(out);
+    }
+    if !out.secrets.is_empty() && !opts.allow_secrets {
+        out.held = true;
+        return Ok(out);
+    }
     let (backup, created) = match found {
         Some(b) => (b, false),
         None => {
@@ -289,31 +368,7 @@ pub async fn back_up(
             (backup, true)
         }
     };
-    let base = SyncBase::load(state);
-    let plan = plan_prompts(library, &backup.tree, &base);
-    let files = library_files(library);
-    let mut out = SyncOutcome {
-        repo: format!("{login}/{}", settings.repo),
-        created_repo: created,
-        ..Default::default()
-    };
-    let mut send = Vec::new();
-    for p in plan {
-        let chosen = p.state == FileState::ChangedOnBoth && keep_local.contains(&p.id);
-        if p.state.uploads() || chosen {
-            if let Some(bytes) = files.get(&p.path) {
-                out.synced.push(p.title.clone());
-                out.synced_ids.push(p.id.clone());
-                send.push((p.path.clone(), bytes.clone()));
-            }
-        } else if p.state == FileState::ChangedOnBoth {
-            out.conflicts.push(p);
-        }
-    }
-    let mut synced: Vec<(String, Option<String>)> = send
-        .iter()
-        .map(|(path, bytes)| (path.clone(), Some(github::blob_sha(bytes))))
-        .collect();
+    out.created_repo = created;
     // Same on both sides counts as synced too, so a later change is known for what it is.
     for p in plan_prompts(library, &backup.tree, &base) {
         if p.state == FileState::Same {
@@ -321,16 +376,24 @@ pub async fn back_up(
         }
     }
     let mut commit = backup.tree.commit.clone();
-    if !send.is_empty() || created {
+    if !send.is_empty() || !deletes.is_empty() || created {
         send.push(("README.md".into(), readme(library).into_bytes()));
         let host = crate::shell_config::computer_name();
-        let committed = github::commit_files(
+        let message = match deletes.len() {
+            0 => format!("Back up {} prompts from {host}", out.synced.len()),
+            n => format!(
+                "Back up {} prompts and delete {n} from {host}",
+                out.synced.len()
+            ),
+        };
+        let committed = github::commit_changes(
             token,
             &login,
             &settings.repo,
             &backup.repo.default_branch,
             &send,
-            &format!("Back up {} prompts from {host}", out.synced.len()),
+            &deletes,
+            &message,
         )
         .await?;
         commit = committed.commit;
@@ -350,6 +413,7 @@ pub async fn restore(
     settings: &BackupSettings,
     state: &Path,
     keep_github: &[String],
+    dry_run: bool,
 ) -> Result<SyncOutcome> {
     let (login, found) = fetch_backup(token, &settings.repo).await?;
     let backup = found.ok_or_else(|| {
@@ -360,6 +424,27 @@ pub async fn restore(
     })?;
     let base = SyncBase::load(state);
     let plan = plan_prompts(library, &backup.tree, &base);
+    if dry_run {
+        let mut out = SyncOutcome {
+            repo: format!("{login}/{}", settings.repo),
+            dry_run: true,
+            ..Default::default()
+        };
+        for p in to_restore(&plan, keep_github) {
+            if p.remote.is_some() {
+                out.synced.push(p.title.clone());
+                out.synced_ids.push(p.id.clone());
+            } else {
+                out.deleted.push(p.id.clone());
+            }
+        }
+        out.conflicts = plan
+            .iter()
+            .filter(|p| p.state == FileState::ChangedOnBoth && !keep_github.contains(&p.id))
+            .cloned()
+            .collect();
+        return Ok(out);
+    }
     let mut contents = BTreeMap::new();
     for p in to_restore(&plan, keep_github) {
         if let Some(sha) = &p.remote {
@@ -375,68 +460,9 @@ pub async fn restore(
     Ok(out)
 }
 
-/// The prompts a restore brings in: changed on GitHub, only there, or chosen (Keep GitHub's).
-fn to_restore<'a>(plan: &'a [PromptSync], keep_github: &[String]) -> Vec<&'a PromptSync> {
-    plan.iter()
-        .filter(|p| {
-            p.state.downloads()
-                || (p.state == FileState::ChangedOnBoth && keep_github.contains(&p.id))
-        })
-        .collect()
-}
-
-/// Files now the same on both sides, with their hash, for the sync's state.
-pub type Synced = Vec<(String, Option<String>)>;
-
-/// A restore's work on `library`, with GitHub's files (`contents`, by path) in hand: each prompt
-/// to bring in replaces or joins the one here; a conflict not chosen is left and listed. Returns
-/// what it did and the files now the same on both sides, for the sync's state.
-pub fn apply_restore(
-    library: &mut Library,
-    plan: &[PromptSync],
-    contents: &BTreeMap<String, Vec<u8>>,
-    keep_github: &[String],
-) -> Result<(SyncOutcome, Synced)> {
-    let mut out = SyncOutcome::default();
-    let mut synced = Vec::new();
-    let chosen: Vec<&str> = to_restore(plan, keep_github)
-        .into_iter()
-        .map(|p| p.path.as_str())
-        .collect();
-    for p in plan {
-        if chosen.contains(&p.path.as_str()) {
-            let Some(bytes) = contents.get(&p.path) else {
-                continue;
-            };
-            let prompt = from_markdown(&String::from_utf8_lossy(bytes))?;
-            out.synced.push(prompt.title.clone());
-            out.synced_ids.push(prompt.id.clone());
-            merge(library, prompt);
-            synced.push((p.path.clone(), p.remote.clone()));
-        } else if p.state == FileState::ChangedOnBoth {
-            out.conflicts.push(p.clone());
-        } else if p.state == FileState::Same {
-            synced.push((p.path.clone(), p.remote.clone()));
-        }
-    }
-    Ok((out, synced))
-}
-
-/// Puts `prompt` in `library`: in place of the one with its id (keeping that one's use counts),
-/// or added.
-pub fn merge(library: &mut Library, prompt: Prompt) {
-    match library.items.iter_mut().find(|p| p.id == prompt.id) {
-        Some(p) => {
-            let (used, last) = (p.used_count, p.last_used_at);
-            *p = Prompt {
-                used_count: used,
-                last_used_at: last,
-                ..prompt
-            };
-        }
-        None => library.items.push(prompt),
-    }
-}
+mod apply;
+use apply::to_restore;
+pub use apply::{Synced, apply_restore, merge};
 
 #[cfg(test)]
 mod tests;

@@ -6,7 +6,7 @@
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{schemars, tool, tool_router};
-use sawit_core::github::{Keychain, TokenStore};
+use sawit_core::github::{FileState, Keychain, TokenStore};
 use sawit_core::instances::AppPaths;
 use sawit_core::shell_config::{self, Direction, FileSync, SyncStatus};
 use serde_json::json;
@@ -140,6 +140,11 @@ impl Sawit {
                     Direction::Download
                 ));
                 let owned: Vec<FileSync> = files.into_iter().cloned().collect();
+                let deletes: Vec<String> = owned
+                    .iter()
+                    .filter(|f| f.state == FileState::DeletedOnGitHub)
+                    .map(|f| f.rel.clone())
+                    .collect();
                 let contents = tri!(
                     (shell_config::fetch_remote(&token, backup, &owned).await)
                         .map_err(|e| e.to_string())
@@ -148,9 +153,10 @@ impl Sawit {
                 let commit = backup.tree.commit.clone();
                 let done = tri!(
                     tri!(
-                        blocking(move || shell_config::apply_download(
+                        blocking(move || shell_config::apply_download_with(
                             &known,
                             &contents,
+                            &deletes,
                             &state,
                             &commit,
                             sawit_core::github::now()

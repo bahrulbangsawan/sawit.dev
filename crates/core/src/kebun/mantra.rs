@@ -74,7 +74,19 @@ fn report(ink: &Ink, verb: &str, done: &SyncOutcome) {
             done.repo
         );
     }
-    if done.synced.is_empty() {
+    if done.held {
+        ink.section(
+            "Ditahan: baris ini mirip rahasia (ulangi dengan -y kalau memang mau dicadangkan)",
+        );
+        for line in &done.secrets {
+            println!("  {} {line}", ink.yellow("!"));
+        }
+        return;
+    }
+    for id in &done.deleted {
+        println!("  {} {id} (dihapus)", ink.green("✓"));
+    }
+    if done.synced.is_empty() && done.deleted.is_empty() {
         ink.empty(&format!(
             "Tak ada yang perlu di{verb}: {} sudah sama.",
             done.repo
@@ -135,11 +147,16 @@ pub async fn mantra(args: MantraArgs, paths: &AppPaths) -> i32 {
     );
     match args.action {
         MantraAction::Backup => {
-            match prompt_sync::back_up(&token, &lib, &settings, &state, &args.overwrite).await {
+            let opts = prompt_sync::Options {
+                allow_secrets: args.yes,
+                dry_run: false,
+            };
+            match prompt_sync::back_up(&token, &lib, &settings, &state, &args.overwrite, opts).await
+            {
                 Ok(done) => {
                     report(&ink, "cadangkan", &done);
-                    ink.footer("Selesai.");
-                    0
+                    ink.footer(if done.held { "Ditahan." } else { "Selesai." });
+                    i32::from(done.held)
                 }
                 Err(e) => {
                     println!("  {} {e}", ink.red("✗"));
@@ -164,9 +181,11 @@ pub async fn mantra(args: MantraArgs, paths: &AppPaths) -> i32 {
                     }
                 }
             }
-            match prompt_sync::restore(&token, &mut lib, &settings, &state, &args.overwrite).await {
+            match prompt_sync::restore(&token, &mut lib, &settings, &state, &args.overwrite, false)
+                .await
+            {
                 Ok(done) => {
-                    if !done.synced.is_empty() {
+                    if !done.synced.is_empty() || !done.deleted.is_empty() {
                         if let Err(e) = lib.save(&file) {
                             println!("  {} {e}", ink.red("✗"));
                             return 1;

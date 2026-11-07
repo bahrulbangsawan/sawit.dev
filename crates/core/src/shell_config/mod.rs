@@ -14,9 +14,9 @@ pub use backup::{
 pub use pick::{Direction, pick_files, secret_lines};
 pub use secrets::find_secrets;
 pub use sync::{
-    Backup, Downloaded, FileSync, Replaced, SYNC_STATE, SyncStatus, apply_download, backup_path,
-    fetch_backup, fetch_remote, known_files, known_files_here, local_hashes, plan_files,
-    sync_status, undo_download, upload,
+    Backup, Downloaded, FileSync, Replaced, SYNC_STATE, SyncStatus, apply_download,
+    apply_download_with, backup_path, fetch_backup, fetch_remote, known_files, known_files_here,
+    local_hashes, plan_files, sync_status, undo_download, upload,
 };
 
 use std::path::{Path, PathBuf};

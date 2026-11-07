@@ -1259,6 +1259,13 @@ local bindings there (KV, R2, D1, Durable Objects, Workflows, sent email), trigg
   lists them, so the repository reads well on GitHub. Use counts stay on this Mac.
 - A prompt changed on both sides is left alone and listed, with **Keep Mine** (back up) or **Keep GitHub's**
   (restore).
+- Deletes carry over: a prompt deleted on one Mac since the last sync is deleted on GitHub by the next backup, and
+  on the other Macs by their next restore, rather than coming back. Shell files sync their deletes the same way (a
+  file deleted by a download is kept as its backup, and **Undo** puts it back).
+- A prompt whose text looks like it holds a secret (an API key or token) holds the backup back: the footer names
+  the lines, with **Back Up Anyway**. Automatic backups wait for that answer too.
+- With **Back Up Automatically** on, Sawit also brings in what changed on GitHub when it starts. On a new Mac, the
+  empty library offers **Restore from GitHub** once the repository exists.
 <p align="center"><img src="https://files.sawit.dev/media/prompts-backup.png" alt="Prompts tab with four demo prompts and the Review this PR prompt open, its {{branch}} variable to fill; the footer offers Sign In to Back Up Prompts" width="100%"></p>
 
 ### Config files
@@ -1604,7 +1611,7 @@ sawit permissions move "Bash(npm run test:*)" ask    # or remove "<rule>"; a .sa
 sawit shell                                  # "cangkang": how each shell file stands against sawit-shell-config on GitHub
 sawit shell upload .zshrc                    # send it (asks; refused on secret-looking lines unless --allow-secrets)
 sawit shell download .zshrc                  # replace it with GitHub's, backed up first (asks; --overwrite for both-sides changes)
-sawit prompts backup                         # "mantra": the prompt library to your private sawit-prompts repository
+sawit prompts backup                         # "mantra": the prompt library to your private sawit-prompts repository (-y: also prompts that look like they hold secrets)
 sawit prompts restore                        # GitHub's prompts back here (asks; --overwrite <id> for both-sides changes)
 sawit account list                           # Claude Code accounts: number, name, who, plan, 5h / 7d usage (--json)
 sawit account use work                       # make it active: a plain `claude` in a new terminal starts as it
@@ -1711,7 +1718,7 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Run commands | `list_scripts`, `save_command`, `remove_command` |
 | Git | `git_status`, `git_log`, `git_diff`, `git_show`, `git_branches`, `git_stage`, `git_unstage`, `git_commit`, `git_switch`, `git_fetch`, `git_pull` (fast-forward only), `git_push` (sets the upstream the first time, never forces): the Git tab's buttons, with your own git credentials first and Sawit's GitHub sign-in for github.com |
 | Agent accounts | `list_agent_accounts`, `agent_account_usage` (5h/7d as Claude Code reported it; `check` asks for current numbers), `use_agent_account`, `open_agent_account` (a Sawit terminal running `claude` as the account), `agent_account_sessions`, `sync_agent_settings` (status, run), `account_pool` (the pool across Claude Code and Codex accounts: overview, detailed, compare with the account that has the most room now and why, timeline, wallet, analytics). Claude Code's accounts on the Accounts page, formerly Claude Pool; never a sign-in or a removal |
-| Prompts | `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt`, `backup_prompts` / `restore_prompts` (the library in a private GitHub repository, `sawit-prompts` by default, one Markdown file per prompt; prompts changed on both sides are listed, not overwritten) |
+| Prompts | `list_prompts` (ends with the GitHub sync: repository, last sync, automatic backup), `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`, `fill_prompt`, `backup_prompts` / `restore_prompts` (`dry_run` lists what would change; deletes since the last sync carry over; a backup with secret-looking lines sends nothing until `allow_secrets`; the library in a private GitHub repository, `sawit-prompts` by default, one Markdown file per prompt; prompts changed on both sides are listed, not overwritten) |
 | Files | `search_files` |
 | Config files | `list_config_files` (the Config Files tab's shell and coding-agent config files, as paths: never their contents), `shell_files_sync` (the shell files against the private `sawit-shell-config` repository: `status` per file, `upload` the files named, `download` the files named, each backed up beside itself first; with the user's GitHub sign-in) |
 | Permissions | `list_permissions` (the Permissions page: Claude Code's `permissions.allow`/`ask`/`deny` in each settings file, which `sawit` tools need `confirm` and what the rules say of each, the other agents' permission settings, the macOS permissions Sawit needs), `edit_permission` (add, remove or move one Claude Code rule in `user`, `user:<profile>`, `project` or `local`: without `confirm` it returns the diff; with it the file is backed up and only that rule's line changes; secrets and the managed file refused) |
