@@ -43,9 +43,9 @@ fn a_session_id_is_the_process_and_when_it_started() {
 }
 
 /// Each agent keeps the colour and label it was given when first met, a second agent never
-/// renames the first, and agents of one client are told apart by project, else by number.
+/// renames the first, and agents of one client are told apart by project, else by a random name.
 #[test]
-fn colours_and_labels_are_given_once_and_duplicates_are_numbered() {
+fn colours_and_labels_are_given_once_and_duplicates_get_random_names() {
     let mut roster = Roster::default();
     let first = roster
         .meet(&agent("a", "Claude Code", Some("shop")), secs(0))
@@ -62,11 +62,15 @@ fn colours_and_labels_are_given_once_and_duplicates_are_numbered() {
     let again = roster
         .meet(&agent("d", "Claude Code", Some("shop")), secs(3))
         .clone();
-    assert_eq!(again.label, "Claude Code 3");
+    assert!(is_random_name(&again.label), "{}", again.label);
     let unnamed = roster
         .meet(&agent("e", "Claude Code", None), secs(4))
         .clone();
-    assert_eq!(unnamed.label, "Claude Code 4");
+    assert!(is_random_name(&unnamed.label), "{}", unnamed.label);
+    assert_ne!(
+        unnamed.label, again.label,
+        "two live agents never share a name"
+    );
     // Met again, each is as it was: the same colour and the same label.
     for known in [&first, &codex, &blog, &again, &unnamed] {
         let met = roster.meet(&known.identity, secs(5));
@@ -249,4 +253,43 @@ fn identities_round_trip() {
     );
     let bare: AgentIdentity = serde_json::from_value(json!({"id": "x", "name": "Y"})).unwrap();
     assert_eq!(bare.label, None);
+}
+
+/// Whether `label` is one of the roster's random names: two words, an adjective and a plant.
+fn is_random_name(label: &str) -> bool {
+    use super::roster::{ADJECTIVES, PLANTS};
+    let mut words = label.split(' ');
+    let (Some(a), Some(p), None) = (words.next(), words.next(), words.next()) else {
+        return false;
+    };
+    ADJECTIVES.contains(&a) && PLANTS.contains(&p)
+}
+
+/// B4.2: random names are short, the same for an agent each time it is met (seeded from its id),
+/// and the anonymous agent gets one too instead of "Agent".
+#[test]
+fn random_names_are_short_stable_and_distinct() {
+    use super::roster::{ADJECTIVES, PLANTS};
+    for a in ADJECTIVES {
+        for p in PLANTS {
+            assert!(format!("{a} {p}").chars().count() < 16, "{a} {p}");
+        }
+    }
+    let roster = Roster::default();
+    assert_eq!(roster.random_name("mcp-1"), roster.random_name("mcp-1"));
+    let mut roster = Roster::default();
+    let anon = roster
+        .meet(&AgentIdentity::anonymous(), secs(0))
+        .label
+        .clone();
+    assert!(is_random_name(&anon), "{anon}");
+    // Thirty agents of one client: every label differs.
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..30 {
+        let label = roster
+            .meet(&agent(&format!("x{i}"), "Codex", None), secs(i))
+            .label
+            .clone();
+        assert!(seen.insert(label.clone()), "{label} twice");
+    }
 }
