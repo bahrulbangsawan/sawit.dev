@@ -37,6 +37,7 @@ macro_rules! diagram_types {
 pub mod app;
 pub mod browser;
 pub mod browser_design;
+pub mod browser_seo;
 pub mod config_files;
 pub mod db;
 pub mod db_admin;
@@ -266,6 +267,7 @@ impl Sawit {
             + Self::app_router()
             + Self::browser_router()
             + Self::browser_design_router()
+            + Self::browser_seo_router()
             + Self::tabs_router()
             + Self::keymap_router()
     }

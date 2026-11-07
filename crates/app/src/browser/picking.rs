@@ -19,6 +19,7 @@ pub(super) fn pick_mode(panel: Panel, segment: Segment) -> PickMode {
         (Panel::Annotate, _) => PickMode::Annotate,
         (Panel::Design, Segment::Inspect) => PickMode::Inspect,
         (Panel::Design, _) => PickMode::Off,
+        (Panel::Seo, _) => PickMode::Off,
     }
 }
 
@@ -79,6 +80,9 @@ impl BrowserView {
             let segment = self.design_panel.read(cx).segment();
             self.set_pick(pick_mode(panel, segment), cx);
             self.scan_if_design_open(cx);
+            if panel == Panel::Seo {
+                self.seo_rescan(cx);
+            }
         }
         let annotating = self.panel == Some(Panel::Annotate);
         self.annotate
@@ -103,13 +107,26 @@ impl BrowserView {
             None | Some("none") => None,
             Some("annotate") => Some(Panel::Annotate),
             Some("design") => Some(Panel::Design),
+            Some("seo") => Some(Panel::Seo),
             Some(other) => {
                 return Err(format!(
-                    "Unknown panel “{other}”. Use annotate or design, or leave it out to close."
+                    "Unknown panel “{other}”. Use annotate, design or seo, or leave it out to close."
                 ));
             }
         };
+        let seo_tab = match (want, tab) {
+            (Some(Panel::Seo), Some(name)) => {
+                Some(super::seo::SeoTab::named(name).ok_or_else(|| {
+                    format!("Unknown tab “{name}”. Use overview, previews or checks.")
+                })?)
+            }
+            _ => None,
+        };
+        if let Some(t) = seo_tab {
+            self.seo_panel.update(cx, |p, cx| p.set_tab(t, cx));
+        }
         let segment = match tab {
+            _ if want == Some(Panel::Seo) => None,
             None => None,
             Some(name) => Some(Segment::named(name).ok_or_else(|| {
                 format!("Unknown tab “{name}”. Use inspect, colors, fonts, assets or system.")
@@ -125,7 +142,7 @@ impl BrowserView {
                 let segment = self.design_panel.read(cx).segment();
                 self.set_pick(pick_mode(Panel::Design, segment), cx);
             }
-            Some(Panel::Annotate) => {}
+            Some(Panel::Annotate) | Some(Panel::Seo) => {}
             None => {
                 if let Some(open) = self.panel {
                     self.toggle_panel(open, cx);
@@ -134,8 +151,11 @@ impl BrowserView {
         }
         Ok(json!({
             "panel": self.panel.map(Panel::as_str),
-            "tab": (self.panel == Some(Panel::Design))
-                .then(|| self.design_panel.read(cx).segment().name()),
+            "tab": match self.panel {
+                Some(Panel::Design) => Some(self.design_panel.read(cx).segment().name()),
+                Some(Panel::Seo) => Some(self.seo_panel.read(cx).tab().name()),
+                _ => None,
+            },
         }))
     }
 

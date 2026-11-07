@@ -165,6 +165,7 @@ impl BrowserView {
                 if !started {
                     self.mesurer_after_load(cx);
                     self.favicon_after_load(cx);
+                    self.seo_after_load(cx);
                 } else {
                     self.favicon_url_changed(&url);
                 }

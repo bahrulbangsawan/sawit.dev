@@ -5,6 +5,8 @@
 pub enum Panel {
     Annotate,
     Design,
+    /// Search, sharing and agent readiness ([`super::seo`]).
+    Seo,
 }
 
 impl Panel {
@@ -12,6 +14,7 @@ impl Panel {
         match self {
             Panel::Annotate => "annotate",
             Panel::Design => "design",
+            Panel::Seo => "seo",
         }
     }
 }

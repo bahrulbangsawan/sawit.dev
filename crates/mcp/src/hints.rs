@@ -65,6 +65,7 @@ const READ_ONLY: &[&str] = &[
     "browser_resize",
     "browser_inspect",
     "browser_design",
+    "browser_seo",
     "keymap_list",
 ];
 
@@ -194,6 +195,8 @@ const ADDS: &[&str] = &[
 /// may be a server elsewhere (a saved connection), a web page, or whatever a command they run
 /// reaches. MCP's `openWorldHint`; the others stay on this Mac.
 const OPEN_WORLD: &[&str] = &[
+    // Fetches the site's files, and with `external` asks an outside scanner.
+    "browser_seo",
     "agent_account_usage",
     "backup_prompts",
     "restore_prompts",
