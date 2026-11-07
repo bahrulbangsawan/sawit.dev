@@ -21,7 +21,7 @@ impl WebFrames {
     /// at the display's density), from 0.1 up to [`MAX_SCALE`] and what keeps the picture within
     /// [`MAX_PIXELS`] and [`MAX_SIDE`] device pixels; or the fixed scale.
     pub(super) fn snapshot_scale(&self, viewport: Viewport) -> f64 {
-        let zoom = self.zoom;
+        let zoom = self.zoom.max(self.presenting.unwrap_or(0.0));
         self.config
             .scale
             .unwrap_or_else(|| zoom.clamp(0.1, scale_cap(viewport)))

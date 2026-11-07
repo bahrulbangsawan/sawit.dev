@@ -200,6 +200,16 @@ impl BoardView {
     }
 }
 
+/// The group a device belongs to in Preview's size menu, by its width.
+fn group_of(width: u32) -> &'static str {
+    match width {
+        0..600 => "Mobile",
+        600..1100 => "Tablet",
+        1100..1500 => "Laptop",
+        _ => "Desktop",
+    }
+}
+
 /// The picture of a Preview size: a phone, a tablet, a laptop or a screen for a device, the
 /// frame for the size it was made at, and a window for the window's.
 fn size_icon(size: Size) -> Lucide {
@@ -216,7 +226,8 @@ fn size_icon(size: Size) -> Lucide {
 }
 
 /// Preview's bar over the canvas, and the room under it where its page shows: the screen's name,
-/// its size (a menu of the sizes, the one shown checked), Rotate and Close. It takes every click
+/// its size (a menu of the sizes grouped by kind, the one shown checked), Rotate, Reload and
+/// Close. It takes every click
 /// over the canvas while it shows.
 pub(in crate::board) fn render_preview(
     view: &BoardView,
@@ -250,10 +261,17 @@ pub(in crate::board) fn render_preview(
             .accessibility_label(format!("Size: {shown}"))
             .tooltip("Choose the size to preview at")
             .dropdown_menu(move |mut menu, _, _| {
-                for (i, (size, label)) in sizes.iter().cloned().enumerate() {
+                // As Made and Window, then the devices grouped Mobile, Tablet, Laptop, Desktop
+                // by their width (B15).
+                let mut group = "";
+                for (size, label) in sizes.iter().cloned() {
                     let this = this.clone();
-                    if i == 2 {
-                        menu = menu.separator();
+                    if let Size::Device(i) = size {
+                        let of = DEVICES.get(i).map_or("", |d| group_of(d.width));
+                        if of != group {
+                            menu = menu.separator().label(of);
+                            group = of;
+                        }
                     }
                     menu = menu.item(
                         PopupMenuItem::new(label)
@@ -282,6 +300,27 @@ pub(in crate::board) fn render_preview(
                 let _ = this.update(cx, |view, cx| view.preview_size(None, cx));
             })
     };
+    let reload = {
+        let this = this.clone();
+        Button::new("screen-preview-reload")
+            .small()
+            .ghost()
+            .icon(Icon::new(Lucide::RefreshCw).text_color(theme.muted_foreground))
+            .accessibility_label("Reload")
+            .tooltip("Reload the page")
+            .on_click(move |_, _, cx| {
+                let _ = this.update(cx, |view, _| {
+                    if let Some(engine) = view
+                        .screen_ui
+                        .preview
+                        .as_ref()
+                        .and_then(|p| p.engine.as_ref())
+                    {
+                        engine.reload();
+                    }
+                });
+            })
+    };
     let close = Button::new("screen-preview-close")
         .small()
         .icon(crate::menu_icons::CLOSE)
@@ -295,6 +334,7 @@ pub(in crate::board) fn render_preview(
         .flex_shrink_0()
         .px_3()
         .gap_2()
+        .items_center()
         .border_b_1()
         .border_color(theme.border)
         .bg(theme.background)
@@ -315,6 +355,7 @@ pub(in crate::board) fn render_preview(
         })
         .child(size_menu)
         .child(rotate)
+        .child(reload)
         .child(div().w(px(1.)).h(px(16.)).mx_1().bg(theme.border))
         .child(close);
     Some(
