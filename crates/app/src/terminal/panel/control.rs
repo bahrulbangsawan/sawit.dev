@@ -35,8 +35,13 @@ impl TerminalPanel {
             Origin::Agent => self.typing_pane(window, cx),
             Origin::User => None,
         };
+        // An agent also leaves alone a tab the user locked or pinned.
+        let kept = |ix: usize| {
+            origin == Origin::Agent
+                && self.tabs[ix].read(cx).state.locked | self.tabs[ix].read(cx).state.pinned
+        };
         let usable = |ix: usize, pane: PaneId, v: &Entity<TerminalView>| {
-            v.read(cx).idle_shell() && typing != Some((ix, pane))
+            v.read(cx).idle_shell() && typing != Some((ix, pane)) && !kept(ix)
         };
         let in_active = self.tabs.get(self.active).and_then(|t| {
             let t = t.read(cx);
@@ -118,6 +123,8 @@ impl TerminalPanel {
                             "title": t.pane_title(pane, v).to_string(),
                             "focused": pane == t.state.focused,
                             "exited": v.exited,
+                            "exit_code": v.exit_code(),
+                            "activity": v.activity().to_json(),
                             "at_prompt": v.at_prompt(),
                             "running_job": v.foreground_job().is_some(),
                             "agent": v.agent().map(|a| a.id()),
@@ -136,6 +143,8 @@ impl TerminalPanel {
                     "title": t.title(cx).to_string(),
                     "active": ix == self.active,
                     "exited": v.exited,
+                    "exit_code": v.exit_code(),
+                    "activity": t.activity(cx).to_json(),
                     "shell": v.shell,
                     "at_prompt": v.at_prompt(),
                     "running_job": v.foreground_job().is_some(),

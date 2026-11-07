@@ -265,14 +265,6 @@ mod tests {
         serde_json::from_str(include_str!("fixtures/style_button.json")).unwrap()
     }
 
-    /// What `style` (`browser/page/design/style.js`) emits, field for field.
-    #[test]
-    fn page_output_is_the_contract() {
-        crate::site_design::assert_wire_exact::<StyleInfo>(include_str!(
-            "fixtures/page_style.json"
-        ));
-    }
-
     #[test]
     fn contrast_of_white_on_blue() {
         let c = contrast(&button()).unwrap();

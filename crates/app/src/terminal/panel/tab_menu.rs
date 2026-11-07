@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use gpui_kit::component::Icon;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::*;
 
@@ -64,6 +65,38 @@ pub enum TabAct {
     Clear,
     Export,
     FullScreen,
+}
+
+impl TabAct {
+    /// The item's icon, from the app's one map of actions to icons (B16).
+    fn icon(self) -> gpui_kit::assets::IconName {
+        use crate::menu_icons as icon;
+        use gpui_kit::assets::IconName as Lucide;
+        match self {
+            TabAct::Rename => icon::RENAME,
+            TabAct::Duplicate => icon::DUPLICATE,
+            TabAct::MoveToProject => icon::MOVE,
+            TabAct::RemoveFromGroup => Lucide::SquareMinus,
+            TabAct::Close => icon::CLOSE,
+            TabAct::CloseMany(CloseScope::Others) => icon::CLOSE_OTHERS,
+            TabAct::CloseMany(CloseScope::Left) => Lucide::ArrowLeftToLine,
+            TabAct::CloseMany(CloseScope::Right) => Lucide::ArrowRightToLine,
+            TabAct::CloseMany(CloseScope::Idle) => Lucide::CircleCheck,
+            TabAct::CloseMany(CloseScope::All) => icon::CLOSE_ALL,
+            TabAct::Lock => Lucide::Lock,
+            TabAct::Pin => icon::PIN,
+            TabAct::CopyLastOutput => Lucide::ClipboardCopy,
+            TabAct::CopyError => Lucide::TriangleAlert,
+            TabAct::Clear => icon::ERASE,
+            TabAct::Export => icon::EXPORT,
+            TabAct::FullScreen => icon::MAXIMIZE,
+        }
+    }
+
+    /// Whether the item ends work that is running: drawn in the danger colour.
+    fn destructive(self) -> bool {
+        matches!(self, TabAct::CloseMany(CloseScope::All))
+    }
 }
 
 /// One entry of the tab menu.
@@ -291,7 +324,9 @@ pub(super) fn build(
         }
         let (panel, tab, act) = (m.panel.clone(), m.tab.clone(), entry.act);
         // The keys show as the keymap gives them in a pane on screen (the action context).
-        let mut item = PopupMenuItem::new(entry.label);
+        let mut item = PopupMenuItem::new(entry.label)
+            .icon(act.icon())
+            .danger(act.destructive());
         if let Some(action) = entry.action {
             item = item.action(action);
         }
@@ -336,19 +371,32 @@ fn move_to_project(
         .cloned()
         .collect();
     let m = m.clone();
-    menu.submenu("Move to Project", window, cx, move |mut menu, _, _| {
-        if others.is_empty() {
-            return menu.item(PopupMenuItem::new("No Other Project Open").disabled(true));
-        }
-        for root in &others {
-            let (panel, tab, to) = (m.panel.clone(), m.tab.clone(), root.clone());
-            let item = PopupMenuItem::new(short(&project_name(root))).on_click(move |_, _, cx| {
-                let _ = panel.update(cx, |p, cx| p.move_to_group(&tab, Some(to.clone()), cx));
-            });
-            menu = menu.item(item);
-        }
-        menu
-    })
+    let icon = Some(Icon::new(TabAct::MoveToProject.icon()));
+    menu.submenu_with_icon(
+        icon,
+        "Move to Project",
+        window,
+        cx,
+        move |mut menu, _, _| {
+            if others.is_empty() {
+                return menu.item(
+                    PopupMenuItem::new("No Other Project Open")
+                        .icon(crate::menu_icons::OPEN)
+                        .disabled(true),
+                );
+            }
+            for root in &others {
+                let (panel, tab, to) = (m.panel.clone(), m.tab.clone(), root.clone());
+                let name = short(&project_name(root));
+                let item = PopupMenuItem::new(name).icon(crate::menu_icons::OPEN);
+                let item = item.on_click(move |_, _, cx| {
+                    let _ = panel.update(cx, |p, cx| p.move_to_group(&tab, Some(to.clone()), cx));
+                });
+                menu = menu.item(item);
+            }
+            menu
+        },
+    )
 }
 
 /// The tab menu's keys (and the menu bar's Terminal menu) act on the active tab.

@@ -65,7 +65,9 @@ const READ_ONLY: &[&str] = &[
     "browser_resize",
     "browser_inspect",
     "browser_design",
+    "browser_seo",
     "keymap_list",
+    "search_api",
 ];
 
 /// The tools that can delete or replace what was there before the call (a database, rows, a file
@@ -110,6 +112,8 @@ const DESTRUCTIVE: &[&str] = &[
     "git_unstage",
     "git_commit",
     "git_switch",
+    // A fast-forward replaces the working tree's files with the remote's.
+    "git_pull",
     "update_prompt",
     "delete_prompt",
     "install_dev_tools",
@@ -159,6 +163,8 @@ const DESTRUCTIVE: &[&str] = &[
     "keymap_unbind",
     "browser_tabs",
     "canvas_tabs",
+    // A script can call any tool, the destructive ones included.
+    "run",
 ];
 
 /// The tools that change things but only add: a database, an instance, a prompt, rows, shapes on
@@ -178,6 +184,9 @@ const ADDS: &[&str] = &[
     "refresh_materialized_view",
     "add_ssh_host",
     "git_stage",
+    // Remote refs are updated; a push only adds commits (it never forces).
+    "git_fetch",
+    "git_push",
     "create_prompt",
     "fill_prompt",
     "launch_app",
@@ -194,6 +203,8 @@ const ADDS: &[&str] = &[
 /// may be a server elsewhere (a saved connection), a web page, or whatever a command they run
 /// reaches. MCP's `openWorldHint`; the others stay on this Mac.
 const OPEN_WORLD: &[&str] = &[
+    // Fetches the site's files, and with `external` asks an outside scanner.
+    "browser_seo",
     "agent_account_usage",
     "backup_prompts",
     "restore_prompts",
@@ -254,6 +265,10 @@ const OPEN_WORLD: &[&str] = &[
     "browser_mesurer",
     "browser_export_design",
     "browser_tabs",
+    "git_fetch",
+    "git_pull",
+    "git_push",
+    "run",
 ];
 
 /// MCP's hints for the tool `name`, from [`READ_ONLY`], [`DESTRUCTIVE`], [`ADDS`] and

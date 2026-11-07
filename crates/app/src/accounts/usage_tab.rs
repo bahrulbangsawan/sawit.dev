@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::*;
@@ -13,6 +14,7 @@ use sawit_core::agent_accounts::analytics::{self, Totals};
 use sawit_core::agent_accounts::sessions::{self, Session};
 
 use super::page::AccountsPage;
+use super::ui::{self, Tone};
 use super::{AccountsModel, SignIn};
 use crate::rt;
 
@@ -183,88 +185,154 @@ impl AccountsPage {
     pub(super) fn render_usage(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let m = self.model.read(cx);
         let muted = cx.theme().muted_foreground;
-        let names: BTreeMap<String, String> = m
+        let accounts: BTreeMap<String, (String, String)> = m
             .list()
             .iter()
-            .map(|a| (a.id.clone(), a.name.clone()))
+            .map(|a| (a.id.clone(), (a.name.clone(), a.color.clone())))
             .collect();
         let period = self.period;
-        let card = |title: String| {
-            v_flex()
-                .gap_2()
-                .p_3()
-                .rounded(cx.theme().radius)
-                .border_1()
-                .border_color(cx.theme().border)
-                .child(div().text_sm().font_semibold().child(title))
-        };
-        let totals = |rows: &[(String, String, Totals)]| {
-            let mut by: BTreeMap<String, Totals> = BTreeMap::new();
-            for (a, _, t) in rows {
-                let e = by.entry(a.clone()).or_default();
-                e.input += t.input;
-                e.output += t.output;
-                e.cache_write += t.cache_write;
-                e.cache_read += t.cache_read;
-                e.requests += t.requests;
-            }
-            by
-        };
-        let analytics_rows: Vec<AnyElement> = match &m.analytics {
-            None => vec![
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("Reading Claude Code's conversation files…")
-                    .into_any_element(),
-            ],
-            Some((now_rows, before_rows)) => {
-                let (now_t, before_t) = (totals(now_rows), totals(before_rows));
-                if now_t.is_empty() {
-                    vec![
+        let period_name = PERIODS
+            .iter()
+            .find(|(_, s)| *s == period)
+            .map(|(l, _)| l.to_lowercase())
+            .unwrap_or_default();
+        let versus = format!("vs the {period_name} before");
+        let periods = ButtonGroup::new("accounts-period")
+            .outline()
+            .compact()
+            .small()
+            .children(PERIODS.iter().map(|&(label, secs)| {
+                Button::new(SharedString::from(format!("period-{label}")))
+                    .label(label)
+                    .selected(period == secs)
+            }))
+            .on_click(cx.listener(|this, picked: &Vec<usize>, _, cx| {
+                let Some(&ix) = picked.first() else { return };
+                let secs = PERIODS[ix.min(PERIODS.len() - 1)].1;
+                this.period = secs;
+                this.model.update(cx, |m, cx| m.refresh_analytics(secs, cx));
+            }));
+        let tile =
+            |id: &'static str, label: &'static str, value: String, change: String, cx: &App| {
+                v_flex()
+                    .id(id)
+                    .role(Role::Label)
+                    .aria_label(format!("{label}: {value}, {change}"))
+                    .flex_1()
+                    .min_w(px(160.))
+                    .px_4()
+                    .py_3()
+                    .rounded(cx.theme().radius_lg)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().sidebar)
+                    .child(
                         div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(label),
+                    )
+                    .child(div().text_2xl().font_medium().child(value))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(change),
+                    )
+            };
+        let analytics: AnyElement = match &m.analytics {
+            None => h_flex()
+                .gap_2()
+                .py_6()
+                .text_sm()
+                .text_color(muted)
+                .child(Icon::new(Lucide::LoaderCircle).small())
+                .child("Reading Claude Code's conversation files…")
+                .into_any_element(),
+            Some((now_rows, before_rows)) if now_rows.is_empty() => ui::empty_state(
+                Lucide::ChartColumn,
+                format!("No usage in the last {period_name}"),
+                "Token counts come from the conversation files Claude Code keeps on this Mac. Run a session, or pick a longer period.",
+                cx,
+            )
+            .when(before_rows.is_empty(), |el| el)
+            .into_any_element(),
+            Some((now_rows, before_rows)) => {
+                let now_all = Totals::sum(now_rows.iter().map(|(_, _, t)| t));
+                let before_all = Totals::sum(before_rows.iter().map(|(_, _, t)| t));
+                let change = |now: i64, before: i64| match analytics::change_pct(now, before) {
+                    Some(p) => format!("{p:+.0}% {versus}"),
+                    None => "Nothing to compare with yet".into(),
+                };
+                let hit = |t: &Totals| t.cache_hit_rate().map(|r| r * 100.0);
+                let hit_change = match (hit(&now_all), hit(&before_all)) {
+                    (Some(a), Some(b)) => format!("{:+.0} points {versus}", a - b),
+                    _ => "Nothing to compare with yet".into(),
+                };
+                let tiles = h_flex()
+                    .flex_wrap()
+                    .gap_3()
+                    .child(tile("usage-tokens", "Tokens", short(now_all.total()), change(now_all.total(), before_all.total()), cx))
+                    .child(tile("usage-requests", "Requests", now_all.requests.to_string(), change(now_all.requests, before_all.requests), cx))
+                    .child(tile(
+                        "usage-cache",
+                        "Cache hit rate",
+                        hit(&now_all).map(|r| format!("{r:.0}%")).unwrap_or_else(|| "—".into()),
+                        hit_change,
+                        cx,
+                    ));
+                // One row per account and model: numbers right-aligned and tabular.
+                let num = |t: String| div().w(px(84.)).flex_none().text_right().child(t);
+                let head = h_flex()
+                    .px_4()
+                    .py_2()
+                    .gap_2()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(muted)
+                    .child(div().flex_1().min_w_0().child("Account"))
+                    .child(div().w(px(120.)).flex_none().child("Model"))
+                    .child(num("Input".into()))
+                    .child(num("Output".into()))
+                    .child(num("Cache read".into()))
+                    .child(num("Requests".into()));
+                let mut table: Vec<AnyElement> = vec![head.into_any_element()];
+                for (id, model, t) in now_rows {
+                    let (name, color) = accounts
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_else(|| (id.clone(), "#888888".into()));
+                    table.push(
+                        h_flex()
+                            .px_4()
+                            .py_2()
+                            .gap_2()
                             .text_sm()
-                            .text_color(muted)
-                            .child("No usage recorded on this Mac in this period.")
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_2()
+                                    .child(ui::avatar(&name, &color, 20., cx))
+                                    .child(div().truncate().child(name)),
+                            )
+                            .child(div().w(px(120.)).flex_none().truncate().text_color(muted).child(model.clone()))
+                            .child(num(short(t.input)))
+                            .child(num(short(t.output)))
+                            .child(num(short(t.cache_read)))
+                            .child(num(t.requests.to_string()))
                             .into_any_element(),
-                    ]
-                } else {
-                    now_t
-                        .iter()
-                        .map(|(id, t)| {
-                            let prev = before_t.get(id).map(|p| p.total()).unwrap_or(0);
-                            let change = if prev > 0 {
-                                format!(
-                                    " ({:+.0}% on the period before)",
-                                    (t.total() - prev) as f64 * 100.0 / prev as f64
-                                )
-                            } else {
-                                String::new()
-                            };
-                            let models: Vec<String> = now_rows
-                                .iter()
-                                .filter(|(a, _, _)| a == id)
-                                .map(|(_, mdl, x)| format!("{mdl} {}", short(x.total())))
-                                .collect();
-                            v_flex()
-                                .child(div().text_sm().child(format!(
-                                    "{}: {} tokens{change} · {} requests",
-                                    names.get(id).cloned().unwrap_or_else(|| id.clone()),
-                                    short(t.total()),
-                                    t.requests
-                                )))
-                                .child(div().text_xs().text_color(muted).child(format!(
-                                    "in {} · out {} · cache write {} · cache read {} · {}",
-                                    short(t.input),
-                                    short(t.output),
-                                    short(t.cache_write),
-                                    short(t.cache_read),
-                                    models.join(", ")
-                                )))
-                                .into_any_element()
-                        })
-                        .collect()
+                    );
                 }
+                v_flex()
+                    .gap_6()
+                    .child(tiles)
+                    .child(
+                        v_flex()
+                            .child(ui::section_header(Lucide::ChartColumn, "By account and model", cx))
+                            .child(ui::group_box(cx).children(ui::rows(table, cx))),
+                    )
+                    .into_any_element()
             }
         };
         let list = m.sessions();
@@ -273,37 +341,58 @@ impl AccountsPage {
             .iter()
             .map(|a| (a.id.clone(), a.name.clone()))
             .collect();
-        let session_rows: Vec<AnyElement> = list
-            .into_iter()
-            .map(|s| {
-                let s2 = s.clone();
-                let targets: Vec<(String, String)> = others
-                    .iter()
-                    .filter(|(id, _)| *id != s.account)
-                    .cloned()
-                    .collect();
-                let page = cx.entity();
-                h_flex()
-                    .gap_2()
-                    .child(div().flex_1().min_w_0().truncate().text_sm().child(format!(
-                        "{} · {} · {} · pid {}",
-                        names.get(&s.account).cloned().unwrap_or_default(),
-                        s.folder(),
-                        s.status.clone().unwrap_or_default(),
-                        s.pid
-                    )))
-                    .child(
-                        Button::new(SharedString::from(format!("hand-off-{}", s.pid)))
-                            .xsmall()
-                            .outline()
-                            .label("Continue On…")
-                            .disabled(targets.is_empty())
-                            .dropdown_menu(move |menu, _, _| {
-                                targets.iter().fold(menu, |menu, (id, name)| {
-                                    let (page, id, s) = (page.clone(), id.clone(), s2.clone());
-                                    menu.item(PopupMenuItem::new(name.clone()).on_click(
-                                        move |_, _, cx| {
-                                            page.update(cx, |this, cx| {
+        let session_rows: Vec<AnyElement> =
+            list.into_iter()
+                .map(|s| {
+                    let s2 = s.clone();
+                    let targets: Vec<(String, String)> = others
+                        .iter()
+                        .filter(|(id, _)| *id != s.account)
+                        .cloned()
+                        .collect();
+                    let page = cx.entity();
+                    let (name, color) = accounts
+                        .get(&s.account)
+                        .cloned()
+                        .unwrap_or_else(|| (String::new(), "#888888".into()));
+                    let state = match s.status.as_deref() {
+                        Some("busy") => "Working".to_string(),
+                        Some("idle") | Some("waiting") => "Waiting for you".to_string(),
+                        Some(other) => other.to_string(),
+                        None => String::new(),
+                    };
+                    h_flex()
+                        .px_4()
+                        .py_2()
+                        .gap_2()
+                        .child(ui::avatar(&name, &color, 20., cx))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().text_sm().truncate().child(s.folder().to_string()))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .truncate()
+                                        .child(format!("{name} · {state} · pid {}", s.pid)),
+                                ),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("hand-off-{}", s.pid)))
+                                .xsmall()
+                                .outline()
+                                .label("Continue On…")
+                                .disabled(targets.is_empty())
+                                .dropdown_menu(move |menu, _, _| {
+                                    targets.iter().fold(menu, |menu, (id, name)| {
+                                        let (page, id, s) = (page.clone(), id.clone(), s2.clone());
+                                        menu.item(
+                                            PopupMenuItem::new(name.clone())
+                                                .icon(Lucide::Users)
+                                                .on_click(move |_, _, cx| {
+                                                    page.update(cx, |this, cx| {
                                                 let opened = this
                                                     .model
                                                     .update(cx, |m, cx| m.hand_off(&s, &id, cx));
@@ -315,46 +404,73 @@ impl AccountsPage {
                                                     });
                                                 }
                                             })
-                                        },
-                                    ))
+                                                }),
+                                        )
+                                    })
+                                }),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("end-{}", s.pid)))
+                                .xsmall()
+                                .ghost()
+                                .icon(Lucide::CircleStop)
+                                .label("End…")
+                                .disabled(s.busy())
+                                .tooltip(if s.busy() {
+                                    "Busy: end it in its terminal"
+                                } else {
+                                    "Stop this session (SIGTERM)"
                                 })
-                            }),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("end-{}", s.pid)))
-                            .xsmall()
-                            .ghost()
-                            .label("End…")
-                            .disabled(s.busy())
-                            .tooltip(if s.busy() {
-                                "Busy: End It in Its Terminal"
-                            } else {
-                                "Stop This Session (SIGTERM)"
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.confirm_end(s.clone(), window, cx)
-                            })),
-                    )
-                    .into_any_element()
-            })
-            .collect();
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.confirm_end(s.clone(), window, cx)
+                                })),
+                        )
+                        .into_any_element()
+                })
+                .collect();
         let session_count = session_rows.len();
-        v_flex()
-            .id("accounts-usage")
-            .flex_1()
-            .overflow_y_scroll()
-            .p_6()
-            .gap_4()
+        let sessions = v_flex()
             .child(
-                h_flex().gap_1().children(PERIODS.iter().map(|&(label, secs)| {
-                    Button::new(SharedString::from(format!("period-{label}"))).small().ghost().label(label).selected(period == secs).on_click(cx.listener(move |this, _, _, cx| {
-                        this.period = secs;
-                        this.model.update(cx, |m, cx| m.refresh_analytics(secs, cx));
-                    }))
-                })),
+                ui::section_header(Lucide::SquareTerminal, "Running sessions", cx).child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(session_count.to_string()),
+                ),
             )
-            .child(card("Tokens Claude Code Recorded on This Mac".into()).children(analytics_rows).child(div().text_xs().text_color(muted).child("Token counts aren't subscription quota: the 5-hour and 7-day windows are on the Accounts tab.")))
-            .child(card(format!("Running Sessions · {session_count}")).children(session_rows).when(session_count == 0, |el| el.child(div().text_sm().text_color(muted).child("No claude session is running."))))
+            .child(if session_count == 0 {
+                ui::group_box(cx)
+                    .child(ui::setting_row(
+                        Lucide::SquareTerminal,
+                        "No claude session is running",
+                        "Open in Terminal on the Accounts tab starts one as any account.",
+                        div(),
+                        false,
+                        cx,
+                    ))
+                    .into_any_element()
+            } else {
+                ui::group_box(cx)
+                    .children(ui::rows(session_rows, cx))
+                    .into_any_element()
+            });
+        let (scroll, content) = ui::tab_body("accounts-usage", px(960.));
+        scroll
+            .child(
+                content
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_3()
+                            .child(periods)
+                            .child(div().flex_1())
+                            .child(div().text_xs().text_color(muted).child(
+                                "Tokens Claude Code recorded on this Mac. Plan limits are on the Accounts tab.",
+                            )),
+                    )
+                    .child(analytics)
+                    .child(sessions),
+            )
             .into_any_element()
     }
 
@@ -385,47 +501,167 @@ impl AccountsPage {
             exe: exe.as_deref(),
         };
         let checks = advice::diagnostics(&m.root, &m.home, &m.accounts, &probe);
-        v_flex()
-            .id("accounts-diagnostics")
-            .flex_1()
-            .overflow_y_scroll()
-            .p_6()
-            .gap_2()
-            .children(checks.into_iter().enumerate().map(|(ix, c)| {
-                // GPUI shows assistive technology no plain text: each check says itself.
-                let spoken = match &c.fix {
-                    Some(f) => format!("{}: {} {f}", c.title, c.detail),
-                    None => format!("{}: {}", c.title, c.detail),
+        let count = |l: Level| checks.iter().filter(|c| c.level == l).count();
+        let (pass, warn, fail, info) = (
+            count(Level::Pass),
+            count(Level::Warn),
+            count(Level::Fail),
+            count(Level::Info),
+        );
+        let report: String = checks
+            .iter()
+            .map(|c| {
+                let mark = match c.level {
+                    Level::Pass => "pass",
+                    Level::Warn => "warning",
+                    Level::Fail => "fail",
+                    Level::Info => "note",
                 };
-                let (mark, color) = match c.level {
-                    Level::Pass => ("✓", cx.theme().success),
-                    Level::Warn => ("!", cx.theme().warning),
-                    Level::Fail => ("✕", cx.theme().danger),
-                    Level::Info => ("i", cx.theme().muted_foreground),
+                match &c.fix {
+                    Some(f) => format!("[{mark}] {}: {} {f}", c.title, c.detail),
+                    None => format!("[{mark}] {}: {}", c.title, c.detail),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let plural = |n: usize, one: &str, many: &str| {
+            if n == 1 {
+                format!("1 {one}")
+            } else {
+                format!("{n} {many}")
+            }
+        };
+        let summary = h_flex()
+            .flex_wrap()
+            .gap_2()
+            .child(ui::pill(
+                "diag-pass",
+                Tone::Good,
+                Some(Lucide::CircleCheck),
+                plural(pass, "passed", "passed"),
+                cx,
+            ))
+            .when(warn > 0, |el| {
+                el.child(ui::pill(
+                    "diag-warn",
+                    Tone::Warn,
+                    Some(Lucide::TriangleAlert),
+                    plural(warn, "warning", "warnings"),
+                    cx,
+                ))
+            })
+            .when(fail > 0, |el| {
+                el.child(ui::pill(
+                    "diag-fail",
+                    Tone::Bad,
+                    Some(Lucide::CircleX),
+                    plural(fail, "failed", "failed"),
+                    cx,
+                ))
+            })
+            .when(info > 0, |el| {
+                el.child(ui::pill(
+                    "diag-info",
+                    Tone::Neutral,
+                    Some(Lucide::Info),
+                    plural(info, "note", "notes"),
+                    cx,
+                ))
+            })
+            .child(div().flex_1())
+            .child(
+                Button::new("diag-again")
+                    .xsmall()
+                    .outline()
+                    .icon(Lucide::RefreshCw)
+                    .label("Run Again")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.update(cx, |m, cx| m.check_all(cx));
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("diag-copy")
+                    .xsmall()
+                    .outline()
+                    .icon(Lucide::Copy)
+                    .label("Copy Report")
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(report.clone()))
+                    }),
+            );
+        let rows: Vec<AnyElement> = checks
+            .into_iter()
+            .enumerate()
+            .map(|(ix, c)| {
+                // GPUI shows assistive technology no plain text: each check says itself.
+                let word = match c.level {
+                    Level::Pass => "Passed",
+                    Level::Warn => "Warning",
+                    Level::Fail => "Failed",
+                    Level::Info => "Note",
+                };
+                let spoken = match &c.fix {
+                    Some(f) => format!("{word}: {}: {} {f}", c.title, c.detail),
+                    None => format!("{word}: {}: {}", c.title, c.detail),
+                };
+                let (icon, color) = match c.level {
+                    Level::Pass => (Lucide::CircleCheck, cx.theme().success),
+                    Level::Warn => (Lucide::TriangleAlert, cx.theme().warning),
+                    Level::Fail => (Lucide::CircleX, cx.theme().danger),
+                    Level::Info => (Lucide::Info, cx.theme().muted_foreground),
                 };
                 h_flex()
                     .id(("accounts-check", ix))
                     .role(Role::Label)
                     .aria_label(spoken)
-                    .gap_2()
+                    .gap_3()
+                    .px_4()
+                    .py_2p5()
                     .items_start()
-                    .child(div().w(px(16.)).text_color(color).child(mark))
+                    .child(
+                        div()
+                            .pt_0p5()
+                            .child(Icon::new(icon).small().text_color(color)),
+                    )
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_sm().font_semibold().child(c.title))
-                            .child(div().text_xs().whitespace_normal().child(c.detail))
+                            .child(div().text_sm().font_medium().child(c.title))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .whitespace_normal()
+                                    .child(c.detail),
+                            )
                             .when_some(c.fix, |el, f| {
                                 el.child(
-                                    div()
+                                    h_flex()
+                                        .mt_1()
+                                        .gap_1()
                                         .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(f),
+                                        .child(
+                                            Icon::new(Lucide::Wrench)
+                                                .xsmall()
+                                                .text_color(cx.theme().muted_foreground),
+                                        )
+                                        .child(div().whitespace_normal().child(f)),
                                 )
                             }),
                     )
-            }))
+                    .into_any_element()
+            })
+            .collect();
+        let (scroll, content) = ui::tab_body("accounts-diagnostics", ui::CONTENT_MAX);
+        scroll
+            .child(
+                content
+                    .gap_4()
+                    .child(summary)
+                    .child(ui::group_box(cx).children(ui::rows(rows, cx))),
+            )
             .into_any_element()
     }
 }

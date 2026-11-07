@@ -15,6 +15,7 @@ fn round_trip() {
             command: "npm test".into(),
             cwd: None,
             new_tab: true,
+            close_when_done: false,
         },
     };
     let bytes = encode(&request);
@@ -103,6 +104,7 @@ fn the_agents_folder_round_trips() {
             tab: None,
             pane: None,
             lines: None,
+            run: None,
         },
     };
     let bytes = encode(&request);

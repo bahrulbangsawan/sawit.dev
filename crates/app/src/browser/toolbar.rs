@@ -1,7 +1,7 @@
 //! The browser's toolbar: back, forward, reload (Stop and a progress bar while the page loads,
 //! [`super::progress`]), the address, the local servers' list ([`super::servers`]), Local
 //! Explorer while the page's dev server serves one, the device menu ([`super::device`]), the
-//! Annotate and Design toggles, open externally and Web Inspector.
+//! Annotate, Design and SEO toggles, open externally and Web Inspector.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -125,6 +125,20 @@ impl BrowserView {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.take_keyboard(window, cx);
                         this.toggle_panel(Panel::Design, cx);
+                    })),
+            )
+            .child(
+                Button::new("browser-seo")
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::SearchCheck)
+                    .accessibility_label("SEO")
+                    .toggled(self.panel() == Some(Panel::Seo))
+                    .tooltip("SEO: search, sharing and agent checks")
+                    .selected(self.panel() == Some(Panel::Seo))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.take_keyboard(window, cx);
+                        this.toggle_panel(Panel::Seo, cx);
                     })),
             )
             .child(

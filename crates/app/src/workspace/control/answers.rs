@@ -28,10 +28,20 @@ impl Workspace {
                         false,
                     ),
                 };
+                // A canvas is busy while an agent draws on it (B2).
+                let activity = match &tab.item {
+                    PaneItem::Other { view, .. } => {
+                        view.clone().downcast::<BoardView>().ok().map(|b| {
+                            sawit_core::activity::canvas(b.read(cx).agents_at_work(cx).is_some())
+                        })
+                    }
+                    _ => None,
+                };
                 json!({
                     "index": ix,
                     "title": title,
                     "kind": kind,
+                    "activity": activity.map(|a| a.to_json()),
                     "path": path,
                     "active": ix == self.active,
                     "pinned": tab.pinned,

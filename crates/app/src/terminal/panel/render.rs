@@ -14,6 +14,7 @@ use gpui_kit::*;
 use sawit_core::terminal::{AgentKind, SplitDir};
 
 use super::{TerminalPanel, ToggleMaximize, tab_menu};
+use crate::activity;
 use crate::states::{Banner, Placeholder};
 use crate::tab_groups::{group_header, group_stripe, project_name};
 use crate::tabs::{Drawn, strip};
@@ -21,6 +22,15 @@ use crate::terminal::agents;
 use crate::terminal::tab::TerminalTab;
 use crate::terminal::view::TerminalView;
 use crate::terminal::{SplitDown, SplitRight};
+
+/// What an exited tab's name says after it: the exit code when it is not 0, so a failure reads
+/// in words as well as in the icon.
+fn exited_note(code: Option<i32>) -> String {
+    match code {
+        Some(code) if code != 0 => format!(" (exited {code})"),
+        _ => " (exited)".into(),
+    }
+}
 
 /// The widest a pinned tab's name gets.
 const PINNED_W: f32 = 80.;
@@ -152,17 +162,18 @@ impl Render for TerminalPanel {
                     None if v.job.is_some() => {
                         let name = t.label(cx);
                         let state = if v.exited {
-                            " (exited)"
+                            exited_note(v.exit_code())
                         } else if !job_runs {
-                            " (stopped)"
+                            " (stopped)".into()
                         } else {
-                            ""
+                            String::new()
                         };
                         (Lucide::Play, format!("{name}{state}").into())
                     }
-                    None if v.exited => {
-                        (Lucide::Terminal, format!("{} (exited)", t.title(cx)).into())
-                    }
+                    None if v.exited => (
+                        Lucide::Terminal,
+                        format!("{}{}", t.title(cx), exited_note(v.exit_code())).into(),
+                    ),
                     None => (Lucide::Terminal, t.title(cx)),
                 };
                 // A live SSH session or a running script: the glyph turns the success colour,
@@ -171,10 +182,28 @@ impl Render for TerminalPanel {
                 let on_tab = t.agents(cx);
                 let kinds: Vec<AgentKind> = on_tab.iter().map(|&(_, kind)| kind).collect();
                 let running_phrase = (!kinds.is_empty()).then(|| agents::running_phrase(&kinds));
+                // The tab's state (B2): its own glyph while idle, else the state's, turning while
+                // busy; over agents' logos, a badge.
+                let activity = t.activity(cx);
+                let state_note = activity::description(activity);
+                let ring = if active {
+                    cx.theme().tab_active
+                } else {
+                    cx.theme().tab_bar
+                };
                 let icon = match &running_phrase {
-                    None => Icon::new(icon)
-                        .xsmall()
-                        .when(live, |i| i.text_color(cx.theme().success))
+                    None => div()
+                        .flex_none()
+                        .debug_selector(move || format!("term-activity-{ix}-{}", activity.id()))
+                        .child(activity::tab_icon(
+                            activity,
+                            Icon::new(icon)
+                                .xsmall()
+                                .when(live, |i| i.text_color(cx.theme().success))
+                                .into_any_element(),
+                            ("term-activity", ix),
+                            cx,
+                        ))
                         .into_any_element(),
                     Some(phrase) => {
                         // The tooltip names each pane's agent, by its place in reading order.
@@ -186,12 +215,12 @@ impl Render for TerminalPanel {
                                 format!("Pane {n}: {}", kind.name())
                             }));
                         }
+                        if let Some(note) = &state_note {
+                            lines.push(note.to_string());
+                        }
                         let badge = agents::badge(kinds.iter().copied());
-                        let ring = if active {
-                            cx.theme().tab_active
-                        } else {
-                            cx.theme().tab_bar
-                        };
+                        let state_badge = activity::badge(activity, ring, ("term-badge", ix), cx);
+                        let live = live && state_badge.is_none();
                         agents::logos(&badge, &format!("term-agent-{ix}"), window, cx)
                             .id(("term-agents", ix))
                             .debug_selector(move || format!("term-agents-{ix}"))
@@ -212,6 +241,8 @@ impl Render for TerminalPanel {
                                         .bg(cx.theme().success),
                                 )
                             })
+                            .debug_selector(move || format!("term-activity-{ix}-{}", activity.id()))
+                            .children(state_badge)
                             .into_any_element()
                     }
                 };
@@ -219,7 +250,14 @@ impl Render for TerminalPanel {
                     .id(("term-tab", ix))
                     .role(Role::Tab)
                     .aria_label(label.clone())
-                    .when_some(running_phrase, |el, phrase| el.aria_description(phrase))
+                    .map(|el| match (running_phrase, state_note) {
+                        (Some(phrase), Some(note)) => {
+                            el.aria_description(format!("{phrase}, {note}"))
+                        }
+                        (Some(phrase), None) => el.aria_description(phrase),
+                        (None, Some(note)) => el.aria_description(note),
+                        (None, None) => el,
+                    })
                     .aria_selected(active)
                     .debug_selector(move || format!("term-tab-{ix}"))
                     .relative()

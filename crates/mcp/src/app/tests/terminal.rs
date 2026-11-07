@@ -99,6 +99,7 @@ async fn terminal_run_reads_the_pane_it_ran_in() {
             command: "make test".into(),
             cwd: None,
             new_tab: false,
+            close_when_done: false,
             wait_secs: Some(0.0),
             lines: None,
             project: None,
@@ -118,6 +119,7 @@ async fn terminal_run_reads_the_pane_it_ran_in() {
             tab: Some(2),
             pane: Some(1),
             lines: Some(100),
+            run: None,
         }
     );
 }
@@ -181,6 +183,7 @@ async fn terminal_split_reads_the_new_pane() {
             tab: Some(2),
             pane: Some(1),
             lines: Some(20),
+            run: None,
         }
     );
     for (direction, cwd, why) in [
@@ -299,6 +302,7 @@ async fn terminal_run_starts_where_it_says_or_not_at_all() {
         command: "rm -rf build".into(),
         cwd: Some(cwd.into()),
         new_tab: false,
+        close_when_done: false,
         wait_secs: Some(0.0),
         lines: None,
         project: None,
@@ -337,5 +341,58 @@ async fn terminal_run_starts_where_it_says_or_not_at_all() {
     assert!(
         asked.recv_timeout(Duration::from_millis(300)).is_err(),
         "the app was asked to run in a folder that isn't one"
+    );
+}
+
+/// B3: a run the app numbers is read back by its number, since its tab may move or close
+/// meanwhile, and the answer says the number, whether a terminal was reused and whether the tab
+/// closes when done.
+#[tokio::test]
+async fn terminal_run_reads_its_run_by_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = native(dir.path());
+    let asked = fake_app_answering(
+        &server.paths,
+        vec![
+            json!({"terminal": 3, "pane": 0, "run": 7, "reused": true, "closes": false}),
+            json!({"text": "$ make\nok"}),
+        ],
+    );
+    let ran = server
+        .terminal_run(Parameters(TerminalRunArgs {
+            command: "make".into(),
+            cwd: None,
+            new_tab: false,
+            close_when_done: true,
+            wait_secs: Some(0.0),
+            lines: None,
+            project: None,
+        }))
+        .await;
+    assert_eq!(
+        said(&ran),
+        "Terminal 3, pane 0 (run 7, reused):\n$ make\nok"
+    );
+    let request = |asked: &Receiver<Request>| {
+        asked
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the app was asked")
+            .command
+    };
+    assert!(matches!(
+        request(&asked),
+        Command::TerminalRun {
+            close_when_done: true,
+            ..
+        }
+    ));
+    assert_eq!(
+        request(&asked),
+        Command::TerminalRead {
+            tab: Some(3),
+            pane: Some(0),
+            lines: Some(100),
+            run: Some(7),
+        }
     );
 }

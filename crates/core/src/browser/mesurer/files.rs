@@ -2,7 +2,7 @@
 //! colours, as pure helpers the app calls: what a file's bytes really are ([`sniff`]) and the name
 //! it is saved under ([`fixed_name`]), the captures folder ([`captures_folder`]), a sampled colour
 //! as `#rrggbb` ([`srgb_hex`]), the size of a recording's frames ([`frame_size`]), and the H.264
-//! levels a frame fits ([`avc_codec_for`], mirrored by `page/mesurer/capture.js`); and mesurer's
+//! levels a frame fits ([`avc_codec_for`], which `page/mesurer/capture.js` asks for); and mesurer's
 //! MP4 export made whole for AVFoundation ([`repair_mp4`]).
 
 mod mp4;
@@ -346,12 +346,15 @@ pub fn avc_fits(level: u8, width: u32, height: u32, fps: f64) -> bool {
 /// or its level fits the frame; else the same profile at the lowest level that does; `None` when
 /// none does. WebKit says yes to a level too small for the frame, then fails to encode it.
 pub fn avc_codec_for(codec: &str, width: u32, height: u32, fps: f64) -> Option<String> {
-    let Some(hex) = codec.strip_prefix("avc1.") else {
-        return Some(codec.into());
-    };
-    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+    // `avc1.PPCCLL`, the prefix in any case, as the glue matched it.
+    let avc = codec.len() == 11
+        && codec.is_char_boundary(5)
+        && codec[..5].eq_ignore_ascii_case("avc1.")
+        && codec[5..].bytes().all(|b| b.is_ascii_hexdigit());
+    if !avc {
         return Some(codec.into());
     }
+    let hex = &codec[5..];
     let level = u8::from_str_radix(&hex[4..], 16).ok()?;
     if avc_fits(level, width, height, fps) {
         return Some(codec.into());
@@ -360,4 +363,83 @@ pub fn avc_codec_for(codec: &str, width: u32, height: u32, fps: f64) -> Option<S
         .iter()
         .find(|l| l.0 > level && avc_fits(l.0, width, height, fps))
         .map(|l| format!("avc1.{}{:02x}", &hex[..4], l.0))
+}
+
+/// [`avc_codec_for`] for the page's `VideoEncoder.isConfigSupported` (`capture.codec`): its
+/// width and height as the page gave them (`None`: not a number, so no level fits), and its
+/// frame rate (`None` or ≤ 0: 30).
+pub fn codec_for_page(
+    codec: &str,
+    width: Option<f64>,
+    height: Option<f64>,
+    fps: Option<f64>,
+) -> Option<String> {
+    let side = |v: Option<f64>| v.filter(|v| v.is_finite()).map(|v| v.max(0.).ceil() as u32);
+    match (side(width), side(height)) {
+        (Some(w), Some(h)) => avc_codec_for(codec, w, h, fps.unwrap_or(f64::NAN)),
+        // No frame fits a level: an AVC codec gets none.
+        _ => avc_codec_for(codec, u32::MAX, u32::MAX, 30.),
+    }
+}
+
+/// A `data:` address's bytes and type, read as the page read them before (a `Blob` of the
+/// percent-decoded body, base64 or as UTF-8 text): the type before the first `;`, else
+/// `application/octet-stream`, lowercased (empty when it isn't printable ASCII, as a `Blob`'s).
+pub fn data_url(href: &str) -> Result<(String, Vec<u8>), String> {
+    let bad = || "The download's data: address can't be read.".to_string();
+    let units: Vec<char> = href.chars().collect();
+    let comma = units.iter().position(|c| *c == ',');
+    // JavaScript's slice(5, comma) and slice(comma + 1), with indexOf's -1 as it was.
+    let (head, body): (String, String) = match comma {
+        Some(i) => (
+            units
+                .get(5..i)
+                .map(|c| c.iter().collect())
+                .unwrap_or_default(),
+            units[i + 1..].iter().collect(),
+        ),
+        None => (
+            units
+                .get(5..units.len().saturating_sub(1))
+                .map(|c| c.iter().collect())
+                .unwrap_or_default(),
+            href.to_string(),
+        ),
+    };
+    let body = percent_decode(&body).ok_or_else(bad)?;
+    let bytes = if head.to_ascii_lowercase().ends_with(";base64") {
+        crate::browser::base64_decode(&body).ok_or_else(bad)?
+    } else {
+        body.into_bytes()
+    };
+    let kind = head.split(';').next().unwrap_or("");
+    let kind = if kind.is_empty() {
+        "application/octet-stream"
+    } else {
+        kind
+    };
+    let kind = if kind.chars().all(|c| (' '..='~').contains(&c)) {
+        kind.to_ascii_lowercase()
+    } else {
+        String::new()
+    };
+    Ok((kind, bytes))
+}
+
+/// `decodeURIComponent`: `%XX` escapes to bytes, which must be UTF-8.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = text.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }

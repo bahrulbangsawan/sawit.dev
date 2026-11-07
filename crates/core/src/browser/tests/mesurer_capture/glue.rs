@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 
 use crate::browser::mesurer::GLUE_JS;
-use crate::browser::mesurer::files::avc_codec_for;
+use crate::browser::mesurer::files::{avc_codec_for, codec_for_page};
 
 /// Runs the glue on a stand-in for WebKit's world, then `test`, then `JSON.stringify(out)` once
 /// every promise has settled. `replies[kind]` is what the app answers (a JSON text, `{error}`, or
@@ -148,7 +148,8 @@ fn the_worlds_clipboard_copies_images_and_text_through_the_app() {
 }
 
 /// A download link mesurer clicks posts its file, even when its blob is revoked right after;
-/// a data: link is read here. Links with no `download`, or to the web, click as before.
+/// a data: link goes as its address, for Rust to read. Links with no `download`, or to the web,
+/// click as before.
 #[test]
 fn download_links_are_posted_not_followed() {
     let got = on_stand_in(
@@ -171,12 +172,15 @@ fn download_links_are_posted_not_followed() {
         Object.defineProperty(out, "native", { enumerable: true, get: function () { return nativeClicks; } });
         "#,
     );
+    // The data: link posts at once, the blob once read: either may go first.
+    let mut saved = got["saved"].as_array().cloned().unwrap_or_default();
+    saved.sort_by_key(|s| s["name"].as_str().map(str::to_string));
     assert_eq!(
-        got["saved"],
-        json!([
-            {"name": "clip.webm", "mime": "image/gif", "base64": "R0lGODlh"},
-            {"name": "", "mime": "text/plain", "base64": "aGk="}
-        ])
+        saved,
+        vec![
+            json!({"name": "", "href": "data:text/plain;base64,aGk="}),
+            json!({"name": "clip.webm", "mime": "image/gif", "base64": "R0lGODlh"})
+        ]
     );
     assert_eq!(
         got["native"],
@@ -232,7 +236,8 @@ fn the_eye_dropper_samples_through_the_app() {
 
 /// mesurer's screenshots come from `capture.visible`, its recordings from a canvas stream fed by
 /// `capture.frame`, which says it shares the browser tab and logs its frame rate once stopped.
-/// MediaRecorder has no WebM; VideoEncoder is asked for the level `avc_codec_for` gives.
+/// MediaRecorder has no WebM; VideoEncoder is asked for the level Rust gives (`capture.codec`,
+/// answered here with `codec_for_page`).
 #[test]
 fn screenshots_and_recordings_come_from_the_app() {
     let cases = [
@@ -248,6 +253,11 @@ fn screenshots_and_recordings_come_from_the_app() {
         replies["capture.visible"] = JSON.stringify({{ png_base64: "iVBORw==" }});
         replies["capture.frame"] = JSON.stringify({{ jpeg_base64: "/9j/", width: 4, height: 2 }});
         var cases = {cases};
+        var codecs = {codecs};
+        replies["capture.codec"] = function (m) {{
+            var p = m.payload;
+            return Promise.resolve(JSON.stringify({{ codec: codecs[p.codec + " " + p.width + " " + p.height] }}));
+        }};
         SawitMesurer.mount({{}})
             .then(function () {{ return renders[0].captureVisibleTab(); }})
             .then(function (shot) {{
@@ -270,9 +280,21 @@ fn screenshots_and_recordings_come_from_the_app() {
             .then(function (answers) {{
                 out.supported = answers.map(function (a) {{ return a.supported ? a.config.codec : null; }});
                 out.asked = asked;
+                out.codec_asks = posted.filter(function (m) {{ return m.kind === "capture.codec"; }}).map(function (m) {{ return m.payload; }});
             }});
         "#,
         cases = serde_json::to_string(&cases).unwrap(),
+        codecs = serde_json::to_string(
+            &cases
+                .iter()
+                .map(|(c, w, h)| {
+                    let got =
+                        codec_for_page(c, Some(f64::from(*w)), Some(f64::from(*h)), Some(30.));
+                    (format!("{c} {w} {h}"), got)
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        )
+        .unwrap(),
     );
     let got = on_stand_in(&test);
     assert_eq!(got["shot"], json!(["image/png", [137, 80, 78, 71]]));
@@ -293,4 +315,9 @@ fn screenshots_and_recordings_come_from_the_app() {
     assert_eq!(got["supported"], json!(want));
     let asked: Vec<String> = want.into_iter().flatten().collect();
     assert_eq!(got["asked"], json!(asked));
+    let asks: Vec<Value> = cases
+        .iter()
+        .map(|(c, w, h)| json!({"codec": c, "width": w, "height": h, "fps": 30}))
+        .collect();
+    assert_eq!(got["codec_asks"], json!(asks));
 }

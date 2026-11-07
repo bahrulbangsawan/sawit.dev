@@ -35,6 +35,14 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 # SHA-256 and HMAC-SHA-256 for Miniflare's Durable Object ids (the D1 file names); already built
 # for rustls.
 ring = "0.17"
+# The browser's favicons and SEO scan (`web`): reqwest is already in the tree (postgresql_archive),
+# html5ever and markup5ever_rcdom too (gpui-base), image with these decoders too.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2"] }
+url = "2"
+html5ever = "0.27"
+markup5ever_rcdom = "0.3"
+image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "gif", "webp", "bmp"] }
+resvg = "0.46"
 
 [target.'cfg(unix)'.dependencies]
 # Asks the PTY which process group is in the foreground.
@@ -43,6 +51,4 @@ libc = "0.2"
 sha1 = "0.11"
 
 [dev-dependencies]
-# Same version GPUI rasterizes SVG with: proves rendered diagrams parse.
-resvg = "0.46"
 tempfile = "3"

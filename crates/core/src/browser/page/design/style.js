@@ -80,32 +80,17 @@
     return STATES.filter((s) => found.get(s).size).map((s) => [s, [...found.get(s)]]);
   };
 
-  // The opaque color behind `el`, as rgb(): walks up through transparent and
-  // translucent backgrounds, compositing the translucent ones over what's
-  // below, on white.
-  const effectiveBackground = (el) => {
-    const layers = [];
-    let base = null;
+  // The background colours behind `el`, from it up through its ancestors (and shadow hosts),
+  // for Rust to composite (site_design::computed::effective_background). Plain transparent
+  // ones are left out.
+  const backgroundsOf = (el, note) => {
+    const out = [];
     for (let node = el; node && node.nodeType === Node.ELEMENT_NODE; node = node.parentElement || (node.getRootNode && node.getRootNode().host) || null) {
       const c = getComputedStyle(node).backgroundColor;
-      if (transparent(c)) continue;
-      // Read in any syntax (oklch, lab, color(display-p3 …)); one the browser can't read is passed over.
-      const p = rgbaOf(c);
-      if (!p) continue;
-      if (p[3] >= 1) {
-        base = p;
-        break;
-      }
-      layers.push(p);
+      if (!c || c === "transparent" || c === "rgba(0, 0, 0, 0)") continue;
+      out.push(note(c));
     }
-    let [r, g, b] = base || [255, 255, 255];
-    for (let i = layers.length - 1; i >= 0; i--) {
-      const [lr, lg, lb, a] = layers[i];
-      r = lr * a + r * (1 - a);
-      g = lg * a + g * (1 - a);
-      b = lb * a + b * (1 - a);
-    }
-    return "rgb(" + Math.round(r) + ", " + Math.round(g) + ", " + Math.round(b) + ")";
+    return out;
   };
 
   const labelOf = (el) => {
@@ -127,9 +112,10 @@
     try {
       states = statesOf(el);
     } catch (_) {}
-    let effective = "rgb(255, 255, 255)";
+    const readings = newReadings();
+    let backgrounds = [];
     try {
-      effective = effectiveBackground(el);
+      backgrounds = backgroundsOf(el, readings.note);
     } catch (_) {}
     return {
       selector: helpers.selectorFor(el),
@@ -169,9 +155,10 @@
         grid_template_columns: grid ? orNull(s.gridTemplateColumns) : null,
       },
       states,
-      effective_background: effective,
       html: op.html ? inlinedHtml(el) : null,
+      backgrounds,
+      color_fallbacks: readings.fallbacks,
     };
   };
 
-  Object.assign(modules, { scan, rules, style });
+  Object.assign(modules, { scan, scan_samples: scanSamples, rules, style });

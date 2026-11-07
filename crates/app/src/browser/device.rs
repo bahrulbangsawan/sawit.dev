@@ -138,6 +138,7 @@ fn device_menu(
     };
     let mut menu = menu.item(
         PopupMenuItem::new("Responsive")
+            .icon(device_icon(&ViewportMode::Responsive))
             .checked(responsive)
             .on_click(set(ViewportMode::Responsive)),
     );
@@ -147,17 +148,20 @@ fn device_menu(
             width: device.width,
             height: device.height,
         };
+        let icon = device_icon(&mode);
         menu = menu.item(
             PopupMenuItem::new(format!(
                 "{} · {} × {}",
                 device.name, device.width, device.height
             ))
+            .icon(icon)
             .checked(device_ix == Some(ix))
             .on_click(set(mode)),
         );
     }
     let rotate = rotated(current);
     let mut item = PopupMenuItem::new("Rotate")
+        .icon(Lucide::RotateCw)
         .checked(sideways)
         .disabled(rotate.is_none());
     if let Some(mode) = rotate {

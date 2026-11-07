@@ -1,6 +1,7 @@
 //! Core logic for Sawit: process management, port probing, connections and
 //! queries. Must not depend on GPUI so it can be tested with plain `cargo test`.
 
+pub mod activity;
 pub mod agent_accounts;
 pub mod agent_config;
 pub mod agents;
@@ -60,5 +61,6 @@ pub mod stack_builder;
 pub mod terminal;
 pub mod text_diff;
 pub mod update;
+pub mod web;
 
 pub use error::{CoreError, Result};

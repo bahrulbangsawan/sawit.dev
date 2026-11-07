@@ -16,7 +16,8 @@ What you run in Sawit's terminal shows in the user's window, where they can watc
 
 ## Any command
 
-- `terminal_run` types a command and returns where it ran ("Terminal 2, pane 0") with its latest output (`wait_secs` up to 120, `new_tab`, `cwd`).
+- `terminal_run` types a command and returns where it ran ("Terminal 2, pane 0 (run 5)") with its latest output (`wait_secs` up to 120, `new_tab`, `cwd`). Your next `terminal_run` goes to your own latest terminal that is idle (with a `cd` when `cwd` differs), so many commands leave one tab: don't pass `new_tab` unless you need a second shell. A locked or pinned tab, one running something and the one the user types in are never used.
+- `close_when_done: true` closes a tab opened for a one-off command once it finishes; `terminal_read` with `run` (the number from the answer) still reads its output afterwards. Read by `run` whenever you have it: tab numbers change when other tabs close.
 - `terminal_split` runs something beside a terminal: a server next to a test watcher.
 - `terminal_rename` labels the tab (or a pane of a split tab) where it runs, so the user can tell them apart.
 - Pass the tab and pane you got back to `terminal_read`, `terminal_input` and `terminal_close`: the terminal in front may be one the user types in. `terminal_input` with `key` ctrl-c interrupts; `text` answers a prompt.

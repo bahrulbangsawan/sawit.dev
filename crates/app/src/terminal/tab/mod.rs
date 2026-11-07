@@ -150,7 +150,9 @@ impl TerminalTab {
             }
             match event {
                 TerminalEvent::MenuRequested(at) => this.request_menu(pane, *at, cx),
-                TerminalEvent::TitleChanged => cx.emit(TabEvent::Changed),
+                TerminalEvent::TitleChanged | TerminalEvent::ActivityChanged => {
+                    cx.emit(TabEvent::Changed)
+                }
                 TerminalEvent::AgentChanged => {
                     cx.emit(TabEvent::Changed);
                     cx.notify();
@@ -255,6 +257,16 @@ impl TerminalTab {
                 Some((pane, agent))
             })
             .collect()
+    }
+
+    /// The tab's state for its icon: the most pressing of its panes' (one failed pane of three
+    /// shows the failure).
+    pub fn activity(&self, cx: &App) -> sawit_core::activity::Activity {
+        self.views()
+            .map(|(_, view)| view.read(cx).activity())
+            .fold(sawit_core::activity::Activity::Idle, |a, b| {
+                a.most_pressing(b)
+            })
     }
 
     /// Every pane and its terminal, in layout order.

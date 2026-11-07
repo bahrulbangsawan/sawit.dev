@@ -1,7 +1,7 @@
 //! Bottom-dock terminal: tabs of real terminals (shell or SSH), each showing the coding agents
 //! (Claude Code, Codex, …) running in it by their logos.
 
-mod agents;
+pub(crate) mod agents;
 mod guard;
 mod panel;
 mod tab;

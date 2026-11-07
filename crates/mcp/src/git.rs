@@ -171,7 +171,7 @@ fn safe_rev(rev: &str) -> Result<&str, String> {
 }
 
 impl Sawit {
-    async fn repo(dir: &str) -> Result<PathBuf, String> {
+    pub(crate) async fn repo(dir: &str) -> Result<PathBuf, String> {
         let dir = existing_dir(dir)?;
         git::discover(&dir)
             .await

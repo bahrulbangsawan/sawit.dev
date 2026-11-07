@@ -1,5 +1,6 @@
 //! The terminal panel's tests, by what they exercise, and the helpers they share.
 
+mod agent_runs;
 mod control;
 mod ending;
 mod jobs;

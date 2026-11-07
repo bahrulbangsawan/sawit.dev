@@ -119,6 +119,7 @@ impl BrowserTabs {
             view.update(cx, |v, cx| {
                 v.restore(url, history, cx);
                 v.set_viewport(viewport, cx);
+                v.restored_favicon(cx);
             });
         }
         this.active = saved.active.min(this.tabs.len().saturating_sub(1));
@@ -358,6 +359,7 @@ impl BrowserTabs {
                     "active": ix == self.active,
                     "live": v.is_live(),
                     "loading": v.loading,
+                    "activity": sawit_core::activity::browser(v.loading, false).to_json(),
                     "device": v.viewport_json()["device"],
                 })
             })

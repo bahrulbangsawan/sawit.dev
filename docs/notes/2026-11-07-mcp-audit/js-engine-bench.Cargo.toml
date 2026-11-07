@@ -1,0 +1,18 @@
+[package]
+name = "jsbench"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+boa = ["dep:boa_engine"]
+qjs = ["dep:rquickjs"]
+
+[dependencies]
+boa_engine = { version = "0.22", optional = true, default-features = false }
+rquickjs = { version = "0.14", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

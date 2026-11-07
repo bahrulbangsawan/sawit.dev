@@ -158,77 +158,96 @@ fn host_menu(
     let (k1, k2, k3, k4) = (key.clone(), key.clone(), key.clone(), key.clone());
     let menu = menu
         .item(
-            PopupMenuItem::new("Connect").on_click(act(Box::new(move |_, cx| {
-                cx.emit(SshEvent::Connect {
-                    key: k1.clone(),
-                    new: false,
-                })
-            }))),
+            PopupMenuItem::new("Connect")
+                .icon(crate::menu_icons::CONNECT)
+                .on_click(act(Box::new(move |_, cx| {
+                    cx.emit(SshEvent::Connect {
+                        key: k1.clone(),
+                        new: false,
+                    })
+                }))),
         )
         .item(
-            PopupMenuItem::new("New Session").on_click(act(Box::new(move |_, cx| {
-                cx.emit(SshEvent::Connect {
-                    key: k2.clone(),
-                    new: true,
-                })
-            }))),
+            PopupMenuItem::new("New Session")
+                .icon(crate::menu_icons::NEW_TERMINAL)
+                .on_click(act(Box::new(move |_, cx| {
+                    cx.emit(SshEvent::Connect {
+                        key: k2.clone(),
+                        new: true,
+                    })
+                }))),
         )
         .item(
             PopupMenuItem::new(if copied { "Copied" } else { "Copy SSH Command" })
+                .icon(if copied {
+                    crate::menu_icons::DONE
+                } else {
+                    crate::menu_icons::COPY
+                })
                 .on_click(act(Box::new(move |panel, cx| panel.copy_command(&k3, cx)))),
         )
         .item(
-            PopupMenuItem::new("Check Connection").on_click(act(Box::new(move |panel, cx| {
-                let key = k4.clone();
-                panel.store.update(cx, |s, cx| s.probe(&key, cx));
-            }))),
+            PopupMenuItem::new("Check Connection")
+                .icon(crate::menu_icons::CHECK_CONNECTION)
+                .on_click(act(Box::new(move |panel, cx| {
+                    let key = k4.clone();
+                    panel.store.update(cx, |s, cx| s.probe(&key, cx));
+                }))),
         )
         .separator();
     match saved_id {
         Some(id) => {
             let (e, d, r) = (id.clone(), id.clone(), id);
             menu.item(
-                PopupMenuItem::new("Edit").on_click(act(Box::new(move |_, cx| {
-                    cx.emit(SshEvent::Edit(e.clone()))
-                }))),
+                PopupMenuItem::new("Edit")
+                    .icon(crate::menu_icons::EDIT)
+                    .on_click(act(Box::new(move |_, cx| {
+                        cx.emit(SshEvent::Edit(e.clone()))
+                    }))),
             )
             .item(
-                PopupMenuItem::new("Duplicate").on_click(act(Box::new(move |panel, cx| {
-                    let id = d.clone();
-                    if let Some(new) = panel.store.update(cx, |s, cx| s.duplicate(&id, cx)) {
-                        cx.emit(SshEvent::Edit(new));
-                    }
-                }))),
+                PopupMenuItem::new("Duplicate")
+                    .icon(crate::menu_icons::DUPLICATE)
+                    .on_click(act(Box::new(move |panel, cx| {
+                        let id = d.clone();
+                        if let Some(new) = panel.store.update(cx, |s, cx| s.duplicate(&id, cx)) {
+                            cx.emit(SshEvent::Edit(new));
+                        }
+                    }))),
             )
             .separator()
             .item({
                 let this = this.clone();
-                PopupMenuItem::new("Delete…").on_click(move |_, window, cx| {
-                    let Some(panel) = this.upgrade() else { return };
-                    let store = panel.read(cx).store.clone();
-                    let Some(host) = store.read(cx).list.get(&r).cloned() else {
-                        return;
-                    };
-                    let label = host.label();
-                    let mut detail = format!("{label} ({}) leaves your saved servers.", host.host);
-                    if store.read(cx).passwords.contains(&r) {
-                        detail.push_str(" Its password is deleted from the Keychain.");
-                    }
-                    let answer = crate::confirm::Confirm::new(
-                        format!("Delete the server {label}?"),
-                        "Delete Server",
-                    )
-                    .thing(label)
-                    .detail(detail)
-                    .ask(window, cx);
-                    let id = r.clone();
-                    cx.spawn(async move |cx| {
-                        if answer.await {
-                            store.update(cx, |s, cx| s.remove(&id, cx));
+                PopupMenuItem::new("Delete…")
+                    .icon(crate::menu_icons::DELETE)
+                    .danger(true)
+                    .on_click(move |_, window, cx| {
+                        let Some(panel) = this.upgrade() else { return };
+                        let store = panel.read(cx).store.clone();
+                        let Some(host) = store.read(cx).list.get(&r).cloned() else {
+                            return;
+                        };
+                        let label = host.label();
+                        let mut detail =
+                            format!("{label} ({}) leaves your saved servers.", host.host);
+                        if store.read(cx).passwords.contains(&r) {
+                            detail.push_str(" Its password is deleted from the Keychain.");
                         }
+                        let answer = crate::confirm::Confirm::new(
+                            format!("Delete the server {label}?"),
+                            "Delete Server",
+                        )
+                        .thing(label)
+                        .detail(detail)
+                        .ask(window, cx);
+                        let id = r.clone();
+                        cx.spawn(async move |cx| {
+                            if answer.await {
+                                store.update(cx, |s, cx| s.remove(&id, cx));
+                            }
+                        })
+                        .detach();
                     })
-                    .detach();
-                })
             })
         }
         None => {
@@ -236,13 +255,15 @@ fn host_menu(
                 .strip_prefix("ssh-config\u{0}")
                 .unwrap_or_default()
                 .to_string();
-            menu.item(PopupMenuItem::new("Save as Server").on_click(act(Box::new(
-                move |panel, cx| {
-                    let alias = alias.clone();
-                    let id = panel.store.update(cx, |s, cx| s.save_alias(&alias, cx));
-                    cx.emit(SshEvent::Edit(id));
-                },
-            ))))
+            menu.item(
+                PopupMenuItem::new("Save as Server")
+                    .icon(crate::menu_icons::SAVE)
+                    .on_click(act(Box::new(move |panel, cx| {
+                        let alias = alias.clone();
+                        let id = panel.store.update(cx, |s, cx| s.save_alias(&alias, cx));
+                        cx.emit(SshEvent::Edit(id));
+                    }))),
+            )
         }
     }
 }
