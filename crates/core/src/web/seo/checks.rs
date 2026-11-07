@@ -134,7 +134,13 @@ pub(super) async fn run(url: &str, options: ScanOptions) -> Report {
         );
     }
     let facts = facts(&site).await;
-    let mut results = seo_checks(&site, &facts).await;
+    let (mut results, agent) = futures::join!(seo_checks(&site, &facts), super::agent::run(&site));
+    results.extend(agent);
+    if options.external {
+        let (score, theirs) = super::external::scan(&site.page.url).await;
+        report.external = Some(score);
+        results.extend(theirs);
+    }
     results.retain(|r| catalog::def(&r.id).is_some_and(|d| wanted(d, &options)));
     // Checks that weren't asked for, or that only the external scan answers, are listed as such.
     for def in catalog::CHECKS {
@@ -626,7 +632,13 @@ async fn seo_checks(site: &Site, f: &PageFacts) -> Vec<CheckResult> {
     });
     out.push(match (&f.og_image, f.image_width, f.image_height) {
         (None, ..) => fail("og-image", "No og:image: shared links show no picture."),
-        (Some(url), Some(w), Some(hh)) => if w >= 1200 && hh >= 630 {
+        (Some(url), Some(w), Some(hh)) => if f.image_type.as_deref() == Some("image/avif") {
+                warn(
+                    "og-image",
+                    0.5,
+                    format!("{w}×{hh} AVIF: WhatsApp, Facebook and LinkedIn don't show AVIF share images; use PNG or JPEG."),
+                )
+            } else if w >= 1200 && hh >= 630 {
             pass(
                 "og-image",
                 format!("{w}×{hh} {}.", f.image_type.as_deref().unwrap_or("")),
@@ -976,6 +988,16 @@ async fn broken_links(site: &Site) -> CheckResult {
     r
 }
 
+/// Points earned and possible: every required and recommended check counts in full; a bonus
+/// check counts (in both) only when it passes or warns, so it can lift a score and never lowers
+/// one.
+fn points(checks: &[&CheckResult]) -> (f64, f64) {
+    checks
+        .iter()
+        .filter(|c| c.tier != Tier::Bonus || matches!(c.status, Status::Pass | Status::Warn))
+        .fold((0., 0.), |(s, m), c| (s + c.score, m + c.max))
+}
+
 /// Works out the scores: the search and sharing score from the `seo` checks, each agent layer's
 /// score and the weighted total, the content sites' "Essentials" score and the grade.
 pub(super) fn score(report: &mut Report) {
@@ -987,12 +1009,7 @@ pub(super) fn score(report: &mut Report) {
         .filter(|c| c.seo)
         .filter(counted)
         .collect();
-    let earned: f64 = seo.iter().map(|c| c.score).sum();
-    let possible: f64 = seo
-        .iter()
-        .filter(|c| c.tier != Tier::Bonus)
-        .map(|c| c.max)
-        .sum();
+    let (earned, possible) = points(&seo);
     report.seo_score = percent(earned, possible);
 
     let mut layers = Vec::new();
@@ -1004,12 +1021,7 @@ pub(super) fn score(report: &mut Report) {
             .filter(|c| c.layer == layer)
             .filter(counted)
             .collect();
-        let score: f64 = checks.iter().map(|c| c.score).sum();
-        let max: f64 = checks
-            .iter()
-            .filter(|c| c.tier != Tier::Bonus)
-            .map(|c| c.max)
-            .sum();
+        let (score, max) = points(&checks);
         // Payments count when any one protocol is supported (all of them are bonus checks).
         let (score, max) = if layer == Layer::Payments {
             let applies = report

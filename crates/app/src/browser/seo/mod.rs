@@ -3,6 +3,7 @@
 //! the link looks when shared, and every search and sharing check with its evidence and fix.
 //! Built from the side panel's pieces (`super::panel`), like Annotate and Design.
 
+mod agents;
 pub(super) mod flow;
 mod previews;
 mod rows;
@@ -30,16 +31,23 @@ pub enum SeoTab {
     Overview,
     Previews,
     Checks,
+    Agents,
 }
 
 impl SeoTab {
-    const ALL: [SeoTab; 3] = [SeoTab::Overview, SeoTab::Previews, SeoTab::Checks];
+    const ALL: [SeoTab; 4] = [
+        SeoTab::Overview,
+        SeoTab::Previews,
+        SeoTab::Checks,
+        SeoTab::Agents,
+    ];
 
     fn title(self) -> &'static str {
         match self {
             SeoTab::Overview => "Overview",
             SeoTab::Previews => "Previews",
             SeoTab::Checks => "Checks",
+            SeoTab::Agents => "Agents",
         }
     }
 
@@ -49,6 +57,7 @@ impl SeoTab {
             SeoTab::Overview => "overview",
             SeoTab::Previews => "previews",
             SeoTab::Checks => "checks",
+            SeoTab::Agents => "agents",
         }
     }
 
@@ -77,6 +86,10 @@ pub enum ScanState {
 pub enum SeoEvent {
     /// Scan the page again.
     Rescan,
+    /// Scan again for another kind of site.
+    ScanType(sawit_core::web::seo::ScanType),
+    /// Ask the outside scanner too, or stop asking.
+    External(bool),
 }
 
 impl EventEmitter<SeoEvent> for SeoPanel {}
@@ -90,6 +103,8 @@ pub struct SeoPanel {
     /// The share image and the favicon, for the previews.
     picture: Option<Arc<RenderImage>>,
     favicon: Option<Arc<RenderImage>>,
+    /// The external score is asked for.
+    external: bool,
     note: Option<SharedString>,
     _note_timer: Option<Task<()>>,
 }
@@ -103,6 +118,7 @@ impl SeoPanel {
             scanned_at: None,
             picture: None,
             favicon: None,
+            external: false,
             note: None,
             _note_timer: None,
         }
@@ -138,6 +154,11 @@ impl SeoPanel {
         };
         self.scanned_at = Some(Instant::now());
         self.picture = None;
+        cx.notify();
+    }
+
+    pub fn set_external(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.external = on;
         cx.notify();
     }
 
@@ -250,6 +271,7 @@ impl SeoPanel {
                         .into_any_element()
                 }
                 SeoTab::Checks => self.checks(&report, cx).into_any_element(),
+                SeoTab::Agents => self.agents(&report, cx).into_any_element(),
             },
         }
     }
@@ -297,7 +319,14 @@ impl SeoPanel {
                     }),
             )
             .child(rows::scores(
-                vec![("Search and sharing".into(), report.seo_score, "/100".into())],
+                vec![
+                    ("Search and sharing".into(), report.seo_score, "/100".into()),
+                    (
+                        "Agent readiness".into(),
+                        report.agent_score,
+                        format!("· {}", report.grade).into(),
+                    ),
+                ],
                 cx,
             ))
             .child(rows::counts(passed, warned, failed, cx))

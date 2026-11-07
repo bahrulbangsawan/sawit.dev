@@ -58,6 +58,8 @@ pub struct Anchor {
     pub href: String,
     pub text: String,
     pub rel: Vec<String>,
+    /// `aria-label` or `title`, when it has one.
+    pub label: Option<String>,
 }
 
 /// A form control: its kind and whether something names it (a `<label>`, `aria-label`,
@@ -362,6 +364,10 @@ impl Walk<'_> {
                     self.head.anchors.push(Anchor {
                         href: self.absolute(href),
                         text: text_of(handle),
+                        label: get(&a, "aria-label")
+                            .or_else(|| get(&a, "title"))
+                            .map(|l| l.trim().to_string())
+                            .filter(|l| !l.is_empty()),
                         rel: get(&a, "rel")
                             .unwrap_or_default()
                             .split_whitespace()

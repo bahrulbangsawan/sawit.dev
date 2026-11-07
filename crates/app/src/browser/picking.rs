@@ -117,7 +117,7 @@ impl BrowserView {
         let seo_tab = match (want, tab) {
             (Some(Panel::Seo), Some(name)) => {
                 Some(super::seo::SeoTab::named(name).ok_or_else(|| {
-                    format!("Unknown tab “{name}”. Use overview, previews or checks.")
+                    format!("Unknown tab “{name}”. Use overview, previews, checks or agents.")
                 })?)
             }
             _ => None,

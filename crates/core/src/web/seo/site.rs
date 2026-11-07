@@ -164,6 +164,9 @@ impl Site {
 
 /// An image's pixel size and type, from the first bytes of it.
 pub fn image_size(bytes: &[u8]) -> Option<(u32, u32, &'static str)> {
+    if let Some((w, h)) = avif_size(bytes) {
+        return Some((w, h, "image/avif"));
+    }
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
@@ -179,4 +182,24 @@ pub fn image_size(bytes: &[u8]) -> Option<(u32, u32, &'static str)> {
     };
     let (w, h) = reader.into_dimensions().ok()?;
     Some((w, h, mime))
+}
+
+/// An AVIF's size, from its `ispe` box (the image crate reads AVIF only with a C decoder).
+pub fn avif_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 12
+        || &bytes[4..8] != b"ftyp"
+        || !bytes[8..bytes.len().min(64)]
+            .windows(4)
+            .any(|w| w == b"avif" || w == b"avis")
+    {
+        return None;
+    }
+    let at = bytes.windows(4).position(|w| w == b"ispe")?;
+    let read = |i: usize| {
+        bytes
+            .get(i..i + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    // "ispe", then version and flags (4 bytes), width, height.
+    Some((read(at + 8)?, read(at + 12)?))
 }

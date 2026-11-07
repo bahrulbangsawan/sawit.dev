@@ -251,6 +251,15 @@ impl BrowserView {
                 window,
                 |this, _, event: &SeoEvent, _, cx| match event {
                     SeoEvent::Rescan => this.seo_rescan(cx),
+                    SeoEvent::ScanType(t) => {
+                        this.seo_ask.scan_type = *t;
+                        this.seo_rescan(cx);
+                    }
+                    SeoEvent::External(on) => {
+                        this.seo_ask.external = *on;
+                        this.seo_panel.update(cx, |p, cx| p.set_external(*on, cx));
+                        this.seo_rescan(cx);
+                    }
                 },
             ),
             cx.subscribe_in(
