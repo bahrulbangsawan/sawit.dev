@@ -27,17 +27,17 @@ pub fn account_chip(cx: &mut App) -> AnyElement {
         },
         None => "No Active Account".into(),
     };
-    let color = active
+    let (name, color) = active
         .as_ref()
-        .map(|a| a.color.clone())
-        .unwrap_or_else(|| "#888888".into());
+        .map(|a| (a.name.clone(), a.color.clone()))
+        .unwrap_or_else(|| ("?".into(), "#888888".into()));
     Button::new("account-chip")
         .ghost()
         .xsmall()
-        .child(rows::swatch(&color, 8.))
+        .child(super::ui::avatar(&name, &color, 16., cx))
         .child(div().child(label.clone()))
         .accessibility_label(format!("Claude Code Account: {label}"))
-        .tooltip("The Claude Code Account New Sessions Use")
+        .tooltip("The Claude Code account new sessions use")
         .dropdown_caret(true)
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, cx| {
             menu_of(menu, &model, cx)
@@ -64,6 +64,7 @@ fn menu_of(
         let id = a.id.clone();
         menu = menu.item(
             PopupMenuItem::new(text)
+                .icon(Lucide::Users)
                 .checked(active.as_ref() == Some(&a.id))
                 .on_click(move |_, _, cx| global(cx).update(cx, |m, cx| m.set_active(&id, cx))),
         );
@@ -74,6 +75,7 @@ fn menu_of(
         let name = a.name.clone();
         menu = menu.separator().item(
             PopupMenuItem::new(format!("Most Room Left: {name} · Switch"))
+                .icon(Lucide::Gauge)
                 .on_click(move |_, _, cx| global(cx).update(cx, |m, cx| m.set_active(&id, cx))),
         );
     }

@@ -179,6 +179,12 @@ gpui_kit::assets::icon_assets!(
         ListChecks,
         // Activity icons on the tabs: needs attention.
         BellDot,
+        // The Accounts page's tabs, sections and settings rows.
+        ChartColumn,
+        Gauge,
+        Share2,
+        Power,
+        Wrench,
     ]
 );
 

@@ -184,6 +184,41 @@ impl Accounts {
         Some(gone)
     }
 
+    /// Moves the account `delta` places in its agent's list (−1 up, +1 down), clamped to the
+    /// ends; its `cpN` number follows its place. Whether it moved.
+    pub fn move_by(&mut self, id: &str, delta: isize) -> bool {
+        let Some(kind) = self.get(id).map(|a| a.kind) else {
+            return false;
+        };
+        let mut ids: Vec<String> = self.of(kind).iter().map(|a| a.id.clone()).collect();
+        let Some(from) = ids.iter().position(|x| x == id) else {
+            return false;
+        };
+        let to = (from as isize + delta).clamp(0, ids.len() as isize - 1) as usize;
+        if to == from {
+            return false;
+        }
+        let moved = ids.remove(from);
+        ids.insert(to, moved);
+        for (order, id) in ids.iter().enumerate() {
+            if let Some(a) = self.accounts.iter_mut().find(|a| &a.id == id) {
+                a.order = order;
+            }
+        }
+        true
+    }
+
+    /// Moves the account to `index` in its agent's list (a drop at that row).
+    pub fn move_to(&mut self, id: &str, index: usize) -> bool {
+        let Some(kind) = self.get(id).map(|a| a.kind) else {
+            return false;
+        };
+        let Some(from) = self.of(kind).iter().position(|a| a.id == id) else {
+            return false;
+        };
+        self.move_by(id, index as isize - from as isize)
+    }
+
     /// The account the agent starts with now: the one the pointer names, else the default.
     pub fn active(&self, kind: AgentKind, root: &Path) -> Option<&Account> {
         let pointer = read_active(root, kind);

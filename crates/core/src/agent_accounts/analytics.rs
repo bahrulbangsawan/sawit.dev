@@ -194,6 +194,36 @@ impl Totals {
     pub fn total(&self) -> i64 {
         self.input + self.output + self.cache_write + self.cache_read
     }
+
+    /// Adds `other` in.
+    pub fn add(&mut self, other: &Totals) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_write += other.cache_write;
+        self.cache_read += other.cache_read;
+        self.requests += other.requests;
+    }
+
+    /// The share of prompt tokens read from the cache (0–1): cache reads over everything sent
+    /// in. `None` with nothing sent.
+    pub fn cache_hit_rate(&self) -> Option<f64> {
+        let sent = self.input + self.cache_write + self.cache_read;
+        (sent > 0).then(|| self.cache_read as f64 / sent as f64)
+    }
+
+    /// Every row of a period summed.
+    pub fn sum<'a>(rows: impl IntoIterator<Item = &'a Totals>) -> Totals {
+        let mut all = Totals::default();
+        for t in rows {
+            all.add(t);
+        }
+        all
+    }
+}
+
+/// The change from `before` to `now` in percent, when there was something before to compare.
+pub fn change_pct(now: i64, before: i64) -> Option<f64> {
+    (before > 0).then(|| (now - before) as f64 * 100.0 / before as f64)
 }
 
 /// Per account and model, for `[from, to)`.
@@ -220,4 +250,27 @@ pub fn totals(db: &Connection, from: i64, to: i64) -> Result<Vec<(String, String
         })
         .map_err(err)?;
     rows.collect::<std::result::Result<_, _>>().map_err(err)
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    #[test]
+    fn sums_rates_and_changes() {
+        let a = Totals {
+            input: 100,
+            output: 50,
+            cache_write: 100,
+            cache_read: 800,
+            requests: 3,
+        };
+        let all = Totals::sum([&a, &a]);
+        assert_eq!(all.requests, 6);
+        assert_eq!(all.total(), 2100);
+        assert_eq!(all.cache_hit_rate(), Some(0.8));
+        assert_eq!(Totals::default().cache_hit_rate(), None);
+        assert_eq!(change_pct(110, 100), Some(10.0));
+        assert_eq!(change_pct(5, 0), None);
+    }
 }
