@@ -795,9 +795,26 @@ Sawit, without a menu bar app.
     `.nyawit/design/<host>/` (with no project, to `~/Downloads/sawit-design/<host>/`); a dev server's folder keeps its
     port, as `localhost-5173`. Exporting again replaces that folder, a `DESIGN.md` you edited included; an agent's
     export does that only when it passes `replace: true`.
+- Each tab shows its page's **favicon** (the page's own icon links, else `/favicon.ico`, fetched in Rust and
+  cached per site), the globe when it has none.
+- **SEO**, the toolbar's magnifier with a check, scans the page for search engines, link previews and agents:
+  an **Overview** (the search and sharing score, what to fix, what the page says about itself), **Previews** of the
+  link as a search result and on WhatsApp, LinkedIn, Facebook and X, every **Check** with its evidence, fix and
+  spec, and **Agents**: the agent-readiness checks (discovery files, Markdown for agents, AI crawler rules, the MCP
+  server, OAuth metadata, page tools, the accessibility tree…) scored per layer with a grade and an Essentials
+  score, for a content site, an API or app, or both. **Copy fix prompt** hands a check to an agent. The site's
+  files are fetched by Sawit, not the page, so local dev servers work the same as live sites; an optional
+  external score asks an outside scanner, for public addresses only.
+- **Capture**, the camera button: a screenshot of the visible area or the full page (lazy images loaded, sticky
+  headers once), the page at a phone, tablet, laptop and desktop size at once, or a recording of the visible area
+  or a scroll through the full page (MP4, MOV or GIF, 720p to 4K), at the tab's size or any of twenty device
+  presets. Pixels follow the device and scale picked, not the window or the screen. The bar under the toolbar
+  shows the capture with **Copy**, **Reveal in Finder** and **Open**; while a recording runs the tab shows a red
+  dot and the time, and closing it asks first. Files go to the project's `.nyawit/annotations/<date>/`, named
+  with the site, device and scale (`example.com-iphone-15-3x-full.png`).
 - AI agents drive it through the `browser_*` MCP tools: open pages, read the page as an accessibility outline,
   click, type, pick options, press keys, scroll, wait for text, run JavaScript, and read the console, failed
-  requests and screenshots. They can also set a device size, read your annotations, and inspect, read or export
+  requests and screenshots (any device size, full page, PDF) and recordings. They can also set a device size, read your annotations, and inspect, read or export
   the page's design. An agent uses its own project's browser (the project it names, else the one it runs in),
   even while you look at another project of the window, and in the background: only opening a page, a
   screenshot or a device size brings it forward.

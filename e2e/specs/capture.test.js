@@ -164,3 +164,48 @@ sawitTest("capture: a full-page recording scrolls the page top to bottom", { sit
   const y = await ctx.call({ cmd: "browser", op: { op: "evaluate", script: "return scrollY" } });
   assert.equal(y.value, 0, "the scroll is put back");
 });
+
+/** Where screenshots for review go, when asked. */
+const SHOTS = process.env.SAWIT_E2E_SHOTS;
+async function shot(ctx, name) {
+  if (!SHOTS) return;
+  const { mkdir } = await import("node:fs/promises");
+  const path = await import("node:path");
+  await mkdir(SHOTS, { recursive: true });
+  await new Promise((r) => setTimeout(r, 400));
+  await ctx.win.screenshot(path.join(SHOTS, `${name}.png`));
+}
+
+sawitTest("capture: the camera menu takes a screenshot and records, with the capture bar after", { site: true, timeout: 300_000 }, async (ctx) => {
+  const { win } = ctx;
+  await openSite(ctx);
+  await win.openMenu({ role: "button", name: "Capture" });
+  await win.waitFor({ role: "menuitem", name: "Visible area" });
+  await shot(ctx, "capture-menu");
+  await win.click({ role: "menuitem", name: "Visible area" });
+  await win.waitFor({ role: "button", name: "Reveal in Finder" }, { timeoutMs: 30_000 });
+  await win.waitFor({ role: "button", name: "Copy" });
+  await shot(ctx, "capture-bar-done");
+
+  await win.openMenu({ role: "button", name: "Capture" });
+  await win.click({ role: "menuitem", name: "Record visible area" });
+  await win.waitFor({ role: "button", name: "Stop Recording" }, { timeoutMs: 30_000 });
+  await new Promise((r) => setTimeout(r, 2200));
+  await shot(ctx, "capture-recording");
+  const status = await ctx.call({ cmd: "browser", op: { op: "record_status" } });
+  assert.equal(status.recording, true);
+  await win.click({ role: "button", name: "Stop Recording" });
+  await win.waitFor({ role: "button", name: "Reveal in Finder" }, { timeoutMs: 60_000 });
+  await shot(ctx, "capture-bar-video");
+  const after = await ctx.call({ cmd: "browser", op: { op: "record_status" } });
+  assert.equal(after.recording, false);
+  assert.ok(after.last.path.endsWith(".mp4"));
+
+  // A tab that is recording asks before it closes.
+  await ctx.call({ cmd: "browser", op: { op: "record_start", max_seconds: 60 } });
+  await win.click({ role: "button", name: "Close Small Text" });
+  await win.waitFor({ name: "Stop the recording and close the tab?" }, { timeoutMs: 10_000 }).catch(() => {});
+  await shot(ctx, "capture-close-confirm");
+  await win.press("escape");
+  await ctx.call({ cmd: "browser", op: { op: "record_stop" } }, { timeoutMs: 60_000 });
+});

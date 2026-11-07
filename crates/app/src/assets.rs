@@ -13,6 +13,10 @@ gpui_kit::assets::icon_assets!(
         // The browser's SEO panel: its toolbar switch, check states and a missing share image.
         // (CircleMinus and CircleDashed: listed with the catalogs below.)
         SearchCheck,
+        // The browser's capture menu and bar.
+        Ratio,
+        Video,
+        Square,
         ImageOff,
         Terminal,
         FileCode,
