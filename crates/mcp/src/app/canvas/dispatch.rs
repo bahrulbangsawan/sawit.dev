@@ -401,5 +401,17 @@ pub(super) fn command_list(reply: &Value, filter: Option<&str>) -> String {
             }
         })
         .collect();
-    json!({ "ok": true, "commands": shown }).to_string()
+    // The app's own controls around the canvas, each with the MCP path that does what it does
+    // (B4): with no filter, or a filter that names one.
+    let controls = sawit_board::mcp_paths::app_controls();
+    let controls: Vec<Value> = (controls.as_array().into_iter().flatten())
+        .filter(|c| {
+            filter.as_ref().is_none_or(|part| {
+                let text = |key: &str| c[key].as_str().unwrap_or_default().to_lowercase();
+                text("control").contains(part) || text("via").contains(part)
+            })
+        })
+        .cloned()
+        .collect();
+    json!({ "ok": true, "commands": shown, "app_controls": controls }).to_string()
 }

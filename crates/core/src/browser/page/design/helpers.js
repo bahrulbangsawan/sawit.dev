@@ -12,7 +12,6 @@
     const n = parseFloat(v);
     return Number.isFinite(n) ? n : 0;
   };
-  const round = (n, step) => Math.round(n / step) * step;
   const round3 = (n) => Math.round(n * 1000) / 1000;
   const classOf = (el) => (typeof el.className === "string" ? el.className : el.getAttribute("class") || "");
   const fileName = (url) => {

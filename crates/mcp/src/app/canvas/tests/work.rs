@@ -19,6 +19,7 @@ pub(super) fn begin(project: &Path, name: &str, frame: Value) -> CanvasBeginArgs
         frame,
         steps: Some(vec!["Laying out".into(), "Writing copy".into()]),
         kind: None,
+        sketch: None,
         file: None,
         project: project_arg(project),
     }
@@ -186,6 +187,8 @@ async fn with_sawit_running_work_ops_go_to_the_app() {
     );
     assert_eq!(op["frame"], frame);
     assert_eq!(op["steps"], json!(["Laying out", "Writing copy"]));
+    // A card is UI: the file's place in the design workflow is asked for (B12).
+    assert_eq!(next(&asked)["op"], "design_status");
     let mut failed = progress(&project, "w_1", Some("failed"));
     failed.message = Some("Couldn't load the logo".into());
     server.canvas_progress(Parameters(failed)).await;
@@ -206,6 +209,12 @@ async fn with_sawit_running_work_ops_go_to_the_app() {
         }))
         .await;
     assert_eq!(next(&asked)["work"], "w_1");
+    // A UI work's write answers the lint's summary (B12).
+    let lint = next(&asked);
+    assert_eq!(
+        (lint["op"].clone(), lint["work"].clone()),
+        (json!("lint"), json!("w_1"))
+    );
     let zoom = server
         .canvas_command_tool(CanvasCommandArgs {
             tab: None,

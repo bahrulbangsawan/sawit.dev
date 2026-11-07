@@ -110,6 +110,76 @@ pub enum BrowserOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mesurer: Option<String>,
     },
+    /// A native capture at a chosen size (`browser::capture`): the view, an element (`target`) or
+    /// a `clip` (x, y, width, height in CSS px), as the tab shows it or laid out as `device` or
+    /// `width` × `height` CSS px for the shot (the tab's own size put back afterwards), at
+    /// `scale` (1 to 3; default the device's), as `png` or `jpeg` (`quality` 0 to 1), or a vector `pdf` of the full page, written to
+    /// `output_path` or the project's screenshot folder. Answers the file, its pixel size and a
+    /// small preview.
+    Capture {
+        #[serde(flatten)]
+        target: Target,
+        /// The whole scrollable page, not just the part on show; `pdf` is allowed with it.
+        #[serde(default)]
+        full_page: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quality: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clip: Option<[f64; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mesurer: Option<String>,
+    },
+    /// Starts a native recording (`browser::capture`): the view, the `full_page` scrolled
+    /// through, an `element` (`target`) or a `region` (`clip`), as `device` or `width` × `height`,
+    /// at a `resolution` (`720p`…) or `max_width`, `fps` 15, 24, 30 or 60, as `mp4`, `mov` or
+    /// `gif`, for at most `max_seconds` (default 30, at most 300).
+    RecordStart {
+        #[serde(flatten)]
+        target: Target,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clip: Option<[f64; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scroll_speed: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_seconds: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_path: Option<String>,
+    },
+    /// Stops the recording and answers once its file is finished: the path, duration, size,
+    /// frames, fps achieved, codec and bytes.
+    RecordStop,
+    /// Whether a recording runs, for how long, and how the last one ended.
+    RecordStatus,
     Console {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         level: Option<String>,
@@ -174,8 +244,8 @@ pub enum BrowserOp {
     },
     /// How the last design export is doing.
     ExportStatus,
-    /// Opens the side panel (`annotate` or `design`, on its `tab`: inspect, colors, fonts,
-    /// assets or system), or closes it (`panel` left out). For scripts and visual checks:
+    /// Opens the side panel (`annotate`, `design` on its `tab`: inspect, colors, fonts,
+    /// assets or system, or `seo` on overview, previews, checks or agents), or closes it (`panel` left out). For scripts and visual checks:
     /// agents read annotations and design through their own ops, panel or not.
     Panel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -204,6 +274,10 @@ impl BrowserOp {
                 | Self::Reload
                 | Self::State
                 | Self::Screenshot { .. }
+                | Self::Capture { .. }
+                | Self::RecordStart { .. }
+                | Self::RecordStop
+                | Self::RecordStatus
                 | Self::Console { .. }
                 | Self::Network { .. }
                 | Self::Devtools
@@ -222,7 +296,10 @@ impl BrowserOp {
     pub fn shows_tab(&self) -> bool {
         matches!(
             self,
-            Self::Navigate { .. } | Self::Screenshot { .. } | Self::Resize { .. }
+            Self::Navigate { .. }
+                | Self::Screenshot { .. }
+                | Self::Capture { .. }
+                | Self::Resize { .. }
         )
     }
 }

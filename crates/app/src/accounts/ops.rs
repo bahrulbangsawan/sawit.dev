@@ -39,6 +39,22 @@ impl AccountsModel {
         cx.notify();
     }
 
+    /// Moves the account `delta` places in the list (Move Up, Move Down), so its `cpN` changes.
+    pub fn move_account(&mut self, id: &str, delta: isize, cx: &mut Context<Self>) {
+        if self.accounts.move_by(id, delta) {
+            self.save();
+            cx.notify();
+        }
+    }
+
+    /// Moves the account to row `index` (a drop in the list).
+    pub fn move_account_to(&mut self, id: &str, index: usize, cx: &mut Context<Self>) {
+        if self.accounts.move_to(id, index) {
+            self.save();
+            cx.notify();
+        }
+    }
+
     /// Shared settings: one run, when they are on.
     pub fn sync_shared(&mut self, cx: &mut Context<Self>) {
         if self.accounts.settings.share_extensions {

@@ -123,6 +123,8 @@ impl TerminalPanel {
                             "title": t.pane_title(pane, v).to_string(),
                             "focused": pane == t.state.focused,
                             "exited": v.exited,
+                            "exit_code": v.exit_code(),
+                            "activity": v.activity().to_json(),
                             "at_prompt": v.at_prompt(),
                             "running_job": v.foreground_job().is_some(),
                             "agent": v.agent().map(|a| a.id()),
@@ -141,6 +143,8 @@ impl TerminalPanel {
                     "title": t.title(cx).to_string(),
                     "active": ix == self.active,
                     "exited": v.exited,
+                    "exit_code": v.exit_code(),
+                    "activity": t.activity(cx).to_json(),
                     "shell": v.shell,
                     "at_prompt": v.at_prompt(),
                     "running_job": v.foreground_job().is_some(),
@@ -155,6 +159,28 @@ impl TerminalPanel {
                 })
             })
             .collect()
+    }
+
+    /// Every pane running a coding agent, for the Accounts page: the tab's place, its title and
+    /// project, the agent, the pane's activity and the account folder it runs with.
+    pub fn seen_agents(&self, cx: &App) -> Vec<crate::accounts::TerminalAgent> {
+        let mut out = Vec::new();
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            let t = tab.read(cx);
+            for (_, view) in t.views() {
+                let v = view.read(cx);
+                if let Some(kind) = v.agent() {
+                    out.push(crate::accounts::TerminalAgent {
+                        tab: ix,
+                        project: t.group.clone(),
+                        kind,
+                        activity: v.activity(),
+                        profile: v.agent_profile(),
+                    });
+                }
+            }
+        }
+        out
     }
 
     fn tab_ix(&self, tab: Option<usize>) -> Result<usize, String> {

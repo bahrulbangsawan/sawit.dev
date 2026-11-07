@@ -172,6 +172,91 @@ impl BrowserView {
                 .detach();
                 return;
             }
+            BrowserOp::Capture {
+                target,
+                full_page,
+                device,
+                width,
+                height,
+                scale,
+                format,
+                quality,
+                clip,
+                output_path,
+                mesurer,
+            } => {
+                let ask = (|| {
+                    Ok::<_, String>(super::capture::CaptureAsk {
+                        target,
+                        full_page,
+                        device,
+                        width,
+                        height,
+                        scale,
+                        format: sawit_core::browser::capture::ImageFormat::parse(
+                            format.as_deref().unwrap_or("png"),
+                        )?,
+                        quality,
+                        clip,
+                        output_path,
+                        mesurer: MesurerShot::named(mesurer.as_deref())?,
+                    })
+                })();
+                match ask {
+                    Ok(ask) => return self.capture_op(ask, reply, cx),
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                }
+            }
+            BrowserOp::RecordStart {
+                target,
+                mode,
+                device,
+                width,
+                height,
+                resolution,
+                max_width,
+                fps,
+                format,
+                clip,
+                scroll_speed,
+                duration,
+                max_seconds,
+                output_path,
+            } => {
+                use super::capture::record::{DEFAULT_SECONDS, RecordAsk, RecordMode};
+                let ask = (|| {
+                    Ok::<_, String>(RecordAsk {
+                        device,
+                        width,
+                        height,
+                        resolution,
+                        max_width,
+                        fps: fps.unwrap_or(30),
+                        format: sawit_core::browser::capture::VideoFormat::parse(
+                            format.as_deref().unwrap_or("mp4"),
+                        )?,
+                        mode: RecordMode::parse(mode.as_deref().unwrap_or("view"))?,
+                        target,
+                        clip,
+                        scroll_speed,
+                        duration,
+                        max_seconds: max_seconds.unwrap_or(DEFAULT_SECONDS),
+                        output_path,
+                    })
+                })();
+                match ask {
+                    Ok(ask) => return self.record_start(ask, reply, cx),
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                }
+            }
+            BrowserOp::RecordStop => return self.record_stop(reply, cx),
+            BrowserOp::RecordStatus => self.record_status(),
             BrowserOp::Screenshot { target, mesurer } => {
                 let mode = match MesurerShot::named(mesurer.as_deref()) {
                     Ok(mode) => mode,
@@ -212,9 +297,17 @@ impl BrowserView {
             op => {
                 let reply = Mutex::new(Some(reply));
                 let script = agent_call(&serde_json::to_value(&op).unwrap_or_default());
+                // The page collects the outline's nodes; Rust writes them.
+                let outline = op == BrowserOp::Snapshot;
                 let sent = engine.eval_with_callback(&script, move |result| {
                     if let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) {
-                        let _ = reply.send(agent_result(&result));
+                        let answer = agent_result(&result);
+                        let answer = if outline {
+                            answer.map(sawit_core::browser::snapshot::answer)
+                        } else {
+                            answer
+                        };
+                        let _ = reply.send(answer);
                     }
                 });
                 if let Err(e) = sent {
@@ -306,7 +399,7 @@ pub(super) fn agent_call(op: &Value) -> String {
 }
 
 /// An element's box as the page's `rect` op answers it, refused when it has no size on screen.
-fn element_rect(r: &Value) -> Result<(f64, f64, f64, f64), String> {
+pub(super) fn element_rect(r: &Value) -> Result<(f64, f64, f64, f64), String> {
     let field = |k: &str| r[k].as_f64().unwrap_or_default();
     let rect = (field("x"), field("y"), field("width"), field("height"));
     if rect.2 < 1. || rect.3 < 1. {

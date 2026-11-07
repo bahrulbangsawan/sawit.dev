@@ -35,7 +35,8 @@ const SWEEP: Duration = Duration::from_secs(10);
 pub fn init(cx: &mut App) {
     let ctx = Some("Browser");
     cx.bind_keys([
-        KeyBinding::new("cmd-t", NewTab, ctx),
+        // B5: ⌘T opens and closes the terminal everywhere, the browser too; a new tab is ⌃T.
+        KeyBinding::new("ctrl-t", NewTab, ctx),
         KeyBinding::new("cmd-w", CloseTab, ctx),
         KeyBinding::new("cmd-1", Tab1, ctx),
         KeyBinding::new("cmd-2", Tab2, ctx),
@@ -119,6 +120,7 @@ impl BrowserTabs {
             view.update(cx, |v, cx| {
                 v.restore(url, history, cx);
                 v.set_viewport(viewport, cx);
+                v.restored_favicon(cx);
             });
         }
         this.active = saved.active.min(this.tabs.len().saturating_sub(1));
@@ -358,6 +360,7 @@ impl BrowserTabs {
                     "active": ix == self.active,
                     "live": v.is_live(),
                     "loading": v.loading,
+                    "activity": sawit_core::activity::browser(v.loading, false).to_json(),
                     "device": v.viewport_json()["device"],
                 })
             })

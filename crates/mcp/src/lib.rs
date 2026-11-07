@@ -37,6 +37,7 @@ macro_rules! diagram_types {
 pub mod app;
 pub mod browser;
 pub mod browser_design;
+pub mod browser_seo;
 pub mod code_mode;
 pub mod config_files;
 pub mod db;
@@ -289,6 +290,7 @@ impl Sawit {
             + Self::app_router()
             + Self::browser_router()
             + Self::browser_design_router()
+            + Self::browser_seo_router()
             + Self::tabs_router()
             + Self::keymap_router()
             // Code mode: the whole API behind a search and a script.

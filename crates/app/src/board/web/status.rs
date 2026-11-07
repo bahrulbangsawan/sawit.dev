@@ -1,5 +1,5 @@
 //! What a route frame waits for, said in a pill over its top-left corner: its first picture
-//! ("Loading…"), its server ("Server stopped", its last picture kept), the end of a pause after too
+//! ("Loading…", a screen's too), its server ("Server stopped", its last picture kept), the end of a pause after too
 //! many refreshes ("Paused: reloading too often"), or nothing at all for a page that isn't on this
 //! Mac. A frame with nothing to wait for shows no pill, and neither does the live one.
 
@@ -48,6 +48,11 @@ pub(in crate::board) fn frame_status(
 ) -> Option<FrameStatus> {
     let frame = web.frames.get(&node.id);
     match &node.spec.source {
+        // A screen with a page has no picture until its first good one is in: it says so, rather
+        // than showing an empty or dark frame (B17).
+        Source::Screen(_) if frame.is_some_and(|f| f.has_page && f.texture.is_none()) => {
+            Some(FrameStatus::Loading)
+        }
         Source::Screen(_) => None,
         Source::Remote(_) => Some(FrameStatus::Remote),
         Source::Url(_) if web.server_down(&node.spec.source) => Some(FrameStatus::Stopped),

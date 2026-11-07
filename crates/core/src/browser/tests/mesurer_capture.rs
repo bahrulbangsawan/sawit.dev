@@ -415,3 +415,52 @@ fn mesurers_mp4_is_saved_with_whole_headers() {
     .unwrap();
     assert_eq!(std::fs::read(saved).unwrap(), fixed);
 }
+
+/// The page asks Rust for the codec (`capture.codec`), as its glue worked it out before: the
+/// prefix in any case, the given codec kept when it fits, sizes as the page gave them.
+#[test]
+fn codec_for_page_matches_the_glue() {
+    use crate::browser::mesurer::files::codec_for_page;
+    assert_eq!(
+        codec_for_page("AVC1.42001E", Some(1280.), Some(720.), Some(30.)).unwrap(),
+        "avc1.42001f"
+    );
+    assert_eq!(
+        codec_for_page("AVC1.42001E", Some(640.), Some(480.), None).unwrap(),
+        "AVC1.42001E"
+    );
+    // A fraction of a pixel takes the next macroblock, as Math.ceil did.
+    assert_eq!(
+        codec_for_page("avc1.42001e", Some(1280.5), Some(720.), Some(0.)),
+        codec_for_page("avc1.42001e", Some(1281.), Some(720.), Some(0.))
+    );
+    // No size: no level fits an AVC codec; any other codec is asked as it is.
+    assert_eq!(codec_for_page("avc1.42001e", None, Some(720.), None), None);
+    assert_eq!(
+        codec_for_page("vp09.00.10.08", None, None, None).unwrap(),
+        "vp09.00.10.08"
+    );
+}
+
+/// A `data:` download's bytes and type, as the glue's `Blob` had them.
+#[test]
+fn data_urls_are_read_as_the_glue_read_them() {
+    use crate::browser::mesurer::files::data_url;
+    assert_eq!(
+        data_url("data:image/PNG;base64,iVBORw0KGgo=").unwrap(),
+        (
+            "image/png".to_string(),
+            vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10]
+        )
+    );
+    assert_eq!(
+        data_url("data:text/plain,a%20b%C3%A9").unwrap(),
+        ("text/plain".to_string(), "a bé".as_bytes().to_vec())
+    );
+    assert_eq!(
+        data_url("data:,x").unwrap(),
+        ("application/octet-stream".to_string(), b"x".to_vec())
+    );
+    assert!(data_url("data:text/plain,%E0%A4%A").is_err());
+    assert!(data_url("data:text/plain,%FF").is_err());
+}

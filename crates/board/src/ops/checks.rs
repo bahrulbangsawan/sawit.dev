@@ -36,3 +36,52 @@ pub(super) fn checks(board: &mut BoardDoc, op: &Value) -> Value {
     };
     json!({"ok": true, "frame": frame.to_string(), "findings": findings})
 }
+
+/// The `lint` op (`{work? | frame? | page?, sketch?}`, B12): the design lint of a frame (by its
+/// `work` or its id), else of the page on show, answered as `{ok, scope, errors, warnings,
+/// findings, status}`, `status` being where the file is in the design workflow. Nothing changes.
+pub(super) fn lint(board: &mut BoardDoc, op: &Value) -> Value {
+    let doc = match board.doc() {
+        Ok(doc) => doc,
+        Err(error) => return failure(format!("lint: {error}")),
+    };
+    let named = match work_of(op) {
+        Ok(Some(work)) => match work_frame(&doc, work) {
+            Some(frame) => Some(frame),
+            None => return failure(format!("lint: no work {work} on the canvas")),
+        },
+        Ok(None) => op
+            .get("frame")
+            .or_else(|| op.get("id"))
+            .and_then(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .or_else(|| v.as_u64().map(|n| n.to_string()))
+            })
+            .and_then(|f| f.parse::<NodeId>().ok()),
+        Err(error) => return failure(format!("lint: {error}")),
+    };
+    let page = board.session.ds().ok().map(|ds| ds.page);
+    let Some(scope) = named.or(page).filter(|s| doc.contains(*s)) else {
+        return failure("lint: name a frame on the canvas, by its `work` or its id");
+    };
+    let sketch = op.get("sketch").and_then(Value::as_bool).unwrap_or(false);
+    let found = crate::checks::lint::lint(&doc, scope, sketch);
+    let mut reply = serde_json::to_value(&found).unwrap_or_else(|_| json!({}));
+    reply["ok"] = json!(true);
+    reply["scope"] = json!(scope.to_string());
+    reply["status"] = crate::checks::lint::design_status(&doc);
+    reply
+}
+
+/// The `design_status` op: where the file is in the design workflow ([`crate::checks::lint::design_status`]).
+pub(super) fn design_status(board: &mut BoardDoc) -> Value {
+    match board.doc() {
+        Ok(doc) => {
+            let mut reply = crate::checks::lint::design_status(&doc);
+            reply["ok"] = json!(true);
+            reply
+        }
+        Err(error) => failure(format!("design_status: {error}")),
+    }
+}

@@ -2,6 +2,38 @@
 
 use serde::{Deserialize, Serialize};
 
+/// What kind of screen a device has: the groups of the device menu and of MCP's errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceClass {
+    Mobile,
+    Tablet,
+    Laptop,
+    Desktop,
+}
+
+impl DeviceClass {
+    pub const ALL: [DeviceClass; 4] = [
+        DeviceClass::Mobile,
+        DeviceClass::Tablet,
+        DeviceClass::Laptop,
+        DeviceClass::Desktop,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DeviceClass::Mobile => "Mobile",
+            DeviceClass::Tablet => "Tablet",
+            DeviceClass::Laptop => "Laptop",
+            DeviceClass::Desktop => "Desktop",
+        }
+    }
+
+    /// Whether its devices turn on their side.
+    pub fn rotates(self) -> bool {
+        matches!(self, DeviceClass::Mobile | DeviceClass::Tablet)
+    }
+}
+
 /// A device the browser tab can imitate.
 #[derive(Debug, PartialEq)]
 pub struct Device {
@@ -12,45 +44,64 @@ pub struct Device {
     /// imitates it. `None` for computers: their pages draw at the Mac's own ratio, as forcing 1×
     /// would blur them on a Retina screen.
     pub dpr: Option<f64>,
+    pub class: DeviceClass,
 }
 
+impl Device {
+    /// The scale a capture of it is taken at by default: its own ratio (3× for phones, 2× for
+    /// Apple tablets), 2× for laptops, 1× for desktops (their CSS size is their pixel size).
+    pub fn default_scale(&self) -> f64 {
+        if let Some(r) = self.dpr {
+            return r;
+        }
+        match self.class {
+            DeviceClass::Desktop => 1.,
+            _ => 2.,
+        }
+    }
+}
+
+const fn d(
+    name: &'static str,
+    width: u32,
+    height: u32,
+    dpr: Option<f64>,
+    class: DeviceClass,
+) -> Device {
+    Device {
+        name,
+        width,
+        height,
+        dpr,
+        class,
+    }
+}
+
+use DeviceClass::{Desktop as Dk, Laptop as Lp, Mobile as Mb, Tablet as Tb};
+
+/// Every preset, by class. The first six names are the ones the toolbar had before (kept so saved
+/// tabs and scripts still find them).
 pub const DEVICES: &[Device] = &[
-    Device {
-        name: "iPhone 15",
-        width: 393,
-        height: 852,
-        dpr: Some(3.),
-    },
-    Device {
-        name: "Pixel 8",
-        width: 412,
-        height: 915,
-        dpr: Some(2.625),
-    },
-    Device {
-        name: "iPad mini",
-        width: 744,
-        height: 1133,
-        dpr: Some(2.),
-    },
-    Device {
-        name: "iPad Pro 11″",
-        width: 834,
-        height: 1194,
-        dpr: Some(2.),
-    },
-    Device {
-        name: "Laptop",
-        width: 1280,
-        height: 800,
-        dpr: None,
-    },
-    Device {
-        name: "Desktop",
-        width: 1440,
-        height: 900,
-        dpr: None,
-    },
+    d("iPhone SE", 375, 667, Some(2.), Mb),
+    d("iPhone 15", 393, 852, Some(3.), Mb),
+    d("iPhone 15 Pro Max", 430, 932, Some(3.), Mb),
+    d("Pixel 8", 412, 915, Some(2.625), Mb),
+    d("Galaxy S", 360, 780, Some(3.), Mb),
+    d("Small Android", 320, 568, Some(2.), Mb),
+    d("iPad mini", 744, 1133, Some(2.), Tb),
+    d("iPad Air", 820, 1180, Some(2.), Tb),
+    d("iPad Pro 11″", 834, 1194, Some(2.), Tb),
+    d("iPad Pro 13″", 1032, 1376, Some(2.), Tb),
+    d("Android tablet", 800, 1280, Some(2.), Tb),
+    d("Laptop", 1280, 800, None, Lp),
+    d("Laptop 1366", 1366, 768, None, Lp),
+    d("MacBook Air", 1440, 900, None, Lp),
+    d("MacBook Pro 14″", 1512, 982, None, Lp),
+    d("Laptop 1536", 1536, 864, None, Lp),
+    d("Desktop", 1440, 900, None, Dk),
+    d("Full HD", 1920, 1080, None, Dk),
+    d("QHD", 2560, 1440, None, Dk),
+    d("4K", 3840, 2160, None, Dk),
 ];
 
 fn device_key(name: &str) -> String {
@@ -172,19 +223,43 @@ pub fn resize_mode(
             })
             .ok_or_else(|| {
                 format!(
-                    "Unknown device “{}”. Use iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop or responsive.",
-                    name.trim()
+                    "Unknown device “{}”. Use responsive, or one of {}.",
+                    name.trim(),
+                    device_list()
                 )
             });
     }
     match (width, height) {
         (Some(w), Some(h)) => {
             if (200..=3840).contains(&w) && (200..=3840).contains(&h) {
-                Ok(ViewportMode::Fixed { name: None, width: w, height: h })
+                Ok(ViewportMode::Fixed {
+                    name: None,
+                    width: w,
+                    height: h,
+                })
             } else {
                 Err("Width and height must be between 200 and 3840.".into())
             }
         }
-        _ => Err("Give a device (iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop or responsive) or a width and height.".into()),
+        _ => Err(format!(
+            "Give a device (responsive, or one of {}) or a width and height.",
+            device_list()
+        )),
     }
+}
+
+/// The devices by class, for messages: "Mobile: iPhone SE, iPhone 15, …; Tablet: …".
+pub fn device_list() -> String {
+    DeviceClass::ALL
+        .iter()
+        .map(|class| {
+            let names: Vec<&str> = DEVICES
+                .iter()
+                .filter(|d| d.class == *class)
+                .map(|d| d.name)
+                .collect();
+            format!("{}: {}", class.name(), names.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }

@@ -7,6 +7,7 @@
 const READ_ONLY: &[&str] = &[
     "list_agent_accounts",
     "agent_account_sessions",
+    "account_pool",
     "list_instances",
     "instance_logs",
     "check_port",
@@ -57,6 +58,7 @@ const READ_ONLY: &[&str] = &[
     "canvas_design_guide",
     "canvas_get",
     "canvas_commands",
+    "canvas_lint",
     "canvas_screen_get",
     "browser_snapshot",
     "browser_hover",
@@ -65,6 +67,7 @@ const READ_ONLY: &[&str] = &[
     "browser_resize",
     "browser_inspect",
     "browser_design",
+    "browser_seo",
     "keymap_list",
     "search_api",
 ];
@@ -191,6 +194,7 @@ const ADDS: &[&str] = &[
     "launch_app",
     "app_ssh_connect",
     "canvas_add_elements",
+    "canvas_starter_system",
     "canvas_add_diagram",
     "canvas_add_mermaid",
     "canvas_begin",
@@ -202,6 +206,8 @@ const ADDS: &[&str] = &[
 /// may be a server elsewhere (a saved connection), a web page, or whatever a command they run
 /// reaches. MCP's `openWorldHint`; the others stay on this Mac.
 const OPEN_WORLD: &[&str] = &[
+    // Fetches the site's files, and with `external` asks an outside scanner.
+    "browser_seo",
     "agent_account_usage",
     "backup_prompts",
     "restore_prompts",

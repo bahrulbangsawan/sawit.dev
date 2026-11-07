@@ -9,9 +9,11 @@ mod color;
 mod fonts;
 mod history;
 pub mod keyboard;
+pub mod video;
 pub(crate) mod web_frame;
 mod world;
 
+pub use capture::Pixels;
 pub use fonts::font_changes;
 pub use world::WorldReply;
 
@@ -70,6 +72,9 @@ pub struct Engine {
     webview: WebView,
     /// mesurer's content world and its message handler.
     world: world::World,
+    /// The device scale factor WebKit draws at in place of the screen's, while one is set
+    /// (`web_frame::set_device_scale`): a capture's pixels per view point.
+    device_scale: std::cell::Cell<Option<f64>>,
 }
 
 /// A capture as WebKit took it, at the display's scale: a PNG to bring to `width` CSS px wide
@@ -142,7 +147,11 @@ impl Engine {
             use wry::WebViewExtMacOS as _;
             keyboard::register(&webview.webview());
         }
-        Ok(Engine { webview, world })
+        Ok(Engine {
+            webview,
+            world,
+            device_scale: Default::default(),
+        })
     }
 
     /// Loads `url`; text that isn't a URL WebKit reads ([`loadable`]) is refused.

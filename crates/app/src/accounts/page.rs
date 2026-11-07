@@ -1,18 +1,18 @@
-//! The Accounts page: Claude Code's accounts on the left (colour, name, who it is, 5h/7d), the
-//! chosen one on the right: Set Active, Open in Terminal, Sign In, usage tracking with Check Usage
-//! Now, Rename and Remove. Add Account and Adopt Existing sit under the list.
+//! The Accounts page (design: `docs/design/accounts.sawit`): a header with the page's summary,
+//! a vertical tab list grouped by what the tabs are about (it folds to icons in a narrow
+//! window), the notices, then the tab on show. The Accounts tab lists the accounts on the left
+//! ([`super::list`]) and shows the chosen one on the right ([`super::detail`]).
 
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::button::*;
-use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sawit_core::agent_accounts::{self as aa, Account, tracking};
+use sawit_core::agent_accounts::Account;
 
-use super::rows::{self, swatch, window_bar};
-use super::{AccountsModel, SignIn, global};
+use super::rows;
+use super::{AccountsModel, global};
 use crate::states::Banner;
 
 /// What the page asks the window to do.
@@ -30,6 +30,12 @@ impl EventEmitter<AccountsEvent> for AccountsPage {}
 /// The page's tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
+    Overview,
+    Detailed,
+    Compare,
+    Timeline,
+    Analytics,
+    Wallet,
     Accounts,
     Usage,
     StatusLine,
@@ -37,8 +43,32 @@ pub enum Tab {
     Settings,
 }
 
+/// The tab list's groups, in order: a label and its tabs.
+pub const GROUPS: &[(&str, &[Tab])] = &[
+    (
+        "Pool",
+        &[
+            Tab::Overview,
+            Tab::Detailed,
+            Tab::Compare,
+            Tab::Timeline,
+            Tab::Analytics,
+            Tab::Wallet,
+        ],
+    ),
+    ("Accounts", &[Tab::Accounts, Tab::Usage]),
+    ("Claude Code", &[Tab::StatusLine]),
+    ("Setup", &[Tab::Diagnostics, Tab::Settings]),
+];
+
 impl Tab {
     pub const ALL: &[Tab] = &[
+        Tab::Overview,
+        Tab::Detailed,
+        Tab::Compare,
+        Tab::Timeline,
+        Tab::Analytics,
+        Tab::Wallet,
         Tab::Accounts,
         Tab::Usage,
         Tab::StatusLine,
@@ -48,6 +78,12 @@ impl Tab {
 
     pub fn label(self) -> &'static str {
         match self {
+            Tab::Overview => "Overview",
+            Tab::Detailed => "Detailed",
+            Tab::Compare => "Compare",
+            Tab::Timeline => "Timeline",
+            Tab::Analytics => "Analytics",
+            Tab::Wallet => "Wallet",
             Tab::Accounts => "Accounts",
             Tab::Usage => "Usage",
             Tab::StatusLine => "Status Line",
@@ -55,23 +91,82 @@ impl Tab {
             Tab::Settings => "Settings",
         }
     }
+
+    pub fn icon(self) -> Lucide {
+        match self {
+            Tab::Overview => Lucide::LayoutDashboard,
+            Tab::Detailed => Lucide::List,
+            Tab::Compare => Lucide::GitCompare,
+            Tab::Timeline => Lucide::CalendarClock,
+            Tab::Analytics => Lucide::TrendingUp,
+            Tab::Wallet => Lucide::Wallet,
+            Tab::Accounts => Lucide::Users,
+            Tab::Usage => Lucide::ChartColumn,
+            Tab::StatusLine => Lucide::SquareTerminal,
+            Tab::Diagnostics => Lucide::Stethoscope,
+            Tab::Settings => Lucide::Settings,
+        }
+    }
+
+    /// One of the pool's views, which read the pool when shown.
+    pub fn is_pool(self) -> bool {
+        matches!(
+            self,
+            Tab::Overview
+                | Tab::Detailed
+                | Tab::Compare
+                | Tab::Timeline
+                | Tab::Analytics
+                | Tab::Wallet
+        )
+    }
+
+    /// The tab `delta` places on in the list's order, clamped to the ends (↑ and ↓).
+    pub fn step(self, delta: isize) -> Tab {
+        let ix = Tab::ALL.iter().position(|t| *t == self).unwrap_or(0) as isize;
+        Tab::ALL[(ix + delta).clamp(0, Tab::ALL.len() as isize - 1) as usize]
+    }
 }
+
+/// Below this window width the tab list shows icons only (their names in tooltips and to
+/// VoiceOver), and the account list drops its meters.
+pub const NARROW: Pixels = px(1000.);
 
 pub struct AccountsPage {
     pub(super) model: Entity<AccountsModel>,
     pub(super) selected: Option<String>,
     pub(super) new_name: Entity<InputState>,
-    rename: Entity<InputState>,
+    pub(super) rename: Entity<InputState>,
     pub(super) renaming: bool,
+    /// The Add Account panel at the top of the list is open.
+    pub(super) adding: bool,
     pub(super) code: Entity<InputState>,
-    tab: Tab,
+    pub(super) tab: Tab,
     /// The Usage tab's period, in seconds.
     pub(super) period: i64,
     /// The status line layout being edited (the one in use until changed).
     pub(super) layout: Option<sawit_core::agent_accounts::statusline::Config>,
     focus: FocusHandle,
+    /// The tab list and the account list each take the keyboard (↑ and ↓ move in them).
+    pub(super) nav_focus: FocusHandle,
+    pub(super) list_focus: FocusHandle,
+    /// The pool views' choices, and the wallet's fields.
+    pub(super) pool_view: super::pool_tabs::PoolView,
+    pub(super) price_input: Entity<InputState>,
+    pub(super) day_input: Entity<InputState>,
+    pub(super) topup_amount: Entity<InputState>,
+    pub(super) topup_credits: Entity<InputState>,
+    pub(super) topup_days: Entity<InputState>,
+    pub(super) topup_note: Entity<InputState>,
+    pub(super) topup_account: Option<String>,
+    /// The agents Sawit sees in this page's window (its terminals, MCP clients).
+    pub(super) agents_source: Option<AgentsSource>,
     _observe: Subscription,
+    _inputs: Vec<Subscription>,
 }
+
+/// Where the Overview gets the window's agents from.
+pub type AgentsSource = std::rc::Rc<dyn Fn(&App) -> Vec<super::SeenAgent>>;
 
 impl Focusable for AccountsPage {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -94,6 +189,32 @@ pub fn terminal_command(account: &Account) -> (String, Vec<(String, String)>) {
     }
 }
 
+/// The header's summary: "4 accounts · 1 active · next reset in 2h 14m" (the soonest reset of
+/// a window with usage in it), or "No accounts".
+pub fn summary(m: &AccountsModel, now: f64) -> String {
+    let list = m.list();
+    if list.is_empty() {
+        return "No accounts".into();
+    }
+    let mut parts = vec![match list.len() {
+        1 => "1 account".to_string(),
+        n => format!("{n} accounts"),
+    }];
+    if m.active().is_some() {
+        parts.push("1 active".into());
+    }
+    let next = list
+        .iter()
+        .filter_map(|a| m.usage.get(&a.id))
+        .flat_map(|s| [s.five_hour, s.seven_day])
+        .filter_map(|w| rows::current(w, now))
+        .min_by(|a, b| a.resets_at.total_cmp(&b.resets_at));
+    if let Some(w) = next {
+        parts.push(format!("next {}", rows::resets_in(&w, now)));
+    }
+    parts.join(" · ")
+}
+
 impl AccountsPage {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let model = global(cx);
@@ -101,19 +222,61 @@ impl AccountsPage {
             let p = p.to_string();
             cx.new(|cx| InputState::new(window, cx).placeholder(p))
         };
+        let rename = input("work", window, cx);
+        let new_name = input("work", window, cx);
+        // Enter in the rename field saves the name; Enter in the new account's adds it.
+        let subs = vec![
+            cx.subscribe(&rename, |this: &mut Self, input, e: &InputEvent, cx| {
+                if let InputEvent::PressEnter { .. } = e
+                    && let Some(id) = this.selected(this.model.read(cx)).map(|a| a.id.clone())
+                {
+                    let name = input.read(cx).value().to_string();
+                    this.model.update(cx, |m, cx| m.rename(&id, &name, cx));
+                    this.renaming = false;
+                    cx.notify();
+                }
+            }),
+            cx.subscribe_in(
+                &new_name,
+                window,
+                |this: &mut Self, _, e: &InputEvent, window, cx| {
+                    if let InputEvent::PressEnter { .. } = e {
+                        this.add(window, cx);
+                    }
+                },
+            ),
+        ];
         Self {
             _observe: cx.observe(&model, |_, _, cx| cx.notify()),
+            _inputs: subs,
             selected: model.read(cx).list().first().map(|a| a.id.clone()),
             model,
-            new_name: input("New account name, like work", window, cx),
-            rename: input("Name", window, cx),
+            new_name,
+            rename,
             renaming: false,
+            adding: false,
             tab: Tab::Accounts,
             period: 7 * 86_400,
             layout: None,
             code: input("Paste the code from the sign-in page", window, cx),
             focus: cx.focus_handle(),
+            nav_focus: cx.focus_handle().tab_stop(true),
+            list_focus: cx.focus_handle().tab_stop(true),
+            pool_view: Default::default(),
+            price_input: input("200", window, cx),
+            day_input: input("3", window, cx),
+            topup_amount: input("10", window, cx),
+            topup_credits: input("1000", window, cx),
+            topup_days: input("30", window, cx),
+            topup_note: input("Promo credits", window, cx),
+            topup_account: None,
+            agents_source: None,
         }
+    }
+
+    /// Gives the Overview the agents of the window this page is in.
+    pub fn set_agents_source(&mut self, source: AgentsSource) {
+        self.agents_source = Some(source);
     }
 
     pub(super) fn selected<'a>(&self, m: &'a AccountsModel) -> Option<&'a Account> {
@@ -123,21 +286,69 @@ impl AccountsPage {
             .or_else(|| m.list().first().copied())
     }
 
+    /// Selects the account `delta` rows on from the selected one (↑ and ↓ in the list).
+    pub(super) fn select_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let m = self.model.read(cx);
+        let ids: Vec<String> = m.list().iter().map(|a| a.id.clone()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let at = self
+            .selected(m)
+            .and_then(|a| ids.iter().position(|id| *id == a.id))
+            .unwrap_or(0) as isize;
+        let next = (at + delta).clamp(0, ids.len() as isize - 1) as usize;
+        self.selected = Some(ids[next].clone());
+        self.renaming = false;
+        cx.notify();
+    }
+
     pub(super) fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.new_name.read(cx).value().to_string();
-        if aa::kebab(&name).is_empty() {
+        if sawit_core::agent_accounts::kebab(&name).is_empty() {
             return;
         }
         let id = self.model.update(cx, |m, cx| m.add(&name, None, cx));
         if let Some(id) = id {
             self.selected = Some(id.clone());
+            self.adding = false;
             self.new_name
                 .update(cx, |s, cx| s.set_value("", window, cx));
             self.model.update(cx, |m, cx| m.start_login(&id, cx));
         }
     }
 
-    fn confirm_remove(&mut self, a: Account, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens a terminal running `claude` as `a`.
+    pub(super) fn open_terminal(&mut self, a: &Account, cx: &mut Context<Self>) {
+        let (command, env) = terminal_command(a);
+        cx.emit(AccountsEvent::OpenTerminal {
+            title: format!("claude · {}", a.name),
+            command,
+            env,
+        });
+    }
+
+    pub(super) fn start_rename(
+        &mut self,
+        a: &Account,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = a.name.clone();
+        self.selected = Some(a.id.clone());
+        self.rename
+            .update(cx, |s, cx| s.set_value(name, window, cx));
+        self.renaming = true;
+        self.rename.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn confirm_remove(
+        &mut self,
+        a: Account,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let answer = crate::confirm::Confirm::new(
             format!("Remove account {} from Sawit?", a.name),
             "Remove Account",
@@ -162,241 +373,170 @@ impl AccountsPage {
         .detach();
     }
 
-    fn render_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// Shows tab `t`, reading what it needs.
+    pub(super) fn show_tab(&mut self, t: Tab, cx: &mut Context<Self>) {
+        self.tab = t;
+        if t == Tab::Usage {
+            let period = self.period;
+            self.model
+                .update(cx, |m, cx| m.refresh_analytics(period, cx));
+        }
+        if t.is_pool() {
+            self.model.update(cx, |m, cx| m.refresh_pool(cx));
+        }
+        cx.notify();
+    }
+
+    fn render_header(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let m = self.model.read(cx);
-        let Some(a) = self.selected(m).cloned() else {
-            return div()
-                .p_6()
-                .text_color(cx.theme().muted_foreground)
-                .child("No Claude Code accounts yet. Add one, or adopt a ~/.claude-* folder.")
-                .into_any_element();
-        };
-        let now = sawit_core::github::now() as f64;
-        let is_active = m.active().map(|x| x.id.clone()) == Some(a.id.clone());
-        let sign_in = m.sign_in.get(&a.id).cloned().unwrap_or(SignIn::Unknown);
-        let plan = m.plan.get(&a.id).cloned();
-        let snapshot = m.usage.get(&a.id).cloned();
-        let login = m.login.as_ref().filter(|l| l.account == a.id).map(|l| {
-            (
-                l.phase.clone(),
-                l.manual_url.clone(),
-                l.callback_url.clone(),
-                l.left(),
-            )
-        });
-        let checking = m.checking_usage.as_deref() == Some(a.id.as_str());
-        let muted = cx.theme().muted_foreground;
-        let who = match &sign_in {
-            SignIn::Known(s) if s.signed_in => s.identity().unwrap_or_else(|| "Signed in".into()),
-            SignIn::Known(_) => "Signed out".into(),
-            SignIn::Checking => "Checking the sign-in…".into(),
-            SignIn::Failed(e) => e.clone(),
-            SignIn::Unknown => String::new(),
-        };
-        let signed_out = matches!(&sign_in, SignIn::Known(s) if !s.signed_in);
-        let (id1, id2, id3) = (a.id.clone(), a.id.clone(), a.id.clone());
-        let header = h_flex()
+        let summary = summary(m, sawit_core::github::now() as f64);
+        h_flex()
+            .flex_none()
+            .h(px(52.))
+            .px_4()
             .gap_3()
-            .items_center()
-            .child(swatch(&a.color, 28.))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(if self.renaming {
-                        h_flex()
-                            .gap_1()
-                            .child(div().w(px(220.)).child(Input::new(&self.rename).small()))
-                            .child(
-                                Button::new("account-rename-save")
-                                    .small()
-                                    .label("Rename")
-                                    .on_click(cx.listener({
-                                        let id = a.id.clone();
-                                        move |this, _, _, cx| {
-                                            let name = this.rename.read(cx).value().to_string();
-                                            this.model.update(cx, |m, cx| m.rename(&id, &name, cx));
-                                            this.renaming = false;
-                                        }
-                                    })),
-                            )
-                            .into_any_element()
-                    } else {
-                        div()
-                            .text_xl()
-                            .font_semibold()
-                            .truncate()
-                            .child(a.name.clone())
-                            .into_any_element()
-                    })
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .truncate()
-                            .child(match &plan {
-                                Some(p) if !who.is_empty() => format!("{who} · {p}"),
-                                _ => who.clone(),
-                            }),
-                    ),
-            )
-            .child(if is_active {
-                Button::new("account-active")
-                    .small()
-                    .ghost()
-                    .icon(Lucide::Check)
-                    .label("Active")
-                    .disabled(true)
-            } else {
-                Button::new("account-set-active")
-                    .small()
-                    .primary()
-                    .label("Set Active")
-                    .tooltip("New Claude Code Sessions Use This Account")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.update(cx, |m, cx| m.set_active(&id1, cx))
-                    }))
-            })
-            .child(
-                Button::new("account-open-terminal")
-                    .small()
-                    .outline()
-                    .icon(Lucide::SquareTerminal)
-                    .label("Open in Terminal")
-                    .on_click(cx.listener({
-                        let a = a.clone();
-                        move |_, _, _, cx| {
-                            let (command, env) = terminal_command(&a);
-                            cx.emit(AccountsEvent::OpenTerminal {
-                                title: format!("claude · {}", a.name),
-                                command,
-                                env,
-                            });
-                        }
-                    })),
-            )
-            .child(
-                Button::new("account-more")
-                    .small()
-                    .ghost()
-                    .icon(Lucide::Ellipsis)
-                    .tooltip("More")
-                    .dropdown_menu({
-                        let a = a.clone();
-                        let page = cx.entity();
-                        move |menu, _, _| {
-                            let (p1, p2, p3, a1, a2) = (
-                                page.clone(),
-                                page.clone(),
-                                page.clone(),
-                                a.clone(),
-                                a.clone(),
-                            );
-                            let id = a.id.clone();
-                            menu.item(PopupMenuItem::new("Rename…").on_click(
-                                move |_, window, cx| {
-                                    p1.update(cx, |this, cx| {
-                                        let name = a1.name.clone();
-                                        this.rename
-                                            .update(cx, |s, cx| s.set_value(name, window, cx));
-                                        this.renaming = true;
-                                        cx.notify();
-                                    })
-                                },
-                            ))
-                            .item(PopupMenuItem::new("Check Sign-In Again").on_click(
-                                move |_, _, cx| {
-                                    p3.update(cx, |this, cx| {
-                                        this.model.update(cx, |m, cx| m.check(&id, cx))
-                                    })
-                                },
-                            ))
-                            .separator()
-                            .item(
-                                PopupMenuItem::new("Remove from Sawit…").on_click(
-                                    move |_, window, cx| {
-                                        p2.update(cx, |this, cx| {
-                                            this.confirm_remove(a2.clone(), window, cx)
-                                        })
-                                    },
-                                ),
-                            )
-                        }
-                    }),
-            );
-        let state = tracking::state(&a);
-        let usage = v_flex()
-            .gap_2()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
+            .border_b_1()
             .border_color(cx.theme().border)
-            .child(div().text_sm().font_semibold().child("Usage"))
-            .map(|el| match state {
-                tracking::Tracking::Off => el
-                    .child(div().text_sm().text_color(muted).child("Usage tracking is off. Turned on, the account's status line reports its 5-hour and 7-day windows to Sawit."))
-                    .child(Button::new("account-track").small().outline().label("Turn On Tracking…").on_click(cx.listener({
-                        let a = a.clone();
-                        move |this, _, window, cx| this.confirm_tracking(a.clone(), window, cx)
-                    }))),
-                tracking::Tracking::Overridden => el
-                    .child(div().text_sm().text_color(cx.theme().warning).child("Overridden: this account's statusLine no longer runs Sawit, so no usage arrives."))
-                    .child(Button::new("account-retrack").small().outline().label("Re-enable…").on_click(cx.listener({
-                        let a = a.clone();
-                        move |this, _, window, cx| this.confirm_tracking(a.clone(), window, cx)
-                    }))),
-                tracking::Tracking::On => {
-                    let (when, stale) = snapshot
-                        .as_ref()
-                        .and_then(|s| rows::observed(s, now))
-                        .unwrap_or_else(|| ("No data yet: start a claude session with this account and send one message.".into(), false));
-                    el.child(window_bar("5-Hour", snapshot.as_ref().and_then(|s| s.five_hour), stale, now, cx))
-                        .child(window_bar("7-Day", snapshot.as_ref().and_then(|s| s.seven_day), stale, now, cx))
-                        .child(div().text_xs().text_color(muted).child(if stale {
-                            format!("{when}. Usage from claude.ai or other devices after this time isn't included.")
+            .child(
+                Icon::new(Lucide::Users)
+                    .small()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(div().text_base().font_semibold().child("Accounts"))
+            .child(
+                div()
+                    .id("accounts-summary")
+                    .role(Role::Label)
+                    .aria_label(summary.clone())
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(summary),
+            )
+    }
+
+    /// The tab list: grouped, with icons; icons only when `narrow`. ↑ and ↓ move between tabs
+    /// while it has the keyboard, and its selected tab shows a ring then.
+    fn render_nav(
+        &self,
+        narrow: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let focused = self.nav_focus.is_focused(window);
+        let current = self.tab;
+        let muted = cx.theme().muted_foreground;
+        let mut items: Vec<AnyElement> = Vec::new();
+        for (gi, (group, tabs)) in GROUPS.iter().enumerate() {
+            if narrow {
+                if gi > 0 {
+                    items.push(
+                        div()
+                            .w(px(24.))
+                            .h(px(1.))
+                            .my_1p5()
+                            .bg(cx.theme().border)
+                            .into_any_element(),
+                    );
+                }
+            } else {
+                items.push(
+                    div()
+                        .px_2()
+                        .pt(px(if gi == 0 { 0. } else { 12. }))
+                        .pb_1()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(muted)
+                        .child(*group)
+                        .into_any_element(),
+                );
+            }
+            for &t in tabs.iter() {
+                let selected = t == current;
+                let label = t.label();
+                items.push(
+                    h_flex()
+                        .id(SharedString::from(format!("accounts-tab-{label}")))
+                        .debug_selector(move || format!("accounts-tab-{label}"))
+                        .role(Role::Tab)
+                        .aria_label(label)
+                        .aria_selected(selected)
+                        .flex_none()
+                        .h(px(28.))
+                        .gap_2()
+                        .rounded(cx.theme().radius)
+                        .cursor_pointer()
+                        .text_sm()
+                        .border_2()
+                        .border_color(transparent_black())
+                        .map(|el| {
+                            if narrow {
+                                el.w(px(32.)).justify_center()
+                            } else {
+                                el.w_full().px_1p5()
+                            }
+                        })
+                        .when(selected, |el| el.bg(cx.theme().list_active).font_medium())
+                        .when(selected && focused, |el| el.border_color(cx.theme().ring))
+                        .when(!selected, |el| el.hover(|el| el.bg(cx.theme().secondary)))
+                        .child(Icon::new(t.icon()).small().text_color(if selected {
+                            cx.theme().primary
                         } else {
-                            when
+                            muted
                         }))
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .child(Button::new("account-check-usage").small().outline().icon(Lucide::RefreshCw).label(if checking { "Checking…" } else { "Check Usage Now" }).loading(checking).disabled(checking || signed_out).tooltip("Claude Code Sends One Tiny Request as This Account (a Few Hundred Tokens)").on_click(
-                                    cx.listener(move |this, _, _, cx| this.model.update(cx, |m, cx| m.check_usage(&id2, cx))),
-                                ))
-                                .child(Button::new("account-untrack").small().ghost().label("Turn Off Tracking").on_click(
-                                    cx.listener(move |this, _, _, cx| this.model.update(cx, |m, cx| m.set_tracking(&id3, false, cx))),
-                                )),
-                        )
-                }
-            });
+                        .when(!narrow, |el| el.child(label))
+                        .when(narrow, |el| {
+                            el.tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.nav_focus.focus(window, cx);
+                            this.show_tab(t, cx);
+                        }))
+                        .into_any_element(),
+                );
+            }
+        }
         v_flex()
-            .id("account-detail")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_y_scroll()
-            .p_6()
-            .gap_4()
-            .child(header)
-            .when(signed_out || login.is_some(), |el| {
-                el.child(self.render_login(&a, login, window, cx))
-            })
-            .child(usage)
-            .child(div().text_xs().text_color(muted).child(format!(
-                "Folder: {}{}",
-                a.dir.display(),
-                if a.is_default {
-                    " (runs with CLAUDE_CONFIG_DIR unset)"
-                } else {
-                    ""
+            .id("accounts-nav")
+            .role(Role::TabList)
+            .aria_label("Account Sections")
+            .track_focus(&self.nav_focus)
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.modifiers.modified() {
+                    return;
                 }
-            )))
-            .into_any_element()
+                let delta = match e.keystroke.key.as_str() {
+                    "up" => -1,
+                    "down" => 1,
+                    _ => return,
+                };
+                let next = this.tab.step(delta);
+                this.show_tab(next, cx);
+                cx.stop_propagation();
+            }))
+            .flex_none()
+            .h_full()
+            .gap_0p5()
+            .py_3()
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().sidebar)
+            .map(|el| {
+                if narrow {
+                    el.w(px(48.)).items_center()
+                } else {
+                    el.w(px(188.)).px_2()
+                }
+            })
+            .children(items)
     }
 }
 
 impl Render for AccountsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let narrow = window.viewport_size().width < NARROW;
         let (error, notice) = {
             let m = self.model.read(cx);
             (m.error.clone(), m.notice.clone())
@@ -404,11 +544,12 @@ impl Render for AccountsPage {
         let body = match self.tab {
             Tab::Accounts => {
                 let offer = self.render_import_offer(cx);
-                let list = self.render_list(cx);
-                let detail = self.render_detail(window, cx);
+                let list = self.render_list(narrow, window, cx);
+                let detail = self.render_detail(narrow, window, cx);
                 v_flex()
                     .flex_1()
                     .min_h_0()
+                    .min_w_0()
                     .children(offer)
                     .child(h_flex().flex_1().min_h_0().child(list).child(detail))
                     .into_any_element()
@@ -417,56 +558,43 @@ impl Render for AccountsPage {
             Tab::StatusLine => self.render_statusline(cx),
             Tab::Diagnostics => self.render_diagnostics(cx),
             Tab::Settings => self.render_settings(cx),
+            t => self.render_pool(t, narrow, window, cx),
         };
-        let current = self.tab;
-        let tabs = h_flex()
-            .px_4()
-            .pt_2()
-            .gap_1()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .children(Tab::ALL.iter().map(|&t| {
-                Button::new(SharedString::from(format!("accounts-tab-{}", t.label())))
-                    .small()
-                    .ghost()
-                    .label(t.label())
-                    .selected(t == current)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.tab = t;
-                        if t == Tab::Usage {
-                            let period = this.period;
-                            this.model
-                                .update(cx, |m, cx| m.refresh_analytics(period, cx));
-                        }
-                        cx.notify();
-                    }))
-            }));
+        let nav = self.render_nav(narrow, window, cx);
         v_flex()
             .id("accounts-page")
             .track_focus(&self.focus)
             .size_full()
             .bg(cx.theme().background)
-            .when_some(error, |el, e| {
-                el.child(Banner::error("accounts-error", e).on_dismiss(cx.listener(
-                    |this, _, _, cx| {
-                        this.model.update(cx, |m, cx| {
-                            m.error = None;
-                            cx.notify()
+            .child(self.render_header(cx))
+            .child(
+                h_flex().flex_1().min_h_0().child(nav).child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .when_some(error, |el, e| {
+                            el.child(Banner::error("accounts-error", e).on_dismiss(cx.listener(
+                                |this, _, _, cx| {
+                                    this.model.update(cx, |m, cx| {
+                                        m.error = None;
+                                        cx.notify()
+                                    })
+                                },
+                            )))
                         })
-                    },
-                )))
-            })
-            .when_some(notice, |el, n| {
-                el.child(Banner::info("accounts-notice", n).on_dismiss(cx.listener(
-                    |this, _, _, cx| {
-                        this.model.update(cx, |m, cx| {
-                            m.notice = None;
-                            cx.notify()
+                        .when_some(notice, |el, n| {
+                            el.child(Banner::info("accounts-notice", n).on_dismiss(cx.listener(
+                                |this, _, _, cx| {
+                                    this.model.update(cx, |m, cx| {
+                                        m.notice = None;
+                                        cx.notify()
+                                    })
+                                },
+                            )))
                         })
-                    },
-                )))
-            })
-            .child(tabs)
-            .child(div().flex_1().min_h_0().flex().child(body))
+                        .child(div().flex_1().min_h_0().flex().child(body)),
+                ),
+            )
     }
 }

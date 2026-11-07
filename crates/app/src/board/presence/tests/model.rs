@@ -250,7 +250,11 @@ fn off_screen_agents_share_a_chip_per_edge() {
 #[test]
 fn a_name_that_would_cover_another_is_left_out() {
     let one = pill_rect((100.0, 100.0), 40.0);
-    assert_eq!(one, [111.0, 105.0, 165.0, 123.0]);
+    assert_eq!(
+        one,
+        [111.0, 105.0, 179.0, 123.0],
+        "the logo badge, then the name"
+    );
     // As long as a pill is, it is at most 120 px.
     assert_eq!(pill_rect((0.0, 0.0), 400.0)[2], 131.0);
     let near = pill_rect((110.0, 108.0), 40.0);

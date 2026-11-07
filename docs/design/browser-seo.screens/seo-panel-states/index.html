@@ -1,0 +1,103 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+:root{--bg:#ffffff;--fg:#18181b;--muted:#71717a;--line:#e4e4e7;--soft:#f4f4f5;--sec:#f4f4f5;--pass:#15803d;--warn:#b45309;--fail:#b91c1c;--accent:#2563eb;--page:#fafafa}
+*{box-sizing:border-box}body{margin:0;background:var(--page);font:12px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:var(--fg);-webkit-font-smoothing:antialiased;padding:24px}
+.row{display:flex;gap:24px;align-items:flex-start;margin-bottom:24px}
+.cap{font-size:11px;color:var(--muted);margin-bottom:6px}
+.panel{width:340px;background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column}
+.hd{height:36px;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 12px;border-bottom:1px solid var(--line)}
+.hd b{font-size:14px;font-weight:600}.x{width:20px;height:20px;border-radius:4px;display:grid;place-items:center;color:var(--muted)}
+.tabs{display:flex;gap:16px;padding:0 12px;border-bottom:1px solid var(--line);height:32px;align-items:stretch}
+.tabs span{display:flex;align-items:center;color:var(--muted);border-bottom:2px solid transparent}.tabs .on{color:var(--fg);border-color:var(--fg);font-weight:500}
+.body{padding:12px;display:flex;flex-direction:column;gap:16px}
+.sec{display:flex;flex-direction:column;gap:8px}.st{display:flex;justify-content:space-between;align-items:center;min-height:20px;font-size:12px;font-weight:500;color:var(--muted)}
+.scan{display:flex;align-items:center;gap:8px}.fav{width:16px;height:16px;border-radius:4px;background:#0ea5e9;flex:none}
+.host{font-weight:500}.ago{color:var(--muted);flex:1}
+.btn{height:24px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);display:inline-flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
+.btn.primary{background:var(--fg);color:#fff;border-color:var(--fg)}
+.scores{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:6px}
+.score{padding:10px 12px}.score+.score{border-left:1px solid var(--line)}
+.num{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-0.01em;line-height:1.1}.num small{font-size:12px;color:var(--muted);font-weight:400}
+.lbl{color:var(--muted);margin-top:2px}
+.counts{display:flex;gap:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.ic{width:14px;height:14px;flex:none;display:grid;place-items:center;border-radius:50%;font-size:9px;font-weight:700;color:#fff}
+.ic.p{background:var(--pass)}.ic.w{background:var(--warn);border-radius:3px}.ic.f{background:var(--fail)}.ic.n{background:#d4d4d8}
+.chk{display:flex;gap:8px;align-items:flex-start;padding:4px 0}.chk .t{flex:1;min-width:0}.chk .nm{font-weight:500}.chk .dt{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pts{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.kv{display:flex;gap:8px;min-height:22px;align-items:center}.kv .k{width:92px;flex:none;color:var(--muted)}.kv .v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exp{background:var(--soft);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px;margin-left:22px}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:11px}
+.pv{border:1px solid var(--line);border-radius:8px;overflow:hidden}.pv .img{height:120px;background:linear-gradient(135deg,#0ea5e9,#0369a1)}
+.pv .tx{padding:8px 10px;display:flex;flex-direction:column;gap:2px}.pv .h{color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:.05em}
+.g .u{color:#202124;font-size:12px}.g .tt{color:#1a0dab;font-size:16px}.g .d{color:#4d5156}
+.wa{background:#d9fdd3;border-radius:8px;padding:4px;width:260px;margin-left:auto}.wa .in{background:#cfe9c7;border-radius:6px;overflow:hidden;display:flex}.wa .in .img{width:72px;height:72px;flex:none}.wa .tx{display:flex;flex-direction:column;gap:2px;min-width:0}
+.seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}.seg span{flex:1;text-align:center;padding:4px 0;color:var(--muted)}.seg .on{background:var(--soft);color:var(--fg);font-weight:500}
+.bar{height:6px;background:var(--soft);border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;background:var(--fg)}
+.layer{display:flex;flex-direction:column;gap:4px}.layer .l{display:flex;justify-content:space-between}
+.sk{height:10px;border-radius:3px;background:var(--soft)}
+.empty{border:1px dashed var(--line);border-radius:6px;padding:16px;display:flex;flex-direction:column;gap:4px}.empty b{font-size:14px;font-weight:500}.empty span{color:var(--muted)}
+</style></head><body>
+<div class="row">
+ <div><div class="cap">Overview</div><div class="panel"><div class="hd"><b>SEO</b><span class="x">✕</span></div>
+  <div class="tabs"><span class="on">Overview</span><span>Previews</span><span>Checks</span><span>Agents</span></div>
+  <div class="body">
+   <div class="scan"><span class="fav"></span><span class="host">kyzn.life</span><span class="ago">Scanned just now</span><span class="btn">↻ Rescan</span></div>
+   <div class="scores"><div class="score"><div class="num">84<small>/100</small></div><div class="lbl">Search and sharing</div></div><div class="score"><div class="num">52<small> · C</small></div><div class="lbl">Agent readiness</div></div></div>
+   <div class="counts"><span style="display:flex;gap:4px;align-items:center"><span class="ic p">✓</span>17 passed</span><span style="display:flex;gap:4px;align-items:center"><span class="ic w">!</span>4 warnings</span><span style="display:flex;gap:4px;align-items:center"><span class="ic f">✕</span>3 failed</span></div>
+   <div class="sec"><div class="st">To fix<span class="btn">Copy fixes for an agent</span></div>
+    <div class="chk"><span class="ic f">✕</span><div class="t"><div class="nm">llms-full.txt</div><div class="dt">No /llms-full.txt (nor /full-llms.txt).</div></div><span class="pts">0/1</span></div>
+    <div class="chk"><span class="ic f">✕</span><div class="t"><div class="nm">Web app manifest</div><div class="dt">No &lt;link rel="manifest"&gt;.</div></div><span class="pts">0/1</span></div>
+    <div class="chk"><span class="ic w">!</span><div class="t"><div class="nm">JSON-LD structured data</div><div class="dt">Organization found, missing description.</div></div><span class="pts">2/4</span></div>
+    <div class="chk"><span class="ic w">!</span><div class="t"><div class="nm">Image alt text</div><div class="dt">3 of 24 images have no alt.</div></div><span class="pts">1.8/2</span></div>
+   </div>
+   <div class="sec"><div class="st">Page</div>
+    <div class="kv"><span class="k">Title</span><span class="v">KYZN — Family wellness club in Jakarta</span></div>
+    <div class="kv"><span class="k">Description</span><span class="v">A family wellness club with sports, fitness and…</span></div>
+    <div class="kv"><span class="k">Canonical</span><span class="v">https://kyzn.life/</span></div>
+    <div class="kv"><span class="k">Language</span><span class="v">en</span></div>
+    <div class="kv"><span class="k">Share image</span><span class="v">1200×630 PNG</span></div>
+    <div class="kv"><span class="k">Structured data</span><span class="v">Organization, WebSite</span></div>
+   </div>
+  </div></div></div>
+ <div><div class="cap">Previews</div><div class="panel"><div class="hd"><b>SEO</b><span class="x">✕</span></div>
+  <div class="tabs"><span>Overview</span><span class="on">Previews</span><span>Checks</span><span>Agents</span></div>
+  <div class="body">
+   <div class="sec"><div class="st">Google search</div><div class="g"><div class="u">kyzn.life</div><div class="tt">KYZN — Family wellness club in Jakarta</div><div class="d">A family wellness club with sports, fitness and recovery for every age, in South Jakarta.</div></div></div>
+   <div class="sec"><div class="st">WhatsApp</div><div class="wa"><div class="in"><div class="img" style="background:linear-gradient(135deg,#0ea5e9,#0369a1)"></div><div class="tx" style="padding:6px 8px"><b>KYZN — Family wellness club</b><span style="color:#54656f">A family wellness club with…</span><span style="color:#54656f">kyzn.life</span></div></div></div></div>
+   <div class="sec"><div class="st">LinkedIn and Facebook</div><div class="pv"><div class="img"></div><div class="tx"><span class="h">kyzn.life</span><b>KYZN — Family wellness club in Jakarta</b></div></div></div>
+   <div class="sec"><div class="st">X</div><div class="pv" style="border-radius:16px"><div class="img"></div><div class="tx"><span style="color:var(--muted)">From kyzn.life</span></div></div></div>
+  </div></div></div>
+ <div><div class="cap">Checks, one open</div><div class="panel"><div class="hd"><b>SEO</b><span class="x">✕</span></div>
+  <div class="tabs"><span>Overview</span><span>Previews</span><span class="on">Checks</span><span>Agents</span></div>
+  <div class="body"><div class="sec"><div class="st">Search and sharing<span class="pts">21/24 checks</span></div>
+   <div class="chk"><span class="ic p">✓</span><div class="t"><div class="nm">Page title</div><div class="dt">“KYZN — Family wellness club…” (38 characters).</div></div><span class="pts">2/2</span></div>
+   <div class="chk"><span class="ic p">✓</span><div class="t"><div class="nm">Meta description</div><div class="dt">142 characters.</div></div><span class="pts">2/2</span></div>
+   <div class="chk"><span class="ic w">!</span><div class="t"><div class="nm">Broken links</div><div class="dt">2 of 30 links are broken.</div></div><span class="pts">1.9/2</span></div>
+   <div class="exp"><div class="mono">https://kyzn.life/free-trial → 404</div><div class="mono">https://kyzn.life/old-blog → 404</div><div style="color:var(--muted)">Fix or remove the links that answer 404 or fail.</div><div style="display:flex;gap:8px"><span class="btn">Copy fix prompt</span><span class="btn">Open spec</span></div></div>
+   <div class="chk"><span class="ic p">✓</span><div class="t"><div class="nm">Open Graph tags</div><div class="dt">All five set.</div></div><span class="pts">2/2</span></div>
+   <div class="chk"><span class="ic n">–</span><div class="t"><div class="nm">Language alternates</div><div class="dt">Not needed: the site is in one language.</div></div><span class="pts">n/a</span></div>
+   <div class="chk"><span class="ic f">✕</span><div class="t"><div class="nm">Markdown sitemap</div><div class="dt">No /sitemap.md.</div></div><span class="pts">0/1</span></div>
+  </div></div></div></div>
+ <div><div class="cap">Agents</div><div class="panel"><div class="hd"><b>SEO</b><span class="x">✕</span></div>
+  <div class="tabs"><span>Overview</span><span>Previews</span><span>Checks</span><span class="on">Agents</span></div>
+  <div class="body">
+   <div class="seg"><span class="on">All</span><span>Content site</span><span>API or app</span></div>
+   <div class="scores"><div class="score"><div class="num">52<small> · C</small></div><div class="lbl">Agent readiness</div></div><div class="score"><div class="num">61<small>/100</small></div><div class="lbl">Essentials</div></div></div>
+   <div class="sec"><div class="st">Layers</div>
+    <div class="layer"><div class="l"><span>Discovery</span><span class="pts">55% · weight 20</span></div><div class="bar"><i style="width:55%"></i></div></div>
+    <div class="layer"><div class="l"><span>Access</span><span class="pts">61% · weight 30</span></div><div class="bar"><i style="width:61%"></i></div></div>
+    <div class="layer"><div class="l"><span>Usability</span><span class="pts">36% · weight 40</span></div><div class="bar"><i style="width:36%"></i></div></div>
+    <div class="layer"><div class="l"><span>Payments</span><span class="pts">n/a</span></div><div class="bar"></div></div>
+   </div>
+   <div class="kv"><span class="k">External score</span><span class="v">49 · C</span></div>
+   <div class="sec"><div class="st">Usability<span class="pts">6 to fix</span></div>
+    <div class="chk"><span class="ic f">✕</span><div class="t"><div class="nm">MCP server</div><div class="dt">No MCP endpoint found in the well-known files.</div></div><span class="pts">0/6</span></div>
+    <div class="chk"><span class="ic f">✕</span><div class="t"><div class="nm">WebMCP</div><div class="dt">No page tools declared for agents.</div></div><span class="pts">0/5</span></div>
+   </div>
+  </div></div></div>
+</div>
+<div class="row">
+ <div><div class="cap">Loading</div><div class="panel"><div class="hd"><b>SEO</b><span class="x">✕</span></div><div class="body"><div class="scan"><span class="ago">Scanning kyzn.life…</span></div><div class="sk" style="width:200px"></div><div class="sk" style="width:140px"></div><div class="sk" style="width:180px"></div></div></div></div>
+ <div><div class="cap">Error</div><div class="panel"><div class="hd"><b>SEO</b><span class="x">✕</span></div><div class="body"><div class="empty"><b>Couldn't scan localhost:3000</b><span>Couldn't connect: connection refused. Start the dev server, then scan again.</span><div style="padding-top:8px"><span class="btn">↻ Scan again</span></div></div></div></div></div>
+ <div><div class="cap">Empty (blank tab)</div><div class="panel"><div class="hd"><b>SEO</b><span class="x">✕</span></div><div class="body"><div class="empty"><b>No page to scan</b><span>Open a web page in this tab and its search, sharing and agent checks show here.</span></div></div></div></div>
+</div>
+</body></html>

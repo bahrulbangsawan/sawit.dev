@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Menus and floating bars</title>
+<style>
+:root{
+  --bg:#282c33; --canvas:#1e2127; --popover:#2f343e; --border:#363c46; --fg:#dce0e5;
+  --muted:#a9afbc; --danger:#d07277; --primary:#74ade8; --on-primary:#282c33;
+  --hover:#3b414d; --selected:#454a56; --ring:#47679e;
+  --row:28px; --pad:4px; --gap:8px; --icon:14px; --r-in:6px; --r-out:10px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;padding:32px 40px}
+h1{font-size:20px;font-weight:600;margin:0 0 4px;letter-spacing:-0.01em}
+.lede{color:var(--muted);margin:0 0 28px;max-width:72ch}
+h2{font-size:13px;font-weight:600;margin:0 0 12px;color:var(--fg)}
+.cap{color:var(--muted);font-size:12px;margin:10px 0 0;max-width:36ch}
+.grid{display:grid;grid-template-columns:repeat(3,max-content);gap:40px 56px;align-items:start}
+.stage{background:var(--canvas);border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:16px;align-items:flex-start}
+svg.i{width:var(--icon);height:var(--icon);flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* menu */
+.menu{background:var(--popover);border:1px solid var(--border);border-radius:var(--r-out);padding:var(--pad);
+  box-shadow:0 8px 24px rgba(0,0,0,.35),0 1px 2px rgba(0,0,0,.3);min-width:160px;display:flex;flex-direction:column}
+.it{height:var(--row);display:flex;align-items:center;gap:var(--gap);padding:0 8px;border-radius:var(--r-in);white-space:nowrap;font-size:12px}
+.it .ic{width:16px;display:flex;justify-content:center;color:var(--muted)}
+.it .lb{flex:1}
+.it .kb{color:var(--muted);margin-left:24px;font-size:11.5px;font-variant-numeric:tabular-nums}
+.it.sel{background:var(--selected)}
+.it.sel .ic{color:var(--fg)}
+.it.dis{color:#6b7280}.it.dis .ic{color:#6b7280}
+.it.danger,.it.danger .ic{color:var(--danger)}
+.it img{width:16px;height:16px}
+.hd{height:24px;display:flex;align-items:flex-end;padding:0 8px 4px;font-size:11px;font-weight:600;color:var(--muted)}
+.hd.first{height:20px;padding-top:0}
+.sep{height:1px;background:var(--border);margin:4px -4px}
+.sub{color:var(--muted);margin-left:16px}
+.spin{width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--muted);border-radius:50%}
+/* bar */
+.bar{height:36px;display:inline-flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--border);border-radius:var(--r-out);background:var(--popover);box-shadow:0 4px 12px rgba(0,0,0,.3)}
+.b{height:28px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border-radius:var(--r-in);font-size:12px;white-space:nowrap;color:var(--fg)}
+.b .i{color:var(--muted)}
+.b.hov{background:var(--hover)}
+.b.icon{width:28px;padding:0;justify-content:center}
+.b.on{background:var(--selected)}
+.b.on .i{color:var(--primary)}
+.b .chk{color:var(--primary)}
+.b.dis{color:#6b7280}.b.dis .i{color:#6b7280}
+.b.primary{background:var(--primary);color:var(--on-primary);font-weight:500}
+.b.primary .i{color:var(--on-primary)}
+.b .car{width:12px;height:12px;opacity:.75}
+.div{width:1px;height:16px;background:var(--border);margin:0 4px}
+.frame{width:300px;height:120px;border:1px solid #4a5160;border-radius:4px;background:#2b3038;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px}
+.spec{font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);margin-top:28px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px 40px;max-width:1100px}
+.spec b{color:var(--fg);font-weight:500}
+</style></head><body>
+<h1>Menus and floating bars</h1>
+<p class="lede">One look for every popup menu and every floating bar on the canvas. Dark theme (Sawit ships Zed One Dark only). Every item has a 14&nbsp;px icon; bars are as wide as their buttons; toggles show a check and an accent icon, not a background alone.</p>
+
+<div class="grid">
+ <div>
+  <h2>Plain menu, destructive item</h2>
+  <div class="stage">
+   <div class="menu" style="width:max-content">
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/></svg></span><span class="lb">New File</span><span class="kb">⌘N</span></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><span class="lb">New Folder</span><span class="kb">⌥⌘N</span></div>
+    <div class="sep"></div>
+    <div class="it sel"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg></span><span class="lb">Rename</span><span class="kb">↩</span></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="lb">Copy Path</span><span class="kb">⌥⌘C</span></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg></span><span class="lb">Reveal in Finder</span></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg></span><span class="lb">Open in Terminal</span></div>
+    <div class="sep"></div>
+    <div class="it danger"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></span><span class="lb">Delete…</span><span class="kb">⌘⌫</span></div>
+   </div>
+  </div>
+  <p class="cap">28 px rows, 4 px padding, 8 px icon to label, shortcuts muted on the right. Delete sits last, after a line, in the danger colour, and still asks first.</p>
+ </div>
+
+ <div>
+  <h2>Sections and agents (Send to Agent)</h2>
+  <div class="stage">
+   <div class="menu" style="width:max-content">
+    <div class="hd first">Build in this project</div>
+    <div class="it sel"><span class="ic"><img src="img/claudecode-color.svg" alt=""></span><span class="lb">Claude Code</span></div>
+    <div class="it"><span class="ic"><img src="img/codex-color.svg" alt=""></span><span class="lb">Codex</span></div>
+    <div class="it"><span class="ic"><img src="img/geminicli-color.svg" alt=""></span><span class="lb">Gemini CLI</span></div>
+    <div class="sep"></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="lb">Copy Prompt</span></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg></span><span class="lb">Reveal in Finder</span></div>
+   </div>
+  </div>
+  <p class="cap">The header is small, semibold and muted with room above, so it never reads as a disabled item. Agents show their 16 px logo.</p>
+ </div>
+
+ <div>
+  <h2>While looking, and with no agent</h2>
+  <div class="stage">
+   <div class="menu" style="width:max-content">
+    <div class="it dis"><span class="ic"><span class="spin"></span></span><span class="lb">Looking for coding agents…</span></div>
+    <div class="sep"></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="lb">Copy Prompt</span></div>
+   </div>
+   <div class="menu" style="width:max-content">
+    <div class="it dis"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span><span class="lb">No coding agent found</span></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg></span><span class="lb">Get a Coding Agent…</span></div>
+    <div class="sep"></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="lb">Copy Prompt</span></div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg></span><span class="lb">Reveal in Finder</span></div>
+   </div>
+  </div>
+  <p class="cap">Copy Prompt keeps working in every state.</p>
+ </div>
+
+ <div>
+  <h2>Checked items</h2>
+  <div class="stage">
+   <div class="menu" style="width:max-content">
+    <div class="hd first">Device</div>
+    <div class="it"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span class="lb">Responsive</span></div>
+    <div class="it"><span class="ic"></span><span class="lb">iPhone 16</span><span class="kb">393 × 852</span></div>
+    <div class="it"><span class="ic"></span><span class="lb">iPad Air</span><span class="kb">820 × 1180</span></div>
+   </div>
+  </div>
+  <p class="cap">A choice list keeps the check column: the check is the icon.</p>
+ </div>
+</div>
+
+<h2 style="margin-top:40px">Floating bars on the canvas</h2>
+<div class="stage" style="width:1200px;flex-direction:row;flex-wrap:wrap;gap:40px 48px">
+ <div><div class="bar">
+  <span class="b"><svg class="i" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>Live</span>
+  <span class="b hov"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>Reload</span>
+  <span class="b on"><svg class="i" viewBox="0 0 24 24"><path d="M12 22v-6"/><path d="M12 8V2"/><path d="M4 12H2"/><path d="M10 12H8"/><path d="M16 12h-2"/><path d="M22 12h-2"/><path d="m15 19-3 3-3-3"/><path d="m15 5-3-3-3 3"/></svg>Full Page<svg class="i chk" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
+  <span class="div"></span>
+  <span class="b"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>Open in Browser</span>
+ </div><p class="cap">Route bar. Full Page is a toggle: on, it has an accent icon, a check and the selected fill, and reads "on" to VoiceOver.</p></div>
+
+ <div><div class="bar">
+  <span class="b"><svg class="i" viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>Preview</span>
+  <span class="div"></span>
+  <span class="b"><svg class="i" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>Export<svg class="i car" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+  <span class="div"></span>
+  <span class="b primary"><svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>Send to Agent<svg class="i car" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+ </div><p class="cap">Screen bar (B13). Send to Agent is the one primary action. Export opens HTML, React, PNG and SVG.</p></div>
+
+ <div><div class="bar">
+  <span class="b"><svg class="i" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>Export<svg class="i car" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+  <span class="div"></span>
+  <span class="b primary"><svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>Send to Agent<svg class="i car" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+ </div><p class="cap">Artboard bar.</p></div>
+
+ <div><div class="bar">
+  <span class="b primary"><svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>Send Flow to Agent<svg class="i car" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+ </div><p class="cap">Flow bar (several frames).</p></div>
+
+ <div><div class="bar">
+  <span class="b icon"><svg class="i" viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg></span>
+  <span class="div"></span>
+  <span class="b icon"><svg class="i" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg></span>
+  <span class="div"></span>
+  <span class="b icon primary"><svg class="i" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
+ </div><p class="cap">Narrow canvas: labels collapse to icons with tooltips, never a scrolling row.</p></div>
+
+ <div><div class="bar">
+  <span class="b dis"><svg class="i" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>Live</span>
+  <span class="b dis"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>Reload</span>
+  <span class="b dis"><svg class="i" viewBox="0 0 24 24"><path d="M12 22v-6"/><path d="M12 8V2"/><path d="M4 12H2"/><path d="M10 12H8"/><path d="M16 12h-2"/><path d="M22 12h-2"/><path d="m15 19-3 3-3-3"/><path d="m15 5-3-3-3 3"/></svg>Full Page</span>
+  <span class="div"></span>
+  <span class="b"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>Open in Browser</span>
+ </div><p class="cap">Route bar for a remote page: Live, Reload and Full Page are disabled, still labelled.</p></div>
+</div>
+
+<div class="spec">
+ <div><b>Menu</b><br>padding 4 · row 28 · item radius 6 · menu radius 10<br>icon 14 in a 16 slot · gap 8 · shortcut muted, right<br>separator 1 px, 4 px above and below<br>header 11 px semibold muted, 24 high (20 first)</div>
+ <div><b>Bar</b><br>height 36 · border 1 · padding 3 (4 to the edge)<br>button 28 high · 8 px sides · icon 14 · 6 px to label<br>2 px between buttons · divider 16 high, 4 px each side<br>width = buttons + dividers + padding; centred, clamped</div>
+ <div><b>States</b><br>hover #3b414d · selected/on #454a56 + accent icon + check<br>primary #74ade8 on #282c33 · danger #d07277<br>disabled #6b7280 · focus ring #47679e (2 px)<br>collapsed: 28×28 icon buttons, name in tooltip</div>
+</div>
+</body></html>

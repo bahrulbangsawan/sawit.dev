@@ -15,6 +15,7 @@ mod color;
 mod css;
 pub mod html;
 pub mod layers;
+pub mod lint;
 #[cfg(test)]
 mod tests;
 

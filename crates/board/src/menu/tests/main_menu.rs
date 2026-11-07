@@ -158,7 +158,7 @@ fn paths_become_nested_submenus() {
         ["Alignment", "Adjust", "Case"]
     );
     // A submenu sits where its first item does: Panels follows Soft-proof sRGB, Sawit's
-    // Variables… after it, and a line.
+    // Variables…, Comments…, Start Timer and Start Vote after it, and a line.
     let order = outline(view);
     let outlines = order
         .iter()
@@ -166,9 +166,11 @@ fn paths_become_nested_submenus() {
         .unwrap();
     let panels = order.iter().position(|label| label == "Panels ▸").unwrap();
     assert!(outlines < panels, "{order:?}");
-    assert_eq!(order[panels - 4], "Soft-proof sRGB");
-    assert_eq!(order[panels - 3], "Variables…");
-    assert_eq!(order[panels - 2], "Comments…");
+    assert_eq!(order[panels - 6], "Soft-proof sRGB");
+    assert_eq!(order[panels - 5], "Variables…");
+    assert_eq!(order[panels - 4], "Comments…");
+    assert_eq!(order[panels - 3], "Start Timer (5 min)");
+    assert_eq!(order[panels - 2], "Start Vote");
     assert_eq!(order[panels - 1], "-");
     // A submenu keeps its own separators, and loses the hidden items.
     assert_eq!(

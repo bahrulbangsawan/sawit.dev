@@ -176,7 +176,8 @@ fn every_menu_item_has_its_own_key(cx: &mut TestAppContext) {
             ("terminal::SplitRight", Some("cmd-d")),
             ("terminal::SplitDown", Some("cmd-shift-d")),
             ("terminal::ZoomPane", Some("cmd-shift-enter")),
-            ("workspace::MaximizeTerminal", Some("ctrl-cmd-1")),
+            // B5: ⇧⌘T, the terminal's own fill key (⌃⌘1 still works).
+            ("workspace::MaximizeTerminal", Some("cmd-shift-t")),
             ("terminal::ToggleSendRightClicks", Some("alt-cmd-r")),
             ("terminal::ClosePane", Some("alt-cmd-w")),
             ("terminal::RenameTab", Some("cmd-shift-i")),

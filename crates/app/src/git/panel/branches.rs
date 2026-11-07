@@ -199,24 +199,33 @@ fn branch_menu(
     if !remotes.is_empty() {
         let remotes = remotes.clone();
         let panel_for_remote = panel.clone();
-        menu = menu.submenu("Remote Branches", window, cx, move |mut menu, _, _| {
-            for b in remotes.clone() {
-                let panel = panel_for_remote.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(b.name.clone()).on_click(move |_, _, cx| {
-                        let b = b.clone();
-                        let _ = panel.update(cx, |this, cx| {
-                            this.store.update(cx, |s, cx| {
-                                s.run("Switching branch…", cx, move |repo, _| async move {
-                                    git::switch(&repo, &b).await.map(|_| String::new())
-                                })
-                            })
-                        });
-                    }),
-                );
-            }
-            menu
-        });
+        let icon = Some(Icon::new(crate::menu_icons::REMOTE));
+        menu = menu.submenu_with_icon(
+            icon,
+            "Remote Branches",
+            window,
+            cx,
+            move |mut menu, _, _| {
+                for b in remotes.clone() {
+                    let panel = panel_for_remote.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(b.name.clone())
+                            .icon(crate::menu_icons::BRANCH)
+                            .on_click(move |_, _, cx| {
+                                let b = b.clone();
+                                let _ = panel.update(cx, |this, cx| {
+                                    this.store.update(cx, |s, cx| {
+                                        s.run("Switching branch…", cx, move |repo, _| async move {
+                                            git::switch(&repo, &b).await.map(|_| String::new())
+                                        })
+                                    })
+                                });
+                            }),
+                    );
+                }
+                menu
+            },
+        );
     }
     menu = menu.separator();
     let panel_new = panel.clone();
@@ -235,19 +244,22 @@ fn branch_menu(
         && !mergeable.is_empty()
     {
         let panel_merge = panel.clone();
-        menu = menu.submenu(
+        menu = menu.submenu_with_icon(
+            Some(Icon::new(crate::menu_icons::MERGE)),
             format!("Merge into {current}"),
             window,
             cx,
             move |mut menu, _, _| {
                 for name in mergeable.clone() {
                     let panel = panel_merge.clone();
-                    menu = menu.item(PopupMenuItem::new(name.clone()).on_click(
-                        move |_, window, cx| {
-                            let name = name.clone();
-                            let _ = panel.update(cx, |this, cx| this.merge(name, window, cx));
-                        },
-                    ));
+                    menu = menu.item(
+                        PopupMenuItem::new(name.clone())
+                            .icon(crate::menu_icons::MERGE)
+                            .on_click(move |_, window, cx| {
+                                let name = name.clone();
+                                let _ = panel.update(cx, |this, cx| this.merge(name, window, cx));
+                            }),
+                    );
                 }
                 menu
             },

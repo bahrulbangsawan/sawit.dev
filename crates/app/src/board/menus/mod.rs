@@ -31,6 +31,7 @@
 //! P6-C7). Every model is read behind the engine's guard: a panic in it leaves that menu empty,
 //! and is logged (D15).
 
+mod icons;
 mod palette;
 mod popup;
 mod sheet;

@@ -103,7 +103,7 @@ fn devices_by_name() {
         assert!(device_by_name(name).is_some(), "{name}");
     }
     assert!(device_by_name("watch").is_none());
-    assert_eq!(DEVICES.len(), 6);
+    assert_eq!(DEVICES.len(), 20);
     // Phones and tablets have their pixel ratio; computers keep the screen's.
     let ratio = |name: &str| device_by_name(name).and_then(|d| d.dpr);
     assert_eq!(ratio("iPhone 15"), Some(3.));
@@ -140,14 +140,15 @@ fn resize_modes() {
         resize_mode(None, Some(100), Some(600)),
         Err("Width and height must be between 200 and 3840.".into())
     );
-    assert_eq!(
-            resize_mode(None, None, None),
-            Err("Give a device (iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop or responsive) or a width and height.".into())
-        );
-    assert_eq!(
-            resize_mode(Some("watch"), None, None),
-            Err("Unknown device “watch”. Use iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop or responsive.".into())
-        );
+    let none = resize_mode(None, None, None).unwrap_err();
+    assert!(
+        none.starts_with("Give a device (responsive, or one of Mobile: iPhone SE"),
+        "{none}"
+    );
+    assert!(none.contains("; Desktop: Desktop, Full HD, QHD, 4K) or a width and height."));
+    let watch = resize_mode(Some("watch"), None, None).unwrap_err();
+    assert!(watch.starts_with("Unknown device “watch”. Use responsive, or one of Mobile:"));
+    assert!(watch.contains("Tablet: iPad mini, iPad Air"));
     let op: BrowserOp = serde_json::from_str(r#"{"op":"resize","device":"iPhone 15"}"#).unwrap();
     assert_eq!(
         op,

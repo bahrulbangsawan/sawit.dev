@@ -10,6 +10,10 @@ gpui_kit::assets::icon_assets!(
     [
         Database,
         Server,
+        // The browser's SEO panel: its toolbar switch, check states and a missing share image.
+        // (CircleMinus and CircleDashed: listed with the catalogs below.)
+        SearchCheck,
+        ImageOff,
         Terminal,
         FileCode,
         Download,
@@ -58,6 +62,8 @@ gpui_kit::assets::icon_assets!(
         CopyPlus,
         Trash,
         Tag,
+        Locate,
+        LocateFixed, // Follow agent (B4.1)
         ScrollText,
         Waypoints,
         Radio,
@@ -176,7 +182,51 @@ gpui_kit::assets::icon_assets!(
         Clapperboard,
         // The New Project page (src/new_project_page/).
         FolderPlus,
-        ListChecks
+        ListChecks,
+        // Activity icons on the tabs: needs attention.
+        BellDot,
+        // The Accounts page's tabs, sections and settings rows.
+        ChartColumn,
+        Gauge,
+        Share2,
+        Power,
+        Wrench,
+        // Menus and floating bars (B16, src/menu_icons.rs, src/board/menus/icons.rs).
+        AppWindow,
+        ArrowLeftRight,
+        ArrowLeftToLine,
+        ArrowRightToLine,
+        BringToFront,
+        ChevronsDownUp,
+        ClipboardCopy,
+        ClipboardPaste,
+        Cloud,
+        Crop,
+        FilePlus,
+        FlipHorizontal2,
+        FlipVertical2,
+        GitBranchPlus,
+        MousePointerClick,
+        MoveRight,
+        PinOff,
+        Pipette,
+        Rows2,
+        Scissors,
+        Send,
+        SendToBack,
+        SquareMinus,
+        SquarePen,
+        Timer,
+        Ungroup,
+        Variable,
+        Vote,
+        // The pool's views (Overview, Detailed, Compare, Timeline, Analytics, Wallet).
+        List,
+        CalendarClock,
+        TrendingUp,
+        Wallet,
+        GitCompare,
+        Flame,
     ]
 );
 

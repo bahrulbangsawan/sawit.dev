@@ -1,6 +1,7 @@
   // ---- rules ----
 
   const rules = (op) => {
+    useLimits(op);
     const acc = newRules();
     const parsed = [];
     for (const item of (op && op.sheets) || []) {
@@ -14,5 +15,6 @@
       } catch (_) {}
     }
     fetchedSheets = parsed;
-    return rulesOut(acc);
+    const readings = newReadings();
+    return Object.assign(rulesOut(acc, readings.note), { color_fallbacks: readings.fallbacks });
   };

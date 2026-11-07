@@ -241,3 +241,84 @@ fn fast_halves_the_play_off_plays_nothing_and_reduced_motion_only_fades() {
         "reduced motion: a short fade only"
     );
 }
+
+/// Covers over screen `frame`, as a screen's blueprint makes them: one per element.
+fn covers(frame: NodeId, n: usize) -> Vec<super::script::Task> {
+    (0..n)
+        .map(|i| {
+            let y = i as f64 * 60.0;
+            let mut task =
+                super::script::Task::new(frame, Kind::Shape, [0.0, y, 300.0, y + 40.0], None);
+            task.cover = true;
+            task
+        })
+        .collect()
+}
+
+/// The covers lane `lane` still draws over the frame at `now`.
+fn covers_drawn(replays: &Replays, now: Instant) -> usize {
+    let mut marks = Vec::new();
+    let screen = |r: [f64; 4]| r;
+    for lane in &replays.lanes {
+        super::marks::lane_marks(lane, now, &screen, &mut marks);
+    }
+    marks
+        .iter()
+        .filter(|m| matches!(m, crate::board::presence::marks::Mark::Box { alpha, .. } if *alpha == 0.0))
+        .count()
+}
+
+/// B17: a newer write of a screen takes out what an older write still covers, in every lane, and
+/// a cover never outlives its limit, even in a lane that stalled.
+#[test]
+fn a_newer_write_clears_the_old_covers_and_covers_expire() {
+    let (_, doc, page) = diff(|b| {
+        make(
+            b,
+            "frame.create",
+            json!({"x": 0, "y": 0, "width": 393, "height": 852}),
+        );
+    });
+    let frame = NodeId(1);
+    let now = Instant::now();
+    let mut replays = Replays::default();
+    let first = Look::for_tests("s/one");
+    let second = Look::for_tests("s/two");
+    replays.play_screen(
+        &first,
+        page,
+        &doc,
+        covers(frame, 12),
+        (0.0, 0.0),
+        now,
+        false,
+    );
+    assert!(
+        covers_drawn(&replays, now) >= 12,
+        "the first write covers its 12 elements"
+    );
+    // Another agent writes the same screen: only its own two covers are left.
+    replays.play_screen(
+        &second,
+        page,
+        &doc,
+        covers(frame, 2),
+        (0.0, 0.0),
+        now,
+        false,
+    );
+    let left: usize = replays.lanes.iter().map(|l| l.tasks.len()).sum();
+    assert_eq!(left, 2, "the first write's covers went at once");
+    assert_eq!(replays.lanes.len(), 1, "the first lane, empty, went");
+    // A lane that never plays on (its tasks pushed far out) still lets its covers go.
+    for lane in &mut replays.lanes {
+        for t in &mut lane.tasks {
+            t.start = now + Duration::from_secs(600);
+            t.end = now + Duration::from_secs(601);
+        }
+    }
+    let later = now + super::COVER_LIMIT + Duration::from_millis(1);
+    assert_eq!(covers_drawn(&replays, later), 0, "covers expire");
+    let _ = replays.document(&doc, &[], later);
+    assert!(replays.lanes.is_empty(), "and leave their lane");
+}

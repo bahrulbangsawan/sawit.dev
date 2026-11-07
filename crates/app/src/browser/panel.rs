@@ -240,6 +240,7 @@ impl BrowserView {
         let (title, body) = match panel {
             Panel::Annotate => ("Annotate", self.annotate.clone().into_any_element()),
             Panel::Design => ("Design", self.design_panel.clone().into_any_element()),
+            Panel::Seo => ("SEO", self.seo_panel.clone().into_any_element()),
         };
         let close = cx.listener(move |this, _: &ClickEvent, _, cx| {
             this.toggle_panel(panel, cx);

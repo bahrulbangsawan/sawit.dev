@@ -426,6 +426,30 @@ impl Workspace {
             self.active = ix;
         } else {
             let view = cx.new(|cx| crate::accounts::AccountsPage::new(window, cx));
+            // The pool's Overview lists this window's agents: in its terminals, and MCP clients.
+            let ws = cx.entity().downgrade();
+            view.update(cx, |page, _| {
+                page.set_agents_source(std::rc::Rc::new(move |cx: &App| {
+                    let Some(ws) = ws.upgrade() else {
+                        return Vec::new();
+                    };
+                    let ws = ws.read(cx);
+                    let terminals = ws.terminal.read(cx).seen_agents(cx);
+                    let mcp = ws.describe_agents(cx);
+                    match cx.try_global::<crate::accounts::GlobalAccounts>() {
+                        Some(g) => {
+                            let m = g.0.read(cx);
+                            crate::accounts::agents_seen_collect(
+                                &terminals,
+                                &mcp,
+                                &m.accounts,
+                                &m.home,
+                            )
+                        }
+                        None => Vec::new(),
+                    }
+                }))
+            });
             let sub = cx.subscribe_in(
                 &view,
                 window,

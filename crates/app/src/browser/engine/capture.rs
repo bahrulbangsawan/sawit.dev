@@ -25,6 +25,72 @@ pub struct Pixels(Retained<CGImage>);
 unsafe impl Send for Pixels {}
 
 impl Pixels {
+    /// The picture itself, for Core Graphics and AVFoundation.
+    pub fn image(&self) -> &CGImage {
+        &self.0
+    }
+
+    /// Its pixels as RGBA rows (premultiplied, sRGB as WebKit drew them), for stitching tiles.
+    pub fn rgba(&self) -> Option<Vec<u8>> {
+        use objc2_core_foundation::{CGPoint, CGRect};
+        use objc2_core_graphics::{CGBitmapContextCreate, CGColorSpace, CGContext};
+        let (w, h) = self.size();
+        let (w, h) = (w as usize, h as usize);
+        let mut out = vec![0u8; w * h * 4];
+        let space = CGImage::color_space(Some(&self.0)).or_else(CGColorSpace::new_device_rgb)?;
+        // SAFETY: `out` holds `h` rows of `w * 4` bytes and outlives the context.
+        let context = unsafe {
+            CGBitmapContextCreate(
+                out.as_mut_ptr().cast(),
+                w,
+                h,
+                8,
+                w * 4,
+                Some(&space),
+                1, /* PremultipliedLast, RGBA */
+            )
+        }?;
+        let rect = CGRect::new(CGPoint::ZERO, CGSize::new(w as f64, h as f64));
+        CGContext::draw_image(Some(&context), rect, Some(&self.0));
+        drop(context);
+        Some(out)
+    }
+
+    /// The picture redrawn at exactly `width` × `height` pixels (high-quality interpolation): a
+    /// snapshot can come out a few pixels off the size asked for, as WebKit rounds to its own
+    /// pixel grid.
+    pub fn resized(&self, width: u32, height: u32) -> Option<Pixels> {
+        use objc2_core_foundation::{CGPoint, CGRect};
+        use objc2_core_graphics::{
+            CGBitmapContextCreate, CGBitmapContextCreateImage, CGColorSpace, CGContext,
+            CGInterpolationQuality,
+        };
+        if self.size() == (width, height) {
+            return Some(Pixels(self.0.clone()));
+        }
+        let space = CGImage::color_space(Some(&self.0)).or_else(CGColorSpace::new_device_rgb)?;
+        // SAFETY: Core Graphics allocates the bitmap (null data).
+        let context = unsafe {
+            CGBitmapContextCreate(
+                std::ptr::null_mut(),
+                width as usize,
+                height as usize,
+                8,
+                0,
+                Some(&space),
+                1, /* PremultipliedLast */
+            )
+        }?;
+        CGContext::set_interpolation_quality(Some(&context), CGInterpolationQuality::High);
+        let rect = CGRect::new(
+            CGPoint::ZERO,
+            CGSize::new(f64::from(width), f64::from(height)),
+        );
+        CGContext::draw_image(Some(&context), rect, Some(&self.0));
+        let image = CGBitmapContextCreateImage(Some(&context))?;
+        Some(Pixels(image.into()))
+    }
+
     /// Its size in pixels.
     pub fn size(&self) -> (u32, u32) {
         let width = CGImage::width(Some(&self.0));
@@ -65,8 +131,50 @@ impl Pixels {
 }
 
 impl Engine {
+    /// Holds the CSS viewport units (`vh`, `vw`) at `width` × `height` CSS px (WebKit's
+    /// viewport-units override, private, skipped where WebKit lacks it). The browser keeps it at
+    /// the page's viewport ([`super::super::BrowserView::relayout`]), and a full-page capture
+    /// keeps it there while the view is made as tall as the page, so `100vh` sections don't grow.
+    /// WebKit takes no empty size, so it is never cleared, only set.
+    pub fn hold_viewport_units(&self, width: f64, height: f64) {
+        use objc2::{msg_send, sel};
+        use objc2_foundation::NSObjectProtocol as _;
+        if !(width >= 1. && height >= 1.) {
+            return;
+        }
+        let wk = self.webview.webview();
+        if !wk.respondsToSelector(sel!(_setViewportSizeForCSSViewportUnits:)) {
+            return;
+        }
+        unsafe {
+            let _: () =
+                msg_send![&*wk, _setViewportSizeForCSSViewportUnits: CGSize::new(width, height)];
+        }
+    }
+
+    /// The view as a PDF (WebKit's vector rendering of what the view holds: the whole page while
+    /// it is as tall as the page).
+    pub fn create_pdf(&self, reply: oneshot::Sender<Result<Vec<u8>, String>>) {
+        use objc2_foundation::NSData;
+        let reply = Mutex::new(Some(reply));
+        let handler = block2::RcBlock::new(move |data: *mut NSData, error: *mut NSError| {
+            let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) else {
+                return;
+            };
+            let result = match unsafe { data.as_ref() } {
+                Some(data) => Ok(data.to_vec()),
+                None => Err(unsafe { error.as_ref() }
+                    .map(|e| format!("WebKit couldn't make the PDF: {}", e.localizedDescription()))
+                    .unwrap_or_else(|| "WebKit couldn't make the PDF.".into())),
+            };
+            let _ = reply.send(result);
+        });
+        let wk = self.webview.webview();
+        unsafe { wk.createPDFWithConfiguration_completionHandler(None, &handler) };
+    }
+
     /// The view's size in points, and the display's scale.
-    fn view_metrics(&self) -> (f64, f64, f64) {
+    pub fn view_metrics(&self) -> (f64, f64, f64) {
         let wk = self.webview.webview();
         let frame = wk.frame();
         let backing = wk.convertSizeToBacking(CGSize::new(1., 1.)).width;
@@ -96,9 +204,43 @@ impl Engine {
         frame_size(width, height, backing, max_width)
     }
 
+    /// A still capture at a chosen size: `rect` of the view (in its points; the whole view when
+    /// `None`), drawn afresh `width` points wide, so the picture is `width` × the display's scale
+    /// pixels wide whatever size the view shows at: WebKit paints the page again at that size
+    /// rather than scaling what it last drew.
+    pub fn capture_rect(
+        &self,
+        rect: Option<(f64, f64, f64, f64)>,
+        width: f64,
+        reply: oneshot::Sender<Result<Pixels, String>>,
+    ) {
+        self.snapshot_pixels_in(rect, Some(width), true, reply);
+    }
+
+    /// A recording's frame at a chosen size: `rect` of the view (its points; all of it when
+    /// `None`), `width` points wide, from WebKit's last drawing (fast).
+    pub fn record_frame(
+        &self,
+        rect: Option<(f64, f64, f64, f64)>,
+        width: f64,
+        reply: oneshot::Sender<Result<Pixels, String>>,
+    ) {
+        self.snapshot_pixels_in(rect, Some(width), false, reply);
+    }
+
     /// Snapshots the whole view, `width` points wide (the view's own width when `None`).
     fn snapshot_pixels(
         &self,
+        width: Option<f64>,
+        after_screen_updates: bool,
+        reply: oneshot::Sender<Result<Pixels, String>>,
+    ) {
+        self.snapshot_pixels_in(None, width, after_screen_updates, reply);
+    }
+
+    fn snapshot_pixels_in(
+        &self,
+        rect: Option<(f64, f64, f64, f64)>,
         width: Option<f64>,
         after_screen_updates: bool,
         reply: oneshot::Sender<Result<Pixels, String>>,
@@ -111,6 +253,10 @@ impl Engine {
         };
         let config = unsafe { WKSnapshotConfiguration::new(mtm) };
         unsafe {
+            if let Some((x, y, w, h)) = rect {
+                use objc2_core_foundation::{CGPoint, CGRect};
+                config.setRect(CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)));
+            }
             if let Some(width) = width {
                 config.setSnapshotWidth(Some(&NSNumber::new_f64(width)));
             }

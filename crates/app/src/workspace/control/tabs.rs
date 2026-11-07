@@ -221,15 +221,23 @@ impl Workspace {
                 files.push(file.clone());
             }
         }
+        let boards: Vec<_> = self.boards.iter().filter_map(|b| b.upgrade()).collect();
         json!(
             files
                 .iter()
-                .map(|f| json!({
-                    "name": sawit_core::canvases::canvas_name(f),
-                    "file": f,
-                    "open": open.contains(f),
-                    "active": active.as_ref() == Some(f),
-                }))
+                .map(|f| {
+                    let mut entry = json!({
+                        "name": sawit_core::canvases::canvas_name(f),
+                        "file": f,
+                        "open": open.contains(f),
+                        "active": active.as_ref() == Some(f),
+                    });
+                    // An open canvas's view: Follow agent, Present and Preview (B4.1, B15).
+                    if let Some(board) = boards.iter().find(|b| b.read(cx).path() == f.as_path()) {
+                        entry["view"] = board.read(cx).describe_view();
+                    }
+                    entry
+                })
                 .collect::<Vec<_>>()
         )
     }

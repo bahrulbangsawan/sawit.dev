@@ -77,12 +77,19 @@ fn layer_named(doc: &Document, id: &str) -> Option<NodeId> {
 }
 
 pub(super) fn add(board: &mut BoardDoc, op: &Value) -> Value {
+    // A colour may name a token (B12): it draws in the token's value, and is bound to it.
+    let (op, named) = super::tokens::resolve_names(board, op);
+    let op = &op;
     let items = match skeletons(op) {
         Ok(items) => items,
         Err(error) => return failure(format!("add: {error}")),
     };
     match skeleton::apply(board, &items, (0.0, 0.0)) {
-        Ok(applied) => added(&applied),
+        Ok(applied) => {
+            let mut reply = added(&applied);
+            with_tokens(board, op, &mut reply, named);
+            reply
+        }
         Err(error) if needs_a_board(board, &error.to_string()) => {
             failure(format!("add: {error}. {ADD_ON_A_DESIGN_FILE}"))
         }
@@ -114,6 +121,19 @@ fn skeletons(op: &Value) -> Result<Vec<Skeleton>, String> {
             Skeleton::deserialize(item).map_err(|error| format!("elements[{index}]: {error}"))
         })
         .collect()
+}
+
+/// Binds the colours of the layers `op` drew or changed that are exactly a token's (B12), and
+/// says in `reply` what it named and bound.
+fn with_tokens(board: &mut BoardDoc, op: &Value, reply: &mut Value, named: Vec<String>) {
+    let Ok(doc) = board.doc() else {
+        return;
+    };
+    let ids = super::tokens::ids_in(reply, op, &doc);
+    let bound = super::tokens::bind_matching(board, &ids);
+    if bound > 0 || !named.is_empty() {
+        reply["tokens"] = json!({"named": named, "bound": bound});
+    }
 }
 
 /// `{ok, added, ids}` for what `apply` made, and the `notes` on what it skipped when it skipped
@@ -185,6 +205,8 @@ fn changes(op: &Value) -> Result<Vec<Change>, String> {
 }
 
 pub(super) fn update(board: &mut BoardDoc, op: &Value) -> Value {
+    let (op, named) = super::tokens::resolve_names(board, op);
+    let op = &op;
     let changes = match changes(op) {
         Ok(changes) => changes,
         Err(error) => return failure(format!("update: {error}")),
@@ -209,6 +231,7 @@ pub(super) fn update(board: &mut BoardDoc, op: &Value) -> Value {
             if !notes.is_empty() {
                 reply["notes"] = json!(notes);
             }
+            with_tokens(board, op, &mut reply, named);
             reply
         }
         Err(error) => failure(format!("update: {error}")),

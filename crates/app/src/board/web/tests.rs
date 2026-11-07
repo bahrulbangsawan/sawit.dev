@@ -132,3 +132,31 @@ fn bench_stats_read_the_sorted_samples() {
     assert_eq!(report["mean"], json!(22.0));
     assert_eq!(stats(&mut []), json!(null));
 }
+
+/// B17: a picture drawn larger than it was taken is retaken at the settled zoom; one taken at or
+/// above the zoom's density is kept; and the cap keeps a big page's picture within the GPU's
+/// textures.
+#[test]
+fn snapshots_are_retaken_sharp_and_capped() {
+    use super::pool::{MAX_SCALE, MAX_SIDE, blurry, scale_cap};
+    assert!(blurry(0.45, 1.0), "taken at 45%, shown at 100%");
+    assert!(blurry(0.8, 1.0), "a zoom animation's middle, kept before");
+    assert!(!blurry(1.0, 1.0));
+    assert!(!blurry(2.0, 1.0));
+    let phone = Viewport { w: 393.0, h: 852.0 };
+    assert_eq!(
+        scale_cap(phone),
+        MAX_SCALE,
+        "a phone screen is sharp up to 300%"
+    );
+    let tall = Viewport {
+        w: 1440.0,
+        h: 9000.0,
+    };
+    let cap = scale_cap(tall);
+    assert!(
+        tall.h * 2.0 * cap <= MAX_SIDE + 1.0,
+        "within the GPU's side: {cap}"
+    );
+    assert!(tall.w * tall.h * 4.0 * cap * cap <= super::pool::MAX_PIXELS + 1.0);
+}

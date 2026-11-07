@@ -24,6 +24,18 @@ pub(super) fn commands() -> Value {
     success("commands", Value::Array(commands))
 }
 
+/// Whether an agent's `canvas_command` runs engine command `id`: the engine has it and the
+/// `commands` op lists it ([`listed`]).
+pub fn agent_can_run(id: &str) -> bool {
+    figcraft_engine::find_command(id).is_some() && listed(id)
+}
+
+/// Whether `id` switches, opens, closes or writes documents behind the canvas's store, which
+/// Sawit does itself: never an agent's command.
+pub fn is_document_command(id: &str) -> bool {
+    handled(id).is_some() || OPENS_DOCUMENTS.contains(&id)
+}
+
 /// Whether the `commands` op offers command `id`: the canvas doesn't hide it, and the `command`
 /// op runs it to a result. That one rule leaves out what Sawit does itself ([`HANDLED_BY_SAWIT`],
 /// the save and the like) and what only opens a document ([`OPENS_DOCUMENTS`]), so every command

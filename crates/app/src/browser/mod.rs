@@ -12,11 +12,13 @@
 
 mod agents;
 mod annotate;
+mod capture;
 mod cover;
 mod design;
 mod device;
 pub(crate) mod engine;
 mod events;
+mod favicon;
 mod mesurer;
 mod modes;
 mod navigation;
@@ -26,6 +28,7 @@ mod panel;
 mod picking;
 mod presence;
 mod progress;
+mod seo;
 mod servers;
 mod shots;
 mod suspend;
@@ -60,6 +63,7 @@ use engine::{Engine, EngineEvent};
 pub use modes::{Panel, PickMode};
 use navigation::ExternalGate;
 pub use navigation::address_url;
+use seo::{SeoEvent, SeoPanel};
 use shots::ShotGate;
 pub use tabs::{BrowserTabs, TabsEvent};
 use viewport::{CAPTION_BAND, caption};
@@ -117,6 +121,8 @@ type OpResult = Result<Value, String>;
 enum FromPage {
     Event(PageEvent),
     Engine(EngineEvent),
+    /// The page's icon `<link>` tags, as JSON ([`favicon`]).
+    IconLinks(String),
     /// An element's box is known: capture it (or the whole view).
     Shoot {
         rect: Option<(f64, f64, f64, f64)>,
@@ -160,6 +166,8 @@ pub struct BrowserView {
     /// Default Browser follow it); none before the first frame.
     drawn_url: Option<String>,
     title: String,
+    /// The page's favicon on its tab ([`favicon`]).
+    icon: favicon::TabIcon,
     loading: bool,
     /// How far the page in [`Self::loading`] has come, while it loads ([`progress`]).
     progress: progress::LoadProgress,
@@ -181,6 +189,13 @@ pub struct BrowserView {
     panel: Option<Panel>,
     annotate: Entity<AnnotatePanel>,
     design_panel: Entity<DesignPanel>,
+    /// The SEO panel ([`seo`]), the scan it last asked for, and a count that tells a scan's
+    /// answer from an older one's.
+    seo_panel: Entity<SeoPanel>,
+    seo_ask: seo::flow::SeoAsk,
+    seo_generation: u64,
+    /// The recording under way, and how the last one ended ([`capture::record`]).
+    recorder: capture::record::Recorder,
     /// Shots take turns: the overlay has one hidden flag.
     shots: ShotGate,
     pick: PickMode,
@@ -219,6 +234,7 @@ impl BrowserView {
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter address"));
         let annotate = cx.new(|cx| AnnotatePanel::new(window, cx));
         let design_panel = cx.new(|_| DesignPanel::new());
+        let seo_panel = cx.new(|_| SeoPanel::new());
         cx.default_global::<crate::local_explorer::Running>();
         let mut subscriptions = vec![
             // The Explorer button comes and goes with the page's dev server's Local Explorer.
@@ -232,6 +248,22 @@ impl BrowserView {
                 &design_panel,
                 window,
                 |this, _, event: &DesignEvent, _, cx| this.on_design(event, cx),
+            ),
+            cx.subscribe_in(
+                &seo_panel,
+                window,
+                |this, _, event: &SeoEvent, _, cx| match event {
+                    SeoEvent::Rescan => this.seo_rescan(cx),
+                    SeoEvent::ScanType(t) => {
+                        this.seo_ask.scan_type = *t;
+                        this.seo_rescan(cx);
+                    }
+                    SeoEvent::External(on) => {
+                        this.seo_ask.external = *on;
+                        this.seo_panel.update(cx, |p, cx| p.set_external(*on, cx));
+                        this.seo_rescan(cx);
+                    }
+                },
             ),
             cx.subscribe_in(
                 &address,
@@ -308,6 +340,7 @@ impl BrowserView {
             url: url.unwrap_or_else(|| "about:blank".into()),
             drawn_url: None,
             title: String::new(),
+            icon: Default::default(),
             loading: false,
             progress: Default::default(),
             servers: None,
@@ -320,6 +353,10 @@ impl BrowserView {
             panel: None,
             annotate,
             design_panel,
+            seo_panel,
+            seo_ask: Default::default(),
+            seo_generation: 0,
+            recorder: Default::default(),
             shots: ShotGate::default(),
             pick: PickMode::Off,
             pick_waiting: false,
@@ -341,6 +378,8 @@ impl BrowserView {
         json!({
             "url": self.current_url(),
             "title": self.title,
+            // Whether the tab shows the page's favicon ([`favicon`]).
+            "favicon": self.icon.image.is_some(),
             "loading": self.loading,
             "progress": self.loading.then_some(self.progress.value),
             "viewport": self.viewport_json(),
@@ -348,6 +387,7 @@ impl BrowserView {
             "pick_mode": self.pick.as_str(),
             "last_pick": self.last_pick,
             "mesurer": self.mesurer_describe(),
+            "recording": self.record_status(),
             // Whether a menu, popover, dialog or notification covers the page, and whether the
             // webview is up (it steps back while something covers it).
             "covered": self.cover.covered,

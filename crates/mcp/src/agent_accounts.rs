@@ -56,6 +56,20 @@ pub struct SyncArgs {
     pub action: String,
 }
 
+#[derive(Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+pub struct PoolArgs {
+    #[schemars(
+        description = "overview (every account: status, room left, limits, resets, and the pick), detailed (the same grouped by agent or urgency), compare (the account with the most room now, why, the next best, what holds each back), timeline (each account's limit windows and resets in the history), wallet (prices, monthly total, renewals in the next 30 days, top-ups and their expiry) or analytics (pace forecasts, busiest hour, plan fit, suggestions to move work). Default overview"
+    )]
+    pub view: Option<String>,
+    #[schemars(
+        description = "Only this agent's accounts: claude-code or codex. Default: every agent"
+    )]
+    pub provider: Option<String>,
+    #[schemars(description = "Days of history for timeline and analytics (30 or 90). Default 30")]
+    pub days: Option<u32>,
+}
+
 fn ctx(s: &Sawit) -> (std::path::PathBuf, std::path::PathBuf) {
     (
         s.paths.root.clone(),
@@ -217,6 +231,115 @@ impl Sawit {
             })
             .collect();
         ok(serde_json::to_string_pretty(&list).unwrap_or_default())
+    }
+
+    #[tool(
+        description = "The account pool across coding agents (Claude Code and Codex accounts on this Mac), as the Accounts page's pool views show it, as JSON. Ask before long work: view compare names the account with the most room left right now and why. Readings are what each agent reported itself (Claude Code's status line, Codex's session logs); nothing is estimated and no sign-in is read. Works without the app"
+    )]
+    async fn account_pool(&self, Parameters(a): Parameters<PoolArgs>) -> CallToolResult {
+        use sawit_core::agent_accounts::pool::{self, LimitKind, Provider};
+        use sawit_core::agent_accounts::pool_data::{self, Known};
+        let (root, home) = ctx(self);
+        let view = a.view.unwrap_or_else(|| "overview".into());
+        let provider = match a.provider.as_deref() {
+            None | Some("") => None,
+            Some(p) => match Provider::from_id(p) {
+                Some(p) => Some(p),
+                None => return fail(format!("No agent “{p}”: claude-code or codex.")),
+            },
+        };
+        let days = a.days.unwrap_or(30).clamp(1, 120) as f64;
+        let now = sawit_core::github::now() as f64;
+        // Read only: the app records readings; a second writer would store them twice.
+        let data = tri!(
+            tri!(
+                blocking(move || pool_data::collect(
+                    &root,
+                    &home,
+                    &Known::nothing(),
+                    now,
+                    days,
+                    false
+                ))
+                .await
+            )
+            .map_err(|e| e.to_string())
+        );
+        let accounts: Vec<_> = data
+            .accounts
+            .iter()
+            .filter(|x| provider.is_none_or(|p| x.provider == p))
+            .cloned()
+            .collect();
+        let name = |id: &str| accounts.iter().find(|x| x.id == id).map(|x| x.name.clone());
+        let out = match view.as_str() {
+            "overview" | "detailed" => {
+                let mut o = pool::overview_json(&accounts, now);
+                if view == "detailed" {
+                    let mut by: std::collections::BTreeMap<&str, Vec<serde_json::Value>> = Default::default();
+                    for (x, row) in accounts.iter().zip(o["accounts"].as_array().cloned().unwrap_or_default()) {
+                        by.entry(x.provider.id()).or_default().push(row);
+                    }
+                    o["by_provider"] = json!(by);
+                    let mut urgent = accounts.clone();
+                    urgent.sort_by_key(|x| pool::status(x, now).urgency());
+                    o["by_urgency"] = json!(urgent.iter().map(|x| &x.name).collect::<Vec<_>>());
+                }
+                o["notices"] = json!(data.notices.iter().take(10).collect::<Vec<_>>());
+                o
+            }
+            "compare" => match pool::recommend(&accounts, None, now) {
+                Some(r) => json!({
+                    "recommended": name(&r.account),
+                    "room_left_pct": r.room,
+                    "holding_limit": r.holding.map(|k| k.id()),
+                    "why": r.reason,
+                    "next_best": r.next.as_ref().map(|(id, room)| json!({"name": name(id), "room_left_pct": room})),
+                    "skipped": r.skipped.iter().map(|(n, why)| json!({"name": n, "why": why})).collect::<Vec<_>>(),
+                    "note": "Room is a share of each plan: the same percentage of a bigger plan is more work.",
+                }),
+                None => json!({"recommended": null, "why": "No account has reported its limits yet."}),
+            },
+            "timeline" => json!(accounts.iter().map(|x| {
+                let r = data.readings.get(&x.id).cloned().unwrap_or_default();
+                json!({
+                    "name": x.name,
+                    "windows": LimitKind::ALL.iter().flat_map(|k| pool::windows(&r, *k)).collect::<Vec<_>>(),
+                    "recent_resets": LimitKind::ALL.iter().flat_map(|k| pool::resets_between(&pool::windows(&r, *k), now - 7.0 * 86400.0, now)).collect::<Vec<_>>(),
+                })
+            }).collect::<Vec<_>>()),
+            "wallet" => {
+                let w = &data.wallet;
+                let (month, year) = w.totals();
+                let offset = sawit_core::date::local_offset(now as i64);
+                json!({
+                    "currency": w.currency,
+                    "per_month": month,
+                    "per_year": year,
+                    "prices": accounts.iter().map(|x| json!({"name": x.name, "per_month": w.monthly(&x.id), "price": w.prices.get(&x.id)})).collect::<Vec<_>>(),
+                    "renewals_next_30_days": w.renewals(now as i64, 30, offset).into_iter().map(|(id, at, amount)| json!({"name": name(&id), "at": at, "amount": amount})).collect::<Vec<_>>(),
+                    "topups": w.topups,
+                    "expiring_soon": w.expiring(now as i64),
+                    "topups_by_month": w.topups_by_month(now as i64, 6, offset),
+                    "removed": w.removed,
+                })
+            }
+            "analytics" => {
+                let rows: Vec<_> = accounts.iter().map(|x| {
+                    let r = data.readings.get(&x.id).cloned().unwrap_or_default();
+                    let heat = pool::heatmap(&r, LimitKind::FiveHour, &|t| sawit_core::date::local_offset(t as i64));
+                    json!({
+                        "name": x.name,
+                        "forecast": x.current(now).filter_map(|l| pool::forecast(l, now)).collect::<Vec<_>>(),
+                        "busiest": heat.busiest().map(|(d, h, _)| format!("{} {h:02}:00", sawit_core::date::WEEKDAYS[d])),
+                        "plan_fit": pool::plan_fit(&pool::windows(&r, LimitKind::Weekly), data.wallet.monthly(&x.id)),
+                    })
+                }).collect();
+                json!({"accounts": rows, "move_work": pool::move_work(&accounts, now).into_iter().map(|m| json!({"from": name(&m.from), "to": name(&m.to), "why": m.why})).collect::<Vec<_>>()})
+            }
+            other => return fail(format!("No view “{other}”: overview, detailed, compare, timeline, wallet or analytics.")),
+        };
+        ok(serde_json::to_string_pretty(&out).unwrap_or_default())
     }
 
     #[tool(

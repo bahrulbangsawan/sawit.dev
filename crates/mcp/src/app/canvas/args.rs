@@ -202,8 +202,44 @@ pub struct CanvasBeginArgs {
         description = "\"screen\" for UI (a screen, a page, an app view): an HTML page in .nyawit/screens/<screen>/ shown in the frame (1440 × 900 when `frame` names no size, its CSS viewport); write it with canvas_screen_write and the answer's `screen`. \"component\" (the default when left out): a frame you draw into with the canvas tools, for components, diagrams, sketches the user asked for and illustrations"
     )]
     pub kind: Option<String>,
+    #[schemars(
+        description = "true for a wireframe, a diagram or a quick sketch: the design lint's warnings (tokens, components, auto layout, slop) stay quiet for this work; its errors still show"
+    )]
+    pub sketch: Option<bool>,
     #[schemars(description = CANVAS_AGENT)]
     pub agent: Option<Value>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+/// `canvas_lint`'s arguments: what to lint.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasLintArgs {
+    #[schemars(description = "A frame's id to lint; without it and `work`, the page on show")]
+    pub id: Option<String>,
+    #[schemars(description = CANVAS_WORK)]
+    pub work: Option<String>,
+    #[schemars(description = "true: only errors (a wireframe or a diagram)")]
+    pub sketch: Option<bool>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}
+
+/// `canvas_starter_system`'s arguments: where its Components frame goes.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasStarterArgs {
+    #[schemars(description = "Page x of the Components frame; default beside the page's content")]
+    pub x: Option<f64>,
+    #[schemars(description = "Page y of the Components frame")]
+    pub y: Option<f64>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]

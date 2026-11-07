@@ -1,4 +1,5 @@
 mod accounts;
+mod activity;
 mod agents;
 mod assets;
 mod board;
@@ -16,10 +17,13 @@ mod find;
 mod git;
 mod highlight;
 mod keymap;
+#[cfg(test)]
+mod keys_tests;
 mod layout;
 mod local_explorer;
 mod login_item;
 mod mcp_page;
+mod menu_icons;
 #[cfg(test)]
 mod menu_tests;
 mod menus;

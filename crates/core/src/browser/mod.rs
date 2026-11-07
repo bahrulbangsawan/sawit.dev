@@ -10,6 +10,7 @@
 
 mod address;
 mod base64;
+pub mod capture;
 mod evaluate;
 mod ipc;
 mod logs;
@@ -19,6 +20,7 @@ mod page;
 mod project;
 mod redact;
 pub mod routes;
+pub mod snapshot;
 mod tabs;
 mod viewport;
 
@@ -41,4 +43,6 @@ pub use project::{
 pub use redact::REDACTED;
 pub(crate) use redact::redact_url;
 pub use tabs::{SavedTab, SavedTabs, TABS_FILE, find_tab, load_tabs, save_tabs, tabs_file};
-pub use viewport::{DEVICES, Device, Fit, ViewportMode, device_by_name, fit, resize_mode};
+pub use viewport::{
+    DEVICES, Device, DeviceClass, Fit, ViewportMode, device_by_name, device_list, fit, resize_mode,
+};

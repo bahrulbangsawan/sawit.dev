@@ -78,6 +78,8 @@ pub(super) fn run_ui(
         sawit_board::policy::ADD_ROUTES => view.open_routes_dialog(cx),
         sawit_board::policy::VARIABLES => view.toggle_variables(window, cx),
         sawit_board::policy::COMMENTS => view.open_comments(None, None, window, cx),
+        sawit_board::policy::START_TIMER => view.start_facilitation("timer", cx),
+        sawit_board::policy::START_VOTE => view.start_facilitation("vote", cx),
         sawit_board::policy::MAXIMIZE => cx.emit(super::ToggleCanvasMaximize),
         _ if crate::agents::build_checked(id, cx).is_some() => {
             crate::agents::run_build_setting(id, cx);

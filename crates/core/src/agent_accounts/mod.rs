@@ -11,9 +11,13 @@ pub mod advice;
 pub mod analytics;
 pub mod claude;
 pub mod cli;
+pub mod codex;
 pub mod collector;
 pub mod import;
 pub mod login;
+pub mod pool;
+pub mod pool_data;
+pub mod readings;
 pub mod run;
 pub mod sessions;
 pub mod shared;
@@ -22,6 +26,7 @@ pub mod statusline;
 mod store;
 pub mod tracking;
 pub mod usage;
+pub mod wallet;
 
 pub use store::{Accounts, Settings, active_path, read_active, write_active};
 

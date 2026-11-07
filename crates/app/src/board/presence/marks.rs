@@ -78,6 +78,8 @@ pub(in crate::board) enum Mark {
         color: Hsla,
         label: SharedString,
         alpha: f32,
+        /// Its client's logo ([`crate::agents::Look::logo`]); `None` draws the generic agent mark.
+        logo: Option<&'static str>,
     },
 }
 
@@ -220,6 +222,7 @@ impl Presence {
                     color,
                     label,
                     alpha,
+                    logo: agent.look.logo(),
                 });
             }
         }
