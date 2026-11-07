@@ -30,6 +30,12 @@ use syntect::{
 /// on the first highlight, and is shared by every highlighter after that.
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
 
+/// Sawit patch: the syntax set, loaded on first use, for an application's own syntect
+/// highlighters to share, so the set is in memory once.
+pub fn syntax_set() -> &'static SyntaxSet {
+    &SYNTAXES
+}
+
 /// Documents up to this size are reparsed on the keystroke; larger ones keep
 /// their shifted highlights until a background parse catches up.
 const SYNC_PARSE_MAX_BYTES: usize = 64 * 1024;

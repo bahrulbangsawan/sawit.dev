@@ -18,6 +18,10 @@ workspace `Cargo.toml`. Changes (search for "Sawit patch"):
   in the icon's slot; `has_picture` and `PopupMenu::items` let tests check every item has one.
 - `src/tooltip.rs`: a text tooltip is at most 360 px wide and wraps, so a long one (a whole
   session title, a path, an error) never runs off the window on one line.
+- `src/highlighter/syntect_backend.rs`, `src/highlighter/mod.rs`: `highlighter::syntax_set()`
+  hands out the syntect syntax set the Markdown code blocks use, so Sawit's own editors'
+  highlighter (`crates/app/src/highlight`) shares it instead of loading a second copy (several MB
+  each, B6).
 
 Upstream has no option for these. To drop the patch, delete this folder and the
 `[patch.crates-io]` entry. Sawit's tests of it: `crates/app/src/menu_tests.rs`.
