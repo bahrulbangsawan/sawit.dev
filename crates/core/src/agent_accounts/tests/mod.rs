@@ -239,3 +239,40 @@ fn the_default_account_runs_with_the_variable_unset() {
         home.join(".claude-work/.claude.json")
     );
 }
+
+/// Move Up and Move Down (and a drop) reorder an agent's accounts; the ends clamp.
+#[test]
+fn accounts_move_up_and_down_in_their_list() {
+    let mut list = Accounts::default();
+    for name in ["a", "b", "c"] {
+        list.add(account(
+            name,
+            &PathBuf::from(format!("/h/.claude-{name}")),
+            false,
+        ))
+        .unwrap();
+    }
+    let id = |list: &Accounts, n: &str| {
+        list.accounts
+            .iter()
+            .find(|a| a.name == n)
+            .unwrap()
+            .id
+            .clone()
+    };
+    let names = |list: &Accounts| -> Vec<String> {
+        list.of(AgentKind::ClaudeCode)
+            .iter()
+            .map(|a| a.name.clone())
+            .collect()
+    };
+    let c = id(&list, "c");
+    assert!(list.move_by(&c, -1));
+    assert_eq!(names(&list), ["a", "c", "b"]);
+    assert!(list.move_by(&c, -5));
+    assert_eq!(names(&list), ["c", "a", "b"]);
+    assert!(!list.move_by(&c, -1), "already first");
+    assert!(list.move_to(&c, 2));
+    assert_eq!(names(&list), ["a", "b", "c"]);
+    assert!(!list.move_by("nobody", 1));
+}
