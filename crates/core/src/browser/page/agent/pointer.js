@@ -93,3 +93,23 @@
     for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]) pointer(target, type, x, y, {});
     return { hovered: describe(el), note: "Hover handlers ran; CSS :hover styles don't apply to simulated pointers." };
   };
+
+  // ---- Real pointer events ----
+  //
+  // On a tab on screen, an agent's left click is real mouse events the app hands the web view
+  // (crates/app/src/browser/engine/pointer.rs): `aim` checks the element as `click` does,
+  // scrolls it into view and says where the pointer goes (CSS px, and the viewport's size);
+  // `aimed` says how many of those events have reached the page since, so the app answers once
+  // they have.
+  let seen = null;
+  for (const type of ["mousemove", "mousedown", "click"]) {
+    addEventListener(type, (e) => { if (seen && e.isTrusted) seen[type]++; }, { capture: true, passive: true });
+  }
+  const aimOp = (op) => {
+    const el = required(op);
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") throw new Error(describe(el) + " is disabled.");
+    const { x, y } = aim(el);
+    seen = { mousemove: 0, mousedown: 0, click: 0 };
+    return { x, y, viewport: [innerWidth, innerHeight], target: describe(el), url: location.href };
+  };
+  const aimed = () => Object.assign({ mousemove: 0, mousedown: 0, click: 0 }, seen);

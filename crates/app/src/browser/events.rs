@@ -94,8 +94,9 @@ impl BrowserView {
             // while the tab is hidden: nobody can press in a hidden page, and the keyboard
             // would leave the terminal or field that has it for a view that isn't drawn, which
             // the workspace then takes it from (`workspace::KeyboardHome`).
+            // An agent's real click (`pointer`) is no press of the user's: it moves nothing.
             FromPage::Event(PageEvent::Pressed) => {
-                if self.page_shown() {
+                if self.page_shown() && !self.agent_pointing() {
                     self.focus.focus(window, cx);
                 }
             }

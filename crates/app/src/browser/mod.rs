@@ -24,6 +24,7 @@ mod notes;
 mod ops;
 mod panel;
 mod picking;
+mod pointer;
 mod presence;
 mod progress;
 mod servers;
@@ -154,6 +155,8 @@ pub struct BrowserView {
     /// in its place meanwhile ([`cover`]).
     cover: crate::native_cover::Cover,
     frozen: cover::Frozen,
+    /// Until when a trusted press the page reports is an agent's real click ([`pointer`]).
+    agent_pointer_until: Option<std::time::Instant>,
     address: Entity<InputState>,
     url: String,
     /// WebKit's address as the toolbar was last drawn with it (the Explorer button and Open in
@@ -304,6 +307,7 @@ impl BrowserView {
             menu_open: false,
             cover: Default::default(),
             frozen: Default::default(),
+            agent_pointer_until: None,
             address,
             url: url.unwrap_or_else(|| "about:blank".into()),
             drawn_url: None,

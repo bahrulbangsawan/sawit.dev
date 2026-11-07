@@ -9,6 +9,7 @@ mod color;
 mod fonts;
 mod history;
 pub mod keyboard;
+pub(super) mod pointer;
 pub(crate) mod web_frame;
 mod world;
 

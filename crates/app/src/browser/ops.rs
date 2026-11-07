@@ -210,6 +210,11 @@ impl BrowserView {
                 return;
             }
             op => {
+                // A click or hover on a tab on screen: real mouse events.
+                let reply = match self.try_native_pointer(&op, reply, cx) {
+                    Ok(()) => return,
+                    Err(reply) => reply,
+                };
                 let reply = Mutex::new(Some(reply));
                 let script = agent_call(&serde_json::to_value(&op).unwrap_or_default());
                 // The page collects the outline's nodes; Rust writes them.
