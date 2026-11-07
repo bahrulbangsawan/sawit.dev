@@ -111,6 +111,7 @@ pub(super) fn render_top_bar(
                         .ghost()
                         .small()
                         .icon(HIDE_UI_ICON)
+                        .accessibility_label("Hide UI")
                         .tooltip(hide_ui)
                         .debug_selector(|| "board-hide-ui".into())
                         .on_click({
@@ -127,6 +128,7 @@ pub(super) fn render_top_bar(
                         .ghost()
                         .small()
                         .icon(MAXIMIZE_ICON)
+                        .accessibility_label("Maximize Canvas")
                         .tooltip(maximize_tooltip(window))
                         .debug_selector(|| "board-maximize".into())
                         .on_click(move |_, _, cx| {
@@ -175,6 +177,7 @@ fn main_menu(view: WeakEntity<BoardView>) -> impl IntoElement + use<> {
         .ghost()
         .small()
         .icon(MAIN_MENU_ICON)
+        .accessibility_label("Main menu")
         .tooltip("Main menu")
         .debug_selector(|| "board-main-menu".into())
         .dropdown_menu(move |menu: PopupMenu, window, cx| {
@@ -212,6 +215,7 @@ fn layers_toggle(shown: bool, tooltip: String, view: WeakEntity<BoardView>) -> B
         .ghost()
         .small()
         .icon(LAYERS_ICON)
+        .accessibility_label("Layers panel")
         .selected(shown)
         .tooltip(tooltip)
         .debug_selector(|| "board-layers".into())
@@ -227,6 +231,7 @@ fn design_toggle(shown: bool, tooltip: String, view: WeakEntity<BoardView>) -> B
         .ghost()
         .small()
         .icon(DESIGN_ICON)
+        .accessibility_label("Design panel")
         .selected(shown)
         .tooltip(tooltip)
         .debug_selector(|| "board-design".into())
