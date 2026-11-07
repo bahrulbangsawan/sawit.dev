@@ -64,7 +64,7 @@ fn menu_of(
         let id = a.id.clone();
         menu = menu.item(
             PopupMenuItem::new(text)
-                .icon(Lucide::Users)
+                .icon(crate::menu_icons::ACCOUNT)
                 .checked(active.as_ref() == Some(&a.id))
                 .on_click(move |_, _, cx| global(cx).update(cx, |m, cx| m.set_active(&id, cx))),
         );
@@ -75,7 +75,7 @@ fn menu_of(
         let name = a.name.clone();
         menu = menu.separator().item(
             PopupMenuItem::new(format!("Most Room Left: {name} · Switch"))
-                .icon(Lucide::Gauge)
+                .icon(crate::menu_icons::SWITCH)
                 .on_click(move |_, _, cx| global(cx).update(cx, |m, cx| m.set_active(&id, cx))),
         );
     }

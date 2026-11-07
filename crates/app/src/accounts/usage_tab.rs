@@ -390,7 +390,7 @@ impl AccountsPage {
                                         let (page, id, s) = (page.clone(), id.clone(), s2.clone());
                                         menu.item(
                                             PopupMenuItem::new(name.clone())
-                                                .icon(Lucide::Users)
+                                                .icon(crate::menu_icons::ACCOUNT)
                                                 .on_click(move |_, _, cx| {
                                                     page.update(cx, |this, cx| {
                                                 let opened = this
