@@ -83,7 +83,7 @@ impl BoardView {
                 });
                 json!({"id": id.0, "source": format!("{:?}", frame.spec.source), "phase": format!("{:?}", frame.phase),
                     "view": frame.engine.is_some(), "pid": frame.pid, "texture": texture,
-                    "probe": frame.probe})
+                    "probe": frame.probe, "drawn": frame.drawn, "retakes": frame.retakes})
             })
             .collect();
         frames.sort_by_key(|frame| frame["id"].as_u64());

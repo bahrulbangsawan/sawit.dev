@@ -28,12 +28,14 @@
 
 mod bench;
 mod config;
+mod drawn;
 mod engines;
 mod fit;
 mod fresh;
 mod live;
 mod ops;
 mod pool;
+mod retake;
 mod servers;
 mod settle;
 mod status;
@@ -240,6 +242,15 @@ pub(super) struct WebFrame {
     pub relayout: bool,
     /// The size a fit just gave the frame: the resize it makes is the fit's own, laid out already.
     pub fitted_to: Option<Viewport>,
+    /// Half-drawn snapshots taken again since its page loaded ([`drawn`]): past
+    /// [`drawn::RETAKES`] the picture is kept as it is.
+    pub retakes: u32,
+    /// Its last settle timed out: the page's late answer pictures it again.
+    pub timed_out: bool,
+    /// What the half-drawn check found of its last snapshot, for the `web` op's status.
+    pub drawn: Option<Value>,
+    /// A half-drawn snapshot's retake is on its way ([`BoardView::web_retake`]).
+    pub retake_due: bool,
 }
 
 /// The frame live now.
@@ -396,6 +407,20 @@ impl WebFrames {
             self.log.pop_front();
         }
         self.log.push_back(entry);
+    }
+
+    /// Whether screen frame `id`'s picture is final for now: its view is at rest, with no reload,
+    /// refresh or retake still to come. One without a view to wait for is at rest.
+    pub(in crate::board) fn at_rest(&self, id: NodeId) -> bool {
+        let Some(frame) = self.frames.get(&id) else {
+            return true;
+        };
+        let waiting = frame.has_page && frame.texture.is_none() && frame.phase == Phase::Cold;
+        let busy = matches!(
+            frame.phase,
+            Phase::Loading | Phase::Settling | Phase::Snapping
+        );
+        !(waiting || busy || frame.reload_after || frame.retake_due || frame.refresh)
     }
 
     /// The canvas's tab went off screen or came back: the views go with it.

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Today</title>
+<style>
+  :root { --bg: #0e0f12; --card: #1a1c22; --fg: #f2f3f5; --muted: #9aa0ab; --accent: #7cd992; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
+  .bar { height: 44px; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; font-size: 14px; }
+  main { padding: 8px 20px 32px; }
+  .date { color: var(--muted); font-size: 14px; }
+  h1 { font-size: 34px; margin: 4px 0 20px; }
+  .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 12px; }
+  .card h2 { font-size: 18px; margin: 0 0 4px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .go { display: block; width: 100%; height: 52px; border: 0; border-radius: 14px; background: var(--accent); color: #0b2412; font-size: 17px; font-weight: 600; margin-top: 16px; }
+  /* A staggered entrance, as generated designs often have: everything below the status bar rises
+     in one after another over about four seconds, and the heading is revealed by a clip. */
+  .rise { opacity: 0; animation: rise .7s cubic-bezier(.2,.7,.2,1) forwards; animation-delay: calc(var(--i) * 260ms); }
+  h1.rise { opacity: 1; clip-path: inset(0 0 100% 0); animation-name: reveal; animation-duration: 2.4s; }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes reveal { to { clip-path: inset(0 0 0 0); } }
+</style>
+</head>
+<body>
+  <div class="bar"><span>9:41</span><span>100%</span></div>
+  <main>
+    <div class="date rise" style="--i:0">Thursday, 7 November</div>
+    <h1 class="rise" style="--i:1">Lower body B</h1>
+    <div class="card rise" style="--i:3"><h2>Back squat</h2><p>4 × 6 at 80 kg</p></div>
+    <div class="card rise" style="--i:4"><h2>Romanian deadlift</h2><p>3 × 8 at 70 kg</p></div>
+    <div class="card rise" style="--i:5"><h2>Walking lunge</h2><p>3 × 12 each leg</p></div>
+    <div class="card rise" style="--i:6"><h2>Leg curl</h2><p>3 × 12 at 35 kg</p></div>
+    <div class="card rise" style="--i:7"><h2>Calf raise</h2><p>4 × 15</p></div>
+    <div class="card rise" style="--i:8"><h2>Plank</h2><p>3 × 45 s</p></div>
+    <div class="card rise" style="--i:9"><h2>Cool down</h2><p>8 minutes</p></div>
+    <button class="go rise" style="--i:10">Start session</button>
+    <div class="card rise" style="--i:11"><h2>Notes</h2><p>Keep the bar path close.</p></div>
+    <div class="card rise" style="--i:12"><h2>Last time</h2><p>4 × 6 at 77.5 kg</p></div>
+    <div class="card rise" style="--i:13"><h2>Next</h2><p>Upper body A, Saturday</p></div>
+  </main>
+</body>
+</html>
