@@ -19,6 +19,7 @@ mod page;
 mod project;
 mod redact;
 pub mod routes;
+pub mod snapshot;
 mod tabs;
 mod viewport;
 

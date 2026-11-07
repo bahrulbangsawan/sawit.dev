@@ -130,11 +130,15 @@
     return el.value;
   };
 
+  // The page's outline: a node per line (depth, role, name, value, state, ref), which Rust
+  // writes as text (browser::snapshot). Names, values and text go clipped and quoted, as the
+  // outline shows them: clipping counts UTF-16 units, and only this quoting keeps a split
+  // surrogate pair readable once it reaches Rust.
   const MAX_LINES = 2000;
   const snapshot = () => {
     refs = new Map();
     nextRef = 0;
-    const lines = [];
+    const nodes = [];
     let truncated = false;
     const focused = document.activeElement;
     const children = (node) => {
@@ -143,19 +147,19 @@
       if (node.localName === "iframe") return [];
       return node.childNodes;
     };
-    const line = (depth, text) => {
-      if (lines.length >= MAX_LINES) {
+    const line = (node) => {
+      if (nodes.length >= MAX_LINES) {
         truncated = true;
         return false;
       }
-      lines.push("  ".repeat(depth) + "- " + text);
+      nodes.push(node);
       return true;
     };
     const visit = (node, depth) => {
       if (truncated) return;
       if (node.nodeType === Node.TEXT_NODE) {
         const text = oneLine(node.textContent);
-        if (text) line(depth, "text: " + JSON.stringify(clip(text, 200)));
+        if (text) line({ d: depth, text: JSON.stringify(clip(text, 200)) });
         return;
       }
       if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
@@ -168,37 +172,38 @@
         let r = role(el);
         if (!r && !contents && clickable(el)) r = "clickable";
         if (r) {
-          const ref = "e" + ++nextRef;
-          refs.set(ref, el);
+          const ref = ++nextRef;
+          refs.set("e" + ref, el);
           const name = r === "clickable" ? clip(textOf(el), 100) : clip(nameOf(el, r), 100);
-          let text = r + (name ? " " + JSON.stringify(name) : "");
-          if (r === "heading") text += " [level=" + (Number(el.getAttribute("aria-level")) || Number(el.localName.slice(1)) || 2) + "]";
+          const n = { d: depth, role: r };
+          if (name) n.name = JSON.stringify(name);
+          if (r === "heading") n.level = String(Number(el.getAttribute("aria-level")) || Number(el.localName.slice(1)) || 2);
           if (["textbox", "searchbox", "combobox", "listbox", "spinbutton", "slider"].includes(r)) {
-            text += " value=" + JSON.stringify(clip(valueOf(el) || "", 200));
+            n.value = JSON.stringify(clip(valueOf(el) || "", 200));
           }
-          if (el.checked || el.getAttribute("aria-checked") === "true") text += " [checked]";
-          if (el.getAttribute("aria-expanded")) text += el.getAttribute("aria-expanded") === "true" ? " [expanded]" : " [collapsed]";
-          if (el.getAttribute("aria-selected") === "true" || (r === "option" && el.selected)) text += " [selected]";
-          if (el.disabled || el.getAttribute("aria-disabled") === "true") text += " [disabled]";
-          if (el.required) text += " [required]";
-          if (el === focused) text += " [focused]";
+          const states = [];
+          if (el.checked || el.getAttribute("aria-checked") === "true") states.push("checked");
+          if (el.getAttribute("aria-expanded")) states.push(el.getAttribute("aria-expanded") === "true" ? "expanded" : "collapsed");
+          if (el.getAttribute("aria-selected") === "true" || (r === "option" && el.selected)) states.push("selected");
+          if (el.disabled || el.getAttribute("aria-disabled") === "true") states.push("disabled");
+          if (el.required) states.push("required");
+          if (el === focused) states.push("focused");
+          if (states.length) n.states = states;
           if (r === "link") {
             const href = el.getAttribute("href") || "";
-            if (href && !href.startsWith("javascript:")) text += " /url: " + clip(href, 120);
+            if (href && !href.startsWith("javascript:")) n.url = clip(href, 120);
           }
-          text += " [ref=" + ref + "]";
+          n.ref = ref;
           if (LEAF.has(r) || r === "clickable") {
-            line(depth, text);
+            line(n);
             // Fields and buttons rarely hold controls; links and clickable
             // cards sometimes do.
             if (["link", "clickable", "label", "paragraph"].includes(r)) visitControlsOnly(el, depth + 1);
             return;
           }
-          const at = lines.length;
-          if (!line(depth, text + ":")) return;
+          n.holds = true;
+          if (!line(n)) return;
           for (const child of children(el)) visit(child, depth + 1);
-          // Nothing inside: no colon.
-          if (lines.length === at + 1) lines[at] = lines[at].slice(0, -1);
           return;
         }
       }
@@ -209,10 +214,13 @@
       for (const child of el.querySelectorAll("a[href], button, input, select, textarea, [role=button], [role=link], [role=checkbox], [tabindex]")) {
         if (truncated || !shown(child)) continue;
         const r = role(child) || "clickable";
-        const ref = "e" + ++nextRef;
-        refs.set(ref, child);
+        const ref = ++nextRef;
+        refs.set("e" + ref, child);
         const name = clip(nameOf(child, r), 100);
-        line(depth, r + (name ? " " + JSON.stringify(name) : "") + " [ref=" + ref + "]");
+        const n = { d: depth, role: r };
+        if (name) n.name = JSON.stringify(name);
+        n.ref = ref;
+        line(n);
       }
     };
     if (document.body) visit(document.body, 0);
@@ -224,6 +232,6 @@
       refs: nextRef,
       truncated,
       modal: dialog ? describe(dialog) : undefined,
-      snapshot: lines.join("\n") + (truncated ? "\n… (cut at " + MAX_LINES + " lines; scroll or use a selector)" : ""),
+      nodes,
     };
   };
