@@ -188,8 +188,11 @@ List what is new with `git log --oneline $(git describe --tags --abbrev=0)..HEAD
    - the *Architecture* module list (compare with `crates/core/src/lib.rs`);
    - the `SAWIT_VERSION=` example in *Install* (set it to the version this push will release);
    - *Size & memory*, if Phase 2's release build changed the size (`ls -lh target/release/sawit`).
-2. **Screenshots** (`docs/media/*.png`, 2560px wide, One Dark): retake a screenshot when its screen
-   changed, and add one for a new screen. Recipe:
+2. **Screenshots** (2560px wide PNGs, One Dark): retake a screenshot when its screen changed, and add
+   one for a new screen. Media is not kept in the repo: it lives in the R2 bucket `sawit-files`
+   (Cloudflare account bisa.digital), served at `https://files.sawit.dev/` — README media under
+   `media/<name>`, the website's under `site/<name>` (1600px JPGs). Capture into a scratch folder
+   (`<scratchpad>/media/`), never into the repo. Recipe:
    - Build release, launch with demo data and its own home: `SAWIT_HOME=<scratchpad>/home target/release/sawit --foreground`.
      Homebrew PostgreSQL 16 is used for the demo instances.
    - Synthetic clicks don't reach the window. Drive the app over its control socket instead: send
@@ -198,15 +201,18 @@ List what is new with `git log --oneline $(git describe --tags --abbrev=0)..HEAD
      `open_diagram`), then close the write half and read the reply. With a long `SAWIT_HOME`, the socket
      falls back to `/tmp/sawit-$USER-<hash>.sock`. Send `{"cmd":"state"}` to find yours.
    - Capture the window: find its id with a Swift `CGWindowListCopyWindowInfo` script filtered by the PID
-     (the large ≈1280×801 window), then `screencapture -x -o -l <id> docs/media/<name>.png`.
+     (the large ≈1280×801 window), then `screencapture -x -o -l <id> <scratchpad>/media/<name>.png`.
    - Look at every new screenshot with Read before using it. It must show realistic demo data and no
      personal paths, hostnames, tokens or real customer data.
    - Kill only your own instance, by its full command line (`/bin/kill`, since `kill` is aliased).
-3. **Video**: if a new screen is worth showing, re-record `docs/media/demo.mp4` and regenerate
-   `docs/media/demo.gif` from it (ffmpeg, palette-based, same width as now), and update the scene list in
+3. **Video**: if a new screen is worth showing, re-record `demo.mp4` and regenerate `demo.gif` from it (ffmpeg, palette-based, same width as now), and update the scene list in
    the caption under the GIF and its `alt` text. If no new screen is shown, leave both alone and say so.
-4. Every image and link in README.md must resolve: `grep -o 'docs/media/[^")]*' README.md | xargs ls`.
-   Delete files in `docs/media/` that nothing references any more.
+4. Upload each new or changed file from outside `site/` (the `cf` CLI reads `site/`'s project config):
+   `CLOUDFLARE_ACCOUNT_ID=79831d843efec46bd23d872d5f8052cb cf r2 objects put media/<name> --bucket-name sawit-files --file <path> --content-type <type>`
+   (`site/<name>` for the website's copies; keep the same name, so links don't change).
+   Every media link must resolve:
+   `grep -oE 'https://files\.sawit\.dev/[^")> ]+' README.md | sort -u | xargs -n1 curl -sfo /dev/null -w '%{http_code} %{url}\n'`
+   prints 200 for each.
 
 Commit this as `docs: update README, screenshots and demo for <short summary>`.
 
