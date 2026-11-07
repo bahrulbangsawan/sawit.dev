@@ -20,6 +20,8 @@ pub mod sitemap;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_agent;
 
 use serde::{Deserialize, Serialize};
 
