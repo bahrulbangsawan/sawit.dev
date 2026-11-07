@@ -60,15 +60,22 @@ impl BoardView {
         pictures: Vec<(NodeId, Arc<RenderImage>)>,
         cx: &mut Context<Self>,
     ) -> Answer {
-        let encoded = cx.background_spawn(async move {
-            (pictures.into_iter())
-                .filter_map(|(id, image)| Some((id, png_of(&image)?)))
-                .collect::<Vec<_>>()
-        });
         let (reply, answer) = oneshot::channel();
         let look = look.clone();
         cx.spawn(async move |this, cx| {
-            let pngs = encoded.await;
+            // Each screen's picture as its page ends (B17), a while at most.
+            let mut latest = Vec::new();
+            for (id, image) in pictures {
+                let now = super::ops::wait_for_rest(&this, id, cx).await;
+                latest.push((id, now.unwrap_or(image)));
+            }
+            let pngs = cx
+                .background_spawn(async move {
+                    (latest.into_iter())
+                        .filter_map(|(id, image)| Some((id, png_of(&image)?)))
+                        .collect::<Vec<_>>()
+                })
+                .await;
             let exported = this.update(cx, |this, cx| {
                 let now = cx.background_executor().now();
                 let action = sawit_core::agents::canvas_action(&op);

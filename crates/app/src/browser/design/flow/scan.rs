@@ -61,7 +61,7 @@ impl BrowserView {
     ) -> Task<Result<Rc<Ready>, String>> {
         let generation = self.design.generation;
         let fetch_deadline = std::time::Instant::now() + FETCH_BUDGET;
-        let scan = self.page_op(json!({ "op": "scan" }));
+        let scan = self.page_op(page::with_limits(json!({ "op": "scan" })));
         self.design.state = ScanState::Scanning;
         self.sync_design(cx);
         cx.notify();
@@ -128,7 +128,9 @@ async fn run_scan(
             .collect();
         let rules = this
             .update(cx, |this, _| {
-                this.page_op(json!({ "op": "rules", "sheets": sheets }))
+                this.page_op(page::with_limits(
+                    json!({ "op": "rules", "sheets": sheets }),
+                ))
             })
             .map_err(gone)?;
         let rules: SheetRules = parse(

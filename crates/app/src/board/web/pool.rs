@@ -17,9 +17,14 @@ use crate::browser::engine::web_frame::ScreenSource;
 use crate::browser::engine::{Engine, EngineSpec};
 
 impl WebFrames {
-    /// Points per CSS px for a snapshot now: the zoom, within 0.1–2, or the fixed scale.
-    pub(super) fn snapshot_scale(&self) -> f64 {
-        self.config.scale.unwrap_or(self.zoom.clamp(0.1, 2.0))
+    /// Points per CSS px for a snapshot of a page `viewport` big now: the zoom (WebKit draws it
+    /// at the display's density), from 0.1 up to [`MAX_SCALE`] and what keeps the picture within
+    /// [`MAX_PIXELS`] and [`MAX_SIDE`] device pixels; or the fixed scale.
+    pub(super) fn snapshot_scale(&self, viewport: Viewport) -> f64 {
+        let zoom = self.zoom.max(self.presenting.unwrap_or(0.0));
+        self.config
+            .scale
+            .unwrap_or_else(|| zoom.clamp(0.1, scale_cap(viewport)))
     }
 
     /// Where a view waits off the canvas, in the host, at its viewport's size.
@@ -285,9 +290,9 @@ impl WebFrames {
         if self.zooming || self.config.scale.is_some() || self.bench.is_some() {
             return Vec::new();
         }
-        let wanted = self.snapshot_scale();
         let mut again = Vec::new();
         for node in nodes {
+            let wanted = self.snapshot_scale(node.spec.viewport);
             let shown = screen_bounds(node.rect, view, bounds.origin).intersects(&bounds);
             let Some(frame) = self.frames.get_mut(&node.id) else {
                 continue;
@@ -295,7 +300,7 @@ impl WebFrames {
             let Some(texture) = &frame.texture else {
                 continue;
             };
-            let off = texture.scale < wanted / 1.5 || texture.scale > wanted * 2.5;
+            let off = blurry(texture.scale, wanted) || texture.scale > wanted * 2.5;
             if !shown || !off || self.live.as_ref().is_some_and(|live| live.id == node.id) {
                 continue;
             }
@@ -337,6 +342,29 @@ impl WebFrames {
             times: self.bench.is_some().then(|| self.paint_times.clone()),
         }
     }
+}
+
+/// The most points per CSS px a snapshot is taken at: 3 × the display's density.
+pub(super) const MAX_SCALE: f64 = 3.0;
+/// The most device pixels a snapshot holds (about 96 MB as BGRA), and its longest side, which the
+/// GPU's textures allow.
+pub(super) const MAX_PIXELS: f64 = 24_000_000.0;
+pub(super) const MAX_SIDE: f64 = 16_000.0;
+/// The display's density the caps reckon with: a Retina screen's.
+const DENSITY: f64 = 2.0;
+
+/// The highest snapshot scale for a page `viewport` big: [`MAX_SCALE`], or less for a big page.
+pub(super) fn scale_cap(viewport: Viewport) -> f64 {
+    let (w, h) = (viewport.w.max(1.0) * DENSITY, viewport.h.max(1.0) * DENSITY);
+    let by_pixels = (MAX_PIXELS / (w * h)).sqrt();
+    let by_side = MAX_SIDE / w.max(h);
+    MAX_SCALE.min(by_pixels).min(by_side).max(0.1)
+}
+
+/// Whether a picture taken at `had` points per CSS px shows blurred where `wanted` is drawn: drawn
+/// more than a tenth larger than it was taken. It is taken again once the zoom settles (B17).
+pub(super) fn blurry(had: f64, wanted: f64) -> bool {
+    had < wanted * 0.9
 }
 
 /// Where a picture of a page `css` CSS px in size goes in a frame at `at`: the frame's width, and

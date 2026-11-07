@@ -1,6 +1,7 @@
   // ---- rules ----
 
   const rules = (op) => {
+    useLimits(op);
     const acc = newRules();
     const parsed = [];
     for (const item of (op && op.sheets) || []) {

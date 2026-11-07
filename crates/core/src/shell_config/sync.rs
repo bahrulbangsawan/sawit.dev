@@ -174,33 +174,43 @@ pub async fn upload(
     host: &str,
 ) -> Result<github::Committed> {
     let known = known_files_here();
+    let mut base = SyncBase::load(state);
     let mut contents = Vec::new();
+    let mut deletes = Vec::new();
     for rel in rels {
         let (_, path) = known
             .iter()
             .find(|(k, _)| k == rel)
             .ok_or_else(|| CoreError::Config(format!("{rel} isn't a shell file Sawit syncs.")))?;
-        contents.push((rel.clone(), std::fs::read(path)?));
+        match std::fs::read(path) {
+            Ok(bytes) => contents.push((rel.clone(), bytes)),
+            // Synced before and deleted here since: deleted on GitHub too.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && base.files.contains_key(rel) => {
+                deletes.push(rel.clone())
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
-    if contents.is_empty() {
+    if contents.is_empty() && deletes.is_empty() {
         return Err(CoreError::Config(
             "Choose at least one file to upload.".into(),
         ));
     }
     let message = format!("Save shell config from {host}\n\n{}", rels.join("\n"));
-    let committed = github::commit_files(
+    let committed = github::commit_changes(
         token,
         &backup.login,
         BACKUP_REPO,
         &backup.repo.default_branch,
         &contents,
+        &deletes,
         &message,
     )
     .await?;
-    let mut base = SyncBase::load(state);
     let synced: Vec<(String, Option<String>)> = contents
         .iter()
         .map(|(rel, bytes)| (rel.clone(), Some(github::blob_sha(bytes))))
+        .chain(deletes.iter().map(|rel| (rel.clone(), None)))
         .collect();
     base.record(&committed.commit, github::now(), &synced);
     base.save(state)?;
@@ -245,7 +255,30 @@ pub fn apply_download(
     commit: &str,
     now: i64,
 ) -> Result<Downloaded> {
+    apply_download_with(known, files, &[], state, commit, now)
+}
+
+/// [`apply_download`], also carrying over the files deleted on GitHub since the last sync
+/// (`deletes`, by path in the repository): each is moved to its backup beside it, so Undo puts it
+/// back, and the sync forgets it.
+pub fn apply_download_with(
+    known: &[(String, PathBuf)],
+    files: &[(String, Vec<u8>)],
+    deletes: &[String],
+    state: &Path,
+    commit: &str,
+    now: i64,
+) -> Result<Downloaded> {
     use std::os::unix::fs::PermissionsExt as _;
+    let mut removing = Vec::new();
+    for rel in deletes {
+        let (_, path) = known.iter().find(|(k, _)| k == rel).ok_or_else(|| {
+            CoreError::Config(format!(
+                "{rel} isn't a shell file Sawit syncs: not deleted."
+            ))
+        })?;
+        removing.push((rel, path));
+    }
     let mut targets = Vec::new();
     for (rel, bytes) in files {
         let (_, path) = known.iter().find(|(k, _)| k == rel).ok_or_else(|| {
@@ -283,11 +316,22 @@ pub fn apply_download(
             backup,
         });
     }
+    for (_, path) in &removing {
+        if path.exists() {
+            let to = backup_path(path, now);
+            std::fs::rename(path, &to)?;
+            done.push(Replaced {
+                path: path.to_path_buf(),
+                backup: Some(to),
+            });
+        }
+    }
     let previous = SyncBase::load(state);
     let mut base = previous.clone();
     let synced: Vec<(String, Option<String>)> = targets
         .iter()
         .map(|(rel, _, bytes)| ((*rel).clone(), Some(github::blob_sha(bytes))))
+        .chain(removing.iter().map(|(rel, _)| ((*rel).clone(), None)))
         .collect();
     base.record(commit, now, &synced);
     base.save(state)?;

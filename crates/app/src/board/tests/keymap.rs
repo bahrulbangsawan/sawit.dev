@@ -100,6 +100,11 @@ fn sawit_keeps_its_shortcuts(cx: &mut TestAppContext) {
     let workspace = contexts(&["Root", "Workspace"]);
     cx.update(|cx| {
         for keystroke in SAWIT_WINS {
+            // ⌘J is left free since B5 (⌘T opens the terminal); the canvas still keeps it, for
+            // a binding of the user's.
+            if *keystroke == "cmd-j" {
+                continue;
+            }
             let (in_workspace, _) = resolve(cx, keystroke, &workspace);
             assert!(!in_workspace.is_empty(), "{keystroke} is no Sawit shortcut");
             // On the canvas, and while it edits text.
@@ -117,8 +122,9 @@ fn text_editing_takes_text_keys(cx: &mut TestAppContext) {
     cx.update(bind_app_keys);
     cx.update(|cx| {
         for (keystroke, sawits, command) in [
-            ("cmd-b", "workspace::ToggleSidebar", "text.bold"),
-            ("alt-cmd-t", "workspace::CloseOtherTabs", "text.alignCenter"),
+            ("cmd-b", "workspace::ToggleBrowser", "text.bold"),
+            ("cmd-u", "workspace::ToggleCanvas", "text.underline"),
+            ("alt-cmd-t", "workspace::NewTerminal", "text.alignCenter"),
             (
                 "shift-cmd-enter",
                 "workspace::ToggleMaximizePane",

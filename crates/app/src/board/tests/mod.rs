@@ -241,7 +241,7 @@ fn bind_app_keys(cx: &mut App) {
     crate::find::init(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", crate::cli::Quit, None),
-        KeyBinding::new("cmd-shift-n", crate::cli::NewWindow, None),
+        KeyBinding::new("alt-cmd-n", crate::cli::NewWindow, None),
         KeyBinding::new("cmd-o", crate::cli::OpenFolder, None),
     ]);
 }

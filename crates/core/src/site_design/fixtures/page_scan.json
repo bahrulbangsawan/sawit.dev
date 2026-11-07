@@ -77,10 +77,10 @@
       "in_main": true,
       "family": "Inter, \"Helvetica Neue\", sans-serif",
       "used_family": "Inter",
-      "size": 16,
-      "weight": 400,
-      "line_height": 24,
-      "letter_spacing": null,
+      "size": "16px",
+      "weight": "400",
+      "line_height": "24px",
+      "letter_spacing": "normal",
       "color": "rgb(17, 24, 39)",
       "chars": 2400
     },
@@ -89,10 +89,10 @@
       "in_main": true,
       "family": "Inter, \"Helvetica Neue\", sans-serif",
       "used_family": "Inter",
-      "size": 14,
-      "weight": 600,
-      "line_height": null,
-      "letter_spacing": -0.14,
+      "size": "14px",
+      "weight": "600",
+      "line_height": "normal",
+      "letter_spacing": "-0.14px",
       "color": "rgb(255, 255, 255)",
       "chars": 40
     },
@@ -101,12 +101,24 @@
       "in_main": false,
       "family": "\"Unknown Mono\"",
       "used_family": null,
-      "size": 13.5,
-      "weight": 400,
-      "line_height": 20,
-      "letter_spacing": null,
+      "size": "13.5px",
+      "weight": "400",
+      "line_height": "20px",
+      "letter_spacing": "normal",
       "color": "rgb(17, 24, 39)",
       "chars": 12
+    },
+    {
+      "tag": "p",
+      "in_main": true,
+      "family": "Inter, \"Helvetica Neue\", sans-serif",
+      "used_family": "Inter",
+      "size": "16px",
+      "weight": "400",
+      "line_height": "24.0001px",
+      "letter_spacing": "normal",
+      "color": "rgb(17, 24, 39)",
+      "chars": 10
     }
   ],
   "spacing": [
@@ -125,6 +137,10 @@
     [
       12.5,
       2
+    ],
+    [
+      4.2,
+      3
     ]
   ],
   "radii": [
@@ -181,9 +197,9 @@
     ]
   ],
   "breakpoints": [
-    640,
+    1024,
     768,
-    1024
+    640
   ],
   "assets": [
     {
@@ -283,6 +299,14 @@
       "bordered": 2,
       "first_bordered": 12
     }
+  ],
+  "cards": [
+    2,
+    5,
+    5
+  ],
+  "links": [
+    7
   ],
   "blocked_sheets": [
     "https://cdn.example.net/site.css"

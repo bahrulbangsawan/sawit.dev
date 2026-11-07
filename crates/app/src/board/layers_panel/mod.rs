@@ -217,6 +217,8 @@ fn layer_icon(icon: LayerIcon) -> Lucide {
         LayerIcon::Ink => Lucide::PenLine,
         LayerIcon::Stamp => Lucide::Stamp,
         LayerIcon::Table => Lucide::Table,
+        LayerIcon::Screen => Lucide::AppWindow,
+        LayerIcon::Web => Lucide::Globe,
         LayerIcon::Other => Lucide::Slice,
     }
 }

@@ -1,6 +1,7 @@
 //! The design flow's tests.
 
 use sawit_core::site_design::inspect::{StyleInfo, css_rule};
+use sawit_core::site_design::page::Limits;
 use sawit_core::site_design::scan::{AssetKind, AssetRef, ColorRole, ColorUse};
 use sawit_core::site_design::tailwind::classes;
 use serde_json::{Value, json};
@@ -299,11 +300,11 @@ fn inspect_formats() {
 fn style_ops_carry_the_target() {
     assert_eq!(
         style_op(json!({"ref": "e4"}), true),
-        json!({"op": "style", "ref": "e4", "html": true})
+        json!({"op": "style", "ref": "e4", "html": true, "limits": Limits::default()})
     );
     assert_eq!(
         style_op(Value::Null, false),
-        json!({"op": "style", "html": false})
+        json!({"op": "style", "html": false, "limits": Limits::default()})
     );
 }
 

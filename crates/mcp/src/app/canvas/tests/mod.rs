@@ -8,6 +8,7 @@ mod export;
 mod files;
 mod guide;
 mod load;
+mod paths;
 mod routes;
 mod running;
 mod saves;

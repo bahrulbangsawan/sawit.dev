@@ -104,7 +104,19 @@ pub(crate) fn frontends(stack: &Stack) -> Vec<&'static str> {
 /// of `@latest`. The stack's package manager picks the runner: `bun create`, `pnpm create` or
 /// `npx`.
 pub fn command(stack: &Stack) -> String {
-    let base = stack.package_manager.runner();
+    command_at(stack, super::CLI_VERSION)
+}
+
+/// [`command`] with the CLI's `version` instead of the pinned one: the version the user chose
+/// with Upgrade ([`super::version`]). `version` must be a plain `x.y.z`
+/// ([`super::version::stable`]); anything else runs the pinned one.
+pub fn command_at(stack: &Stack, version: &str) -> String {
+    let version = if super::version::stable(version).is_some() {
+        version
+    } else {
+        super::CLI_VERSION
+    };
+    let base = stack.package_manager.runner(version);
     let name = quote(&format_project_name(&stack.project_name));
     if is_default_but_name(stack) {
         return format!("{base} {name} --yes");
@@ -160,7 +172,12 @@ pub fn quiet_flags(stack: &Stack) -> Vec<&'static str> {
 /// What Create Project runs for `stack`: [`command`], with npx told not to ask before it
 /// downloads the CLI (`npx -y`), then [`quiet_flags`].
 pub fn run_command(stack: &Stack) -> String {
-    let command = command(stack);
+    run_command_at(stack, super::CLI_VERSION)
+}
+
+/// [`run_command`] with the CLI's `version` ([`command_at`]).
+pub fn run_command_at(stack: &Stack, version: &str) -> String {
+    let command = command_at(stack, version);
     let command = match stack.package_manager {
         Pm::Npm => command.replacen("npx ", "npx -y ", 1),
         _ => command,

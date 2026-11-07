@@ -12,6 +12,13 @@ impl TerminalView {
         self.agent
     }
 
+    /// The account folder the agent runs with, from its process's environment: only
+    /// `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is read. `None` with no agent, or none set.
+    pub fn agent_profile(&self) -> Option<(String, String)> {
+        self.agent?;
+        sawit_core::terminal::profile_env(self.foreground_job()?)
+    }
+
     /// Looks for the agent [`AGENT_CHECK`] from now, unless a look is already due: output
     /// that keeps coming gets one look per interval.
     pub(super) fn check_agent_soon(&mut self, cx: &mut Context<Self>) {

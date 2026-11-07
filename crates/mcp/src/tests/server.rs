@@ -114,6 +114,7 @@ fn every_tool_is_routed() {
         "use_agent_account",
         "open_agent_account",
         "agent_account_sessions",
+        "account_pool",
         "sync_agent_settings",
         "backup_prompts",
         "restore_prompts",
@@ -176,6 +177,8 @@ fn every_tool_is_routed() {
         "canvas_handoff",
         "canvas_tabs",
         "canvas_settings",
+        "canvas_lint",
+        "canvas_starter_system",
         // browser
         "browser_navigate",
         "browser_snapshot",

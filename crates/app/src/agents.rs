@@ -35,7 +35,7 @@ pub struct Look {
     pub client: SharedString,
     /// Who it is, as its ops said: a lane of it is met from this ([`AgentIdentity::in_lane`]).
     pub identity: AgentIdentity,
-    /// Its label on screen: "Claude Code", "Codex · shop", "Claude Code 2".
+    /// Its label on screen: "Claude Code", "Codex · shop", or a random name ("Swift Durian").
     pub label: SharedString,
     /// Its colour, as `#rrggbb` (for the page) and as GPUI paints it.
     pub hex: &'static str,
@@ -56,6 +56,12 @@ impl Look {
             color: hex_color(known.color_hex()),
             subject: known.subject().to_string().into(),
         }
+    }
+
+    /// Its client's logo in `assets/agent_logos` (B4.2), shown on its cursor: `None` for a
+    /// client without one, which shows the generic agent mark.
+    pub fn logo(&self) -> Option<&'static str> {
+        crate::terminal::agents::client_logo(&self.client)
     }
 
     /// The subject of a sentence about it: its label, or "An agent".
@@ -417,7 +423,7 @@ mod tests {
     }
 
     /// Each agent keeps its colour and label for the app's whole run, an op without an identity
-    /// is the one anonymous agent's, and a second session of a client is numbered.
+    /// is the one anonymous agent's, and a second session of a client has a random name.
     #[gpui_kit::test]
     fn agents_keep_their_colour_and_label(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -426,7 +432,14 @@ mod tests {
             let second = meet(Some(&agent("c", "Claude Code")), cx);
             let old = meet(None, cx);
             assert_eq!(claude.label.as_ref(), "Claude Code");
-            assert_eq!(second.label.as_ref(), "Claude Code 2");
+            // A second session of a client has a short random name, not a number (B4.2).
+            assert_ne!(second.label.as_ref(), "Claude Code 2");
+            assert_eq!(second.label.split(' ').count(), 2, "{}", second.label);
+            assert_ne!(
+                old.label.as_ref(),
+                "Agent",
+                "the anonymous agent has a name too"
+            );
             assert_eq!((claude.hex, codex.hex), (PALETTE[0], PALETTE[1]));
             assert_eq!(meet(Some(&agent("a", "Claude Code")), cx), claude);
             assert_eq!(meet(None, cx), old);

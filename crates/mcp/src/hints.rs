@@ -7,6 +7,7 @@
 const READ_ONLY: &[&str] = &[
     "list_agent_accounts",
     "agent_account_sessions",
+    "account_pool",
     "list_instances",
     "instance_logs",
     "check_port",
@@ -57,6 +58,7 @@ const READ_ONLY: &[&str] = &[
     "canvas_design_guide",
     "canvas_get",
     "canvas_commands",
+    "canvas_lint",
     "canvas_screen_get",
     "browser_snapshot",
     "browser_hover",
@@ -196,6 +198,7 @@ const ADDS: &[&str] = &[
     "launch_app",
     "app_ssh_connect",
     "canvas_add_elements",
+    "canvas_starter_system",
     "canvas_add_diagram",
     "canvas_add_mermaid",
     "canvas_begin",
@@ -239,6 +242,8 @@ const OPEN_WORLD: &[&str] = &[
     "install_dev_tools",
     "upgrade_dev_tools",
     "install_skill",
+    // npm's latest create-better-t-stack, asked at most once a day.
+    "stack_options",
     "stack_create",
     "app_run_script",
     "app_ssh_connect",

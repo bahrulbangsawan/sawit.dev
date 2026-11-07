@@ -106,6 +106,12 @@ impl BoardView {
         let now = cx.background_executor().now();
         self.agents.screen_written(&name, look, now);
         self.agent_at_screen(op, &found, look, cx);
+        // Follow agent shows the screen being written (B4.1).
+        let frame = found["frame"].as_str().and_then(|f| f.parse().ok());
+        let rect = (frame.map(figcraft_doc::NodeId))
+            .and_then(|id| self.board()?.session.ds().ok()?.doc.world_bounds(id))
+            .map(|b| [b.x0, b.y0, b.x1, b.y1]);
+        self.follow_saw(&look.session, rect, cx);
         found["written"] = json!(written);
         found["rendered"] = json!(true);
         found
@@ -149,21 +155,30 @@ impl BoardView {
             self.point_at_frame(frame, look, "reading a screen", now);
             self.after_agents_changed(cx);
         }
-        let picture = frame.and_then(|frame| self.screen_picture(frame));
-        let Some(picture) = picture else {
+        // At rest with no picture (no page yet, or no web views): answered at once.
+        let rest = frame.is_none_or(|f| self.web.as_ref().is_none_or(|web| web.at_rest(f)));
+        if rest && frame.and_then(|f| self.screen_picture(f)).is_none() {
             found["rendered"] = json!(false);
-            found["note"] = json!(
-                "The screen has no picture yet: it renders once its index.html is written and \
-                 its page has loaded, while its page of the canvas is on show"
-            );
+            found["note"] = json!(NO_PICTURE);
             return Answer::Now(found);
-        };
-        let size = picture.size(0);
-        found["picture"] = json!({"width": size.width.0, "height": size.height.0});
-        let encoded = cx.background_spawn(async move { png_of(&picture) });
+        }
         let (reply, answer) = oneshot::channel();
-        cx.spawn(async move |_, _| {
-            let png = encoded.await;
+        cx.spawn(async move |this, cx| {
+            // The picture as the page ends, not one taken while it still loads, settles or is
+            // being taken again (B17): it waits for the frame to be at rest, a while at most.
+            let picture = match frame {
+                Some(frame) => wait_for_rest(&this, frame, cx).await,
+                None => None,
+            };
+            let Some(picture) = picture else {
+                found["rendered"] = json!(false);
+                found["note"] = json!(NO_PICTURE);
+                let _ = reply.send(Ok(found));
+                return;
+            };
+            let size = picture.size(0);
+            found["picture"] = json!({"width": size.width.0, "height": size.height.0});
+            let png = cx.background_spawn(async move { png_of(&picture) }).await;
             found["rendered"] = json!(png.is_some());
             if let Some(png) = png {
                 found["png_base64"] = json!(sawit_core::browser::base64_encode(&png));
@@ -173,4 +188,37 @@ impl BoardView {
         .detach();
         Answer::Later(answer)
     }
+}
+
+/// What `screen_get` says of a screen with no picture.
+const NO_PICTURE: &str = "The screen has no picture yet: it renders once its index.html is written \
+                          and its page has loaded, while its page of the canvas is on show";
+
+/// How long `screen_get` and the exports wait for a screen's picture to be final.
+pub(in crate::board) const REST_WAIT: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// Screen frame `frame`'s picture once its view is at rest ([`crate::board::web`]'s `at_rest`),
+/// or as it is after [`REST_WAIT`].
+pub(in crate::board) async fn wait_for_rest(
+    this: &WeakEntity<BoardView>,
+    frame: figcraft_doc::NodeId,
+    cx: &mut AsyncApp,
+) -> Option<std::sync::Arc<RenderImage>> {
+    let started = std::time::Instant::now();
+    loop {
+        let rest = this
+            .update(cx, |view, _| {
+                view.web.as_ref().is_none_or(|web| web.at_rest(frame))
+            })
+            .ok()?;
+        if rest || started.elapsed() >= REST_WAIT {
+            break;
+        }
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(150))
+            .await;
+    }
+    this.update(cx, |view, _| view.screen_picture(frame))
+        .ok()
+        .flatten()
 }

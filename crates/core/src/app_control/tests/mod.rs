@@ -192,6 +192,7 @@ fn new_project_round_trips() {
             location: "/Users/me/Developer".into(),
             stack,
             open: true,
+            cli_version: None,
         },
     };
     let bytes = encode(&create);

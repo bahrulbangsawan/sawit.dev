@@ -179,11 +179,12 @@ impl AccountsPage {
                                 )
                                 .separator()
                                 .item(
-                                    PopupMenuItem::new("Remove").icon(Lucide::Trash).on_click(
-                                        edit(|line, wi| {
+                                    PopupMenuItem::new("Remove")
+                                        .icon(crate::menu_icons::DELETE)
+                                        .danger(true)
+                                        .on_click(edit(|line, wi| {
                                             line.remove(wi);
-                                        }),
-                                    ),
+                                        })),
                                 )
                             })
                     }))
@@ -201,7 +202,7 @@ impl AccountsPage {
                                         let page = page.clone();
                                         menu.item(
                                             PopupMenuItem::new(k.title())
-                                                .icon(Lucide::Plus)
+                                                .icon(crate::menu_icons::NEW)
                                                 .on_click(move |_, _, cx| {
                                                     page.update(cx, |this, cx| {
                                                         if let Some(l) = this.layout.as_mut()
@@ -277,7 +278,7 @@ impl AccountsPage {
                                     let page = page.clone();
                                     menu.item(
                                         PopupMenuItem::new(name)
-                                            .icon(Lucide::LayoutTemplate)
+                                            .icon(crate::menu_icons::WORK)
                                             .on_click(move |_, _, cx| {
                                                 page.update(cx, |this, cx| {
                                                     this.layout = Some(config.clone());

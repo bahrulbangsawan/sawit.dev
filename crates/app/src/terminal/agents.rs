@@ -29,7 +29,7 @@ thread_local! {
 }
 
 /// `name`'s logo from `assets/agent_logos`, rasterised `device` pixels square.
-fn raster(name: &'static str, device: u32, cx: &App) -> Option<Arc<RenderImage>> {
+pub(crate) fn raster(name: &'static str, device: u32, cx: &App) -> Option<Arc<RenderImage>> {
     RASTERS.with(|cache| {
         cache
             .borrow_mut()
@@ -170,6 +170,31 @@ pub fn logos(badge: &Badge, selector: &str, window: &Window, cx: &App) -> Div {
                     .child(format!("+{}", badge.more)),
             )
         })
+}
+
+/// The logo in `assets/agent_logos` of the client called `client` (as
+/// [`sawit_core::agents::client_name`] names it), if Sawit has one.
+pub fn client_logo(client: &str) -> Option<&'static str> {
+    let name = sawit_core::agents::client_name(client, None);
+    Some(match name.as_str() {
+        "Claude Code" => "claudecode-color",
+        "Claude" => "claude-color",
+        "Codex" => "codex-color",
+        "Cursor" => "cursor",
+        "Windsurf" => "windsurf",
+        "Gemini CLI" => "geminicli-color",
+        "OpenCode" => "opencode",
+        "Roo Code" => "roocode",
+        "Cline" => "cline",
+        "Copilot" => "githubcopilot",
+        "Zed" => "zed",
+        "Goose" => "goose",
+        "Kiro" => "kiro-color",
+        "Warp" => "warp",
+        "Amp" => "amp-color",
+        "Droid" => "factory-color",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

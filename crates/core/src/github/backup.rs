@@ -70,6 +70,20 @@ pub async fn commit_files(
     files: &[(String, Vec<u8>)],
     message: &str,
 ) -> Result<Committed> {
+    commit_changes(token, owner, name, branch, files, &[], message).await
+}
+
+/// [`commit_files`], also deleting the files at `deletes` (paths in the repository) in the
+/// same commit.
+pub async fn commit_changes(
+    token: &str,
+    owner: &str,
+    name: &str,
+    branch: &str,
+    files: &[(String, Vec<u8>)],
+    deletes: &[String],
+    message: &str,
+) -> Result<Committed> {
     let repo = format!("/repos/{owner}/{name}");
     // A repository created a moment ago may not have its branch yet.
     let mut head = None;
@@ -108,6 +122,10 @@ pub async fn commit_files(
         .await?;
         let sha = blob["sha"].as_str().unwrap_or_default();
         entries.push(json!({ "path": path, "mode": "100644", "type": "blob", "sha": sha }));
+    }
+    // A tree entry with no blob deletes the file from the base tree.
+    for path in deletes {
+        entries.push(json!({ "path": path, "mode": "100644", "type": "blob", "sha": null }));
     }
     let tree = api(
         "POST",

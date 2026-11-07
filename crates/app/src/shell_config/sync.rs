@@ -192,6 +192,10 @@ impl ShellConfigPanel {
                 match f.state {
                     FileState::OnlyHere => format!("~/{}: new on GitHub", f.rel),
                     FileState::OnlyOnGitHub => format!("~/{}: new on this Mac", f.rel),
+                    FileState::DeletedHere => format!("~/{}: deleted on GitHub", f.rel),
+                    FileState::DeletedOnGitHub => {
+                        format!("~/{}: deleted on this Mac (kept as a backup)", f.rel)
+                    }
                     _ => format!("~/{}: {added} lines added, {removed} removed", f.rel),
                 }
             })
@@ -307,11 +311,17 @@ impl ShellConfigPanel {
         if files.is_empty() || self.sync.busy.is_some() {
             return;
         }
+        // A file deleted on GitHub since the last sync is deleted here (kept as its backup).
+        let deletes: Vec<String> = files
+            .iter()
+            .filter(|f| f.state == FileState::DeletedOnGitHub)
+            .map(|f| f.rel.clone())
+            .collect();
         let contents: Vec<(String, Vec<u8>)> = files
             .iter()
             .filter_map(|f| Some((f.rel.clone(), self.sync.github_copy.get(&f.rel)?.clone())))
             .collect();
-        if contents.len() != files.len() {
+        if contents.len() + deletes.len() != files.len() {
             self.error =
                 Some("GitHub's copy of a file isn't here yet. Check Again, then download.".into());
             cx.notify();
@@ -343,9 +353,10 @@ impl ShellConfigPanel {
             let _ = this.update(cx, |this, cx| {
                 let known = shell_config::known_files_here();
                 let state = Self::sync_state_path();
-                match shell_config::apply_download(
+                match shell_config::apply_download_with(
                     &known,
                     &contents,
+                    &deletes,
                     &state,
                     &commit,
                     github::now(),

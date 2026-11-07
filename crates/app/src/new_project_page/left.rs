@@ -20,7 +20,7 @@ impl NewProjectPage {
     pub(super) fn render_left(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let name_error = stack_builder::validate_project_name(&self.stack.project_name);
-        let command = stack_builder::command(&self.stack);
+        let command = stack_builder::command_at(&self.stack, &self.cli_version());
         let pms = self.pms.clone().unwrap_or_default();
         let pm_menu = crate::package_managers::menu(
             "new-project-pm",

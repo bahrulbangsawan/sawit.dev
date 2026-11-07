@@ -73,6 +73,13 @@ fn prompts_round_trip_back_up_delete_restore() {
 
     let gone = lib.items[0].clone();
     assert!(lib.remove(&gone.id));
+    // Deleted here since the last sync: a restore doesn't bring it back, a backup deletes it.
+    let plan = plan_prompts(&lib, &tree, &base);
+    let row = plan.iter().find(|p| p.id == gone.id).unwrap();
+    assert_eq!(row.state, FileState::DeletedHere);
+    assert!(row.state.uploads() && !row.state.downloads());
+    // A Mac that never synced (a fresh install) restores it.
+    let base = SyncBase::default();
     let plan = plan_prompts(&lib, &tree, &base);
     let restoring: Vec<_> = plan.iter().filter(|p| p.state.downloads()).collect();
     assert_eq!(restoring.len(), 1);
@@ -122,6 +129,61 @@ fn a_prompt_changed_on_both_sides_is_shown_not_overwritten() {
     let (out, _) = apply_restore(&mut lib, &plan, &contents, std::slice::from_ref(&id)).unwrap();
     assert!(out.conflicts.is_empty());
     assert_eq!(lib.get(&id).unwrap().body, "GitHub's {{file}}");
+}
+
+/// A prompt deleted on another Mac (gone from GitHub, unchanged here since the last sync) is
+/// deleted here by a restore, and the sync forgets it; one changed here meanwhile is a conflict.
+#[test]
+fn a_delete_on_github_carries_over_on_restore() {
+    let mut lib = library();
+    let files = library_files(&lib);
+    let mut base = SyncBase::default();
+    let synced: Vec<_> = files
+        .iter()
+        .map(|(p, b)| (p.clone(), Some(blob_sha(b))))
+        .collect();
+    base.record("c1", 1, &synced);
+    let (gone, kept) = (lib.items[0].id.clone(), lib.items[1].id.clone());
+    let gone_path = format!("prompts/{gone}.md");
+    let tree = RemoteTree {
+        commit: "c2".into(),
+        files: files
+            .iter()
+            .filter(|(p, _)| **p != gone_path)
+            .map(|(p, b)| (p.clone(), blob_sha(b)))
+            .collect(),
+    };
+    let plan = plan_prompts(&lib, &tree, &base);
+    let row = plan.iter().find(|p| p.id == gone).unwrap();
+    assert_eq!(row.state, FileState::DeletedOnGitHub);
+    let (out, synced) = apply_restore(&mut lib, &plan, &BTreeMap::new(), &[]).unwrap();
+    assert_eq!(out.deleted, std::slice::from_ref(&gone));
+    assert!(lib.get(&gone).is_none() && lib.get(&kept).is_some());
+    base.record("c2", 2, &synced);
+    assert!(!base.files.contains_key(&gone_path), "the sync forgot it");
+
+    // Changed here after the last sync, deleted on GitHub: neither wins on its own.
+    let mut lib = library();
+    let id = lib.items[0].id.clone();
+    let mut base = SyncBase::default();
+    base.record("c1", 1, &synced_all(&lib));
+    lib.update(&id, 900, |p| p.body = "edited".into());
+    let tree = RemoteTree {
+        commit: "c2".into(),
+        files: BTreeMap::new(),
+    };
+    let row = plan_prompts(&lib, &tree, &base)
+        .into_iter()
+        .find(|p| p.id == id)
+        .unwrap();
+    assert_eq!(row.state, FileState::ChangedOnBoth);
+}
+
+fn synced_all(lib: &Library) -> Vec<(String, Option<String>)> {
+    library_files(lib)
+        .iter()
+        .map(|(p, b)| (p.clone(), Some(blob_sha(b))))
+        .collect()
 }
 
 #[test]

@@ -460,7 +460,8 @@ impl Workspace {
                 location,
                 stack,
                 open,
-            } => done(self.agent_new_project(location, stack, open, window, cx)?),
+                cli_version,
+            } => done(self.agent_new_project(location, stack, open, cli_version, window, cx)?),
         };
         cx.notify();
         result

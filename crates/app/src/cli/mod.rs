@@ -73,7 +73,8 @@ pub fn init(cx: &mut App) {
     });
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-shift-n", NewWindow, None),
+        // B5: ⇧⌘N is New Project; the file tree keeps ⌥⌘N for New Folder while it has the keyboard.
+        KeyBinding::new("alt-cmd-n", NewWindow, None),
         KeyBinding::new("cmd-o", OpenFolder, None),
     ]);
     set_menus(cx);
@@ -104,8 +105,10 @@ fn menus(cx: &App) -> Vec<Menu> {
             MenuItem::action("Quit Sawit", Quit),
         ]),
         Menu::new("File").items([
-            MenuItem::action("New Window", NewWindow),
+            MenuItem::action("New File", crate::workspace::NewFileInProject),
+            MenuItem::action("New Terminal", crate::workspace::NewTerminal),
             MenuItem::action("New Project…", crate::workspace::OpenNewProject),
+            MenuItem::action("New Window", NewWindow),
             MenuItem::action("Open Folder…", OpenFolder),
             MenuItem::separator(),
             MenuItem::action("Safe Close All Tabs", crate::workspace::CloseAllTabs),
@@ -130,6 +133,14 @@ fn menus(cx: &App) -> Vec<Menu> {
                 crate::agents::menu_label(cx),
                 crate::agents::ToggleAgentCursors,
             ),
+            MenuItem::separator(),
+            // B5: each area opens and closes with one key.
+            MenuItem::action("Folder Panel", crate::workspace::ToggleSidebar),
+            MenuItem::action("Terminal", crate::workspace::ToggleTerminal),
+            MenuItem::action("Browser", crate::workspace::ToggleBrowser),
+            MenuItem::action("Canvas", crate::workspace::ToggleCanvas),
+            MenuItem::action("Next Panel", crate::workspace::FocusNextPanel),
+            MenuItem::action("Previous Panel", crate::workspace::FocusPreviousPanel),
             MenuItem::separator(),
             // A panel fills the window (`workspace::fill`); macOS adds its own Enter Full Screen.
             MenuItem::action("Maximize Panel", crate::workspace::ToggleMaximizePane),
