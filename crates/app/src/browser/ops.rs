@@ -250,9 +250,17 @@ impl BrowserView {
             op => {
                 let reply = Mutex::new(Some(reply));
                 let script = agent_call(&serde_json::to_value(&op).unwrap_or_default());
+                // The page collects the outline's nodes; Rust writes them.
+                let outline = op == BrowserOp::Snapshot;
                 let sent = engine.eval_with_callback(&script, move |result| {
                     if let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) {
-                        let _ = reply.send(agent_result(&result));
+                        let answer = agent_result(&result);
+                        let answer = if outline {
+                            answer.map(sawit_core::browser::snapshot::answer)
+                        } else {
+                            answer
+                        };
+                        let _ = reply.send(answer);
                     }
                 });
                 if let Err(e) = sent {
