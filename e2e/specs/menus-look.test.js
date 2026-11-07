@@ -64,6 +64,36 @@ sawitTest("menus look: the route bar and the canvas's main menu", { timeout: 180
   await shotOpenMenu(ctx, dir, "menu-canvas-main.png");
 });
 
+sawitTest("menus look: the screen, artboard and flow bars (B13)", { timeout: 240_000 }, async (ctx) => {
+  const { win } = ctx;
+  const dir = await shotsDir(ctx);
+  await openCanvas(ctx);
+
+  // An artboard: Export and Send to Agent; two frames: Send Flow to Agent.
+  const a = await command(ctx, "frame.create", { x: 0, y: 900, width: 393, height: 600, name: "Settings", props: { fill: "#ffffff" } });
+  const b = await command(ctx, "frame.create", { x: 500, y: 900, width: 393, height: 600, name: "Profile", props: { fill: "#ffffff" } });
+  await select(ctx, [a.id]);
+  await shotBar(ctx, dir, "bar-artboard.png", ["Export", "Send to Agent"]);
+  await win.openMenu({ role: "button", name: "Send to Agent" });
+  const agentItems = await shotOpenMenu(ctx, dir, "menu-send-to-agent.png");
+  assert.ok(agentItems.includes("Copy Prompt"), `Copy Prompt in ${agentItems}`);
+  assert.ok(agentItems.includes("Reveal in Finder"), `Reveal in Finder in ${agentItems}`);
+  await win.openMenu({ role: "button", name: "Export" });
+  const exportItems = await shotOpenMenu(ctx, dir, "menu-export.png");
+  for (const name of ["HTML", "React"]) assert.ok(exportItems.some((i) => i.startsWith(name)), `${name} in ${exportItems}`);
+  await select(ctx, [a.id, b.id]);
+  await shotBar(ctx, dir, "bar-flow.png", ["Send Flow to Agent"]);
+
+  // A screen: Preview, Export and Send to Agent.
+  const screen = await ctx.call({
+    cmd: "canvas",
+    op: { op: "begin", name: "Pricing", kind: "screen", frame: { x: 1200, y: 900, width: 390, height: 844 } },
+  });
+  assert.equal(screen.ok, true, JSON.stringify(screen));
+  await select(ctx, [screen.frame]);
+  await shotBar(ctx, dir, "bar-screen.png", ["Preview", "Export", "Send to Agent"]);
+});
+
 sawitTest("menus look: the file tree and the terminal's menus", { timeout: 120_000 }, async (ctx) => {
   const { win, world } = ctx;
   const dir = await shotsDir(ctx);

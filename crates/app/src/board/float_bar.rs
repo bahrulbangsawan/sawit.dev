@@ -95,7 +95,6 @@ impl BarButton {
     }
 
     /// The bar's one primary action, in the primary button style.
-    #[allow(dead_code)] // The screen bar's Send to Agent (B13).
     pub(in crate::board) fn primary(mut self) -> Self {
         self.primary = true;
         self
@@ -121,7 +120,6 @@ impl BarButton {
     }
 
     /// A button that opens the menu `menu` fills, under its left edge, at least as wide as it.
-    #[allow(dead_code)] // The screen bar's Export and Send to Agent (B13).
     pub(in crate::board) fn menu(
         mut self,
         menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,

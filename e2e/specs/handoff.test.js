@@ -1,5 +1,5 @@
 // Send to Agent for artboards: the bar over a selected frame lists the coding agents, Copy Prompt
-// and Reveal Handoff Folder; Copy Prompt writes the handoff folder; an agent opens in a new
+// and Reveal in Finder; Copy Prompt writes the handoff folder; an agent opens in a new
 // terminal tab whose first message is the handoff's prompt. (Whether the agent then builds a page
 // that matches design.png needs a signed-in agent and the user: not checked here.)
 
@@ -36,8 +36,8 @@ sawitTest("handoff: Copy Prompt on an artboard writes its handoff folder", async
   const { win, world } = ctx;
   await openCanvas(ctx);
   await drawArtboard(ctx);
-  await win.openMenu({ role: "button", name: "Send to Agent…" });
-  await win.waitFor({ role: "menuitem", name: "Reveal Handoff Folder" });
+  await win.openMenu({ role: "button", name: "Send to Agent" });
+  await win.waitFor({ role: "menuitem", name: "Reveal in Finder" });
   await win.click({ role: "menuitem", name: "Copy Prompt" });
   const out = path.join(world.project, ".nyawit", "handoff", "settings");
   for (const file of ["design.png", "settings.html", "Settings.tsx", "Settings.module.css", "spec.md", "prompt.md"]) {
@@ -57,7 +57,7 @@ sawitTest("handoff: an agent opens in a new terminal tab with the handoff's prom
   await openCanvas(ctx);
   await drawArtboard(ctx);
   const before = (await windowState(ctx)).terminals?.length ?? 0;
-  await win.openMenu({ role: "button", name: "Send to Agent…" });
+  await win.openMenu({ role: "button", name: "Send to Agent" });
   const items = await win.findAll({ role: "menuitem" });
   const agent = items.map((i) => i.name).find((n) => ["Claude Code", "Codex", "Gemini CLI", "OpenCode"].includes(n));
   assert.ok(agent, `no coding agent found on this Mac: ${items.map((i) => i.name)}`);

@@ -178,7 +178,7 @@ const ICONLESS_BUILDERS: &[&str] = &[
 ];
 
 /// Files whose menus haven't been given their icons yet (B16 goes through them area by area).
-const PENDING: &[&str] = &["board/screens/bar.rs"];
+const PENDING: &[&str] = &[];
 
 /// `text` from byte `at` (an opening parenthesis) to just past its matching close.
 fn balanced(text: &str, at: usize) -> usize {
