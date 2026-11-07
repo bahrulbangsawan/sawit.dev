@@ -203,6 +203,7 @@ fn header(
     detail: Option<(String, bool)>,
     spoken: String,
 ) -> PopupMenuItem {
+    // no icon: the header draws the account's picture in the icon's place.
     PopupMenuItem::element(move |_, cx| {
         let avatar = match &picture {
             Picture::Account {
@@ -217,9 +218,9 @@ fn header(
             .id("github-account-header")
             .role(Role::Label)
             .aria_label(spoken.clone())
-            // The menu keeps an icon's width (and its gap) before every row: the picture takes
+            // The menu keeps an icon's slot (and its gap) before every row: the picture takes
             // that place, so it lines up with the items' icons.
-            .ml(px(-16.))
+            .ml(-(gpui_kit::component::menu::MENU_ICON_SLOT + px(8.)))
             .py_1p5()
             .gap_2p5()
             .child(avatar.with_size(px(32.)))

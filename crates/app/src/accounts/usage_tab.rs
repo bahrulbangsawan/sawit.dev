@@ -273,37 +273,39 @@ impl AccountsPage {
             .iter()
             .map(|a| (a.id.clone(), a.name.clone()))
             .collect();
-        let session_rows: Vec<AnyElement> = list
-            .into_iter()
-            .map(|s| {
-                let s2 = s.clone();
-                let targets: Vec<(String, String)> = others
-                    .iter()
-                    .filter(|(id, _)| *id != s.account)
-                    .cloned()
-                    .collect();
-                let page = cx.entity();
-                h_flex()
-                    .gap_2()
-                    .child(div().flex_1().min_w_0().truncate().text_sm().child(format!(
-                        "{} · {} · {} · pid {}",
-                        names.get(&s.account).cloned().unwrap_or_default(),
-                        s.folder(),
-                        s.status.clone().unwrap_or_default(),
-                        s.pid
-                    )))
-                    .child(
-                        Button::new(SharedString::from(format!("hand-off-{}", s.pid)))
-                            .xsmall()
-                            .outline()
-                            .label("Continue On…")
-                            .disabled(targets.is_empty())
-                            .dropdown_menu(move |menu, _, _| {
-                                targets.iter().fold(menu, |menu, (id, name)| {
-                                    let (page, id, s) = (page.clone(), id.clone(), s2.clone());
-                                    menu.item(PopupMenuItem::new(name.clone()).on_click(
-                                        move |_, _, cx| {
-                                            page.update(cx, |this, cx| {
+        let session_rows: Vec<AnyElement> =
+            list.into_iter()
+                .map(|s| {
+                    let s2 = s.clone();
+                    let targets: Vec<(String, String)> = others
+                        .iter()
+                        .filter(|(id, _)| *id != s.account)
+                        .cloned()
+                        .collect();
+                    let page = cx.entity();
+                    h_flex()
+                        .gap_2()
+                        .child(div().flex_1().min_w_0().truncate().text_sm().child(format!(
+                            "{} · {} · {} · pid {}",
+                            names.get(&s.account).cloned().unwrap_or_default(),
+                            s.folder(),
+                            s.status.clone().unwrap_or_default(),
+                            s.pid
+                        )))
+                        .child(
+                            Button::new(SharedString::from(format!("hand-off-{}", s.pid)))
+                                .xsmall()
+                                .outline()
+                                .label("Continue On…")
+                                .disabled(targets.is_empty())
+                                .dropdown_menu(move |menu, _, _| {
+                                    targets.iter().fold(menu, |menu, (id, name)| {
+                                        let (page, id, s) = (page.clone(), id.clone(), s2.clone());
+                                        menu.item(
+                                            PopupMenuItem::new(name.clone())
+                                                .icon(crate::menu_icons::ACCOUNT)
+                                                .on_click(move |_, _, cx| {
+                                                    page.update(cx, |this, cx| {
                                                 let opened = this
                                                     .model
                                                     .update(cx, |m, cx| m.hand_off(&s, &id, cx));
@@ -315,29 +317,29 @@ impl AccountsPage {
                                                     });
                                                 }
                                             })
-                                        },
-                                    ))
+                                                }),
+                                        )
+                                    })
+                                }),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("end-{}", s.pid)))
+                                .xsmall()
+                                .ghost()
+                                .label("End…")
+                                .disabled(s.busy())
+                                .tooltip(if s.busy() {
+                                    "Busy: End It in Its Terminal"
+                                } else {
+                                    "Stop This Session (SIGTERM)"
                                 })
-                            }),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("end-{}", s.pid)))
-                            .xsmall()
-                            .ghost()
-                            .label("End…")
-                            .disabled(s.busy())
-                            .tooltip(if s.busy() {
-                                "Busy: End It in Its Terminal"
-                            } else {
-                                "Stop This Session (SIGTERM)"
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.confirm_end(s.clone(), window, cx)
-                            })),
-                    )
-                    .into_any_element()
-            })
-            .collect();
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.confirm_end(s.clone(), window, cx)
+                                })),
+                        )
+                        .into_any_element()
+                })
+                .collect();
         let session_count = session_rows.len();
         v_flex()
             .id("accounts-usage")

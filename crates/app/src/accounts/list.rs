@@ -144,13 +144,15 @@ impl AccountsPage {
                                         .to_string()
                                 })
                                 .unwrap_or_default();
-                            menu.item(PopupMenuItem::new(dir.display().to_string()).on_click(
-                                move |_, _, cx| {
-                                    global(cx).update(cx, |m, cx| {
-                                        m.add(&name, Some(d.clone()), cx);
-                                    });
-                                },
-                            ))
+                            menu.item(
+                                PopupMenuItem::new(dir.display().to_string())
+                                    .icon(crate::menu_icons::IMPORT)
+                                    .on_click(move |_, _, cx| {
+                                        global(cx).update(cx, |m, cx| {
+                                            m.add(&name, Some(d.clone()), cx);
+                                        });
+                                    }),
+                            )
                         })
                     }),
             )

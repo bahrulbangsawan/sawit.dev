@@ -74,6 +74,7 @@ fn menu_of(
         let name = a.name.clone();
         menu = menu.separator().item(
             PopupMenuItem::new(format!("Most Room Left: {name} · Switch"))
+                .icon(crate::menu_icons::SWITCH)
                 .on_click(move |_, _, cx| global(cx).update(cx, |m, cx| m.set_active(&id, cx))),
         );
     }

@@ -164,18 +164,20 @@ impl AccountsPage {
                                 move |menu, _, _| {
                                     Kind::ALL.iter().fold(menu, |menu, &k| {
                                         let page = page.clone();
-                                        menu.item(PopupMenuItem::new(k.title()).on_click(
-                                            move |_, _, cx| {
-                                                page.update(cx, |this, cx| {
-                                                    if let Some(l) = this.layout.as_mut()
-                                                        && let Some(line) = l.lines.get_mut(li)
-                                                    {
-                                                        line.push(Widget::new(k));
-                                                    }
-                                                    cx.notify();
-                                                })
-                                            },
-                                        ))
+                                        menu.item(
+                                            PopupMenuItem::new(k.title())
+                                                .icon(crate::menu_icons::NEW)
+                                                .on_click(move |_, _, cx| {
+                                                    page.update(cx, |this, cx| {
+                                                        if let Some(l) = this.layout.as_mut()
+                                                            && let Some(line) = l.lines.get_mut(li)
+                                                        {
+                                                            line.push(Widget::new(k));
+                                                        }
+                                                        cx.notify();
+                                                    })
+                                                }),
+                                        )
                                     })
                                 }
                             }),
@@ -207,16 +209,18 @@ impl AccountsPage {
                                 move |menu, _, _| {
                                     sl::THEMES.iter().fold(menu, |menu, t| {
                                         let (page, id) = (page.clone(), t.id.to_string());
-                                        menu.item(PopupMenuItem::new(t.name).on_click(
-                                            move |_, _, cx| {
-                                                page.update(cx, |this, cx| {
-                                                    if let Some(l) = this.layout.as_mut() {
-                                                        l.theme = id.clone();
-                                                    }
-                                                    cx.notify();
-                                                })
-                                            },
-                                        ))
+                                        menu.item(
+                                            PopupMenuItem::new(t.name)
+                                                .icon(Lucide::Palette)
+                                                .on_click(move |_, _, cx| {
+                                                    page.update(cx, |this, cx| {
+                                                        if let Some(l) = this.layout.as_mut() {
+                                                            l.theme = id.clone();
+                                                        }
+                                                        cx.notify();
+                                                    })
+                                                }),
+                                        )
                                     })
                                 }
                             }),
@@ -233,14 +237,16 @@ impl AccountsPage {
                                         .into_iter()
                                         .fold(menu, |menu, (name, config)| {
                                             let page = page.clone();
-                                            menu.item(PopupMenuItem::new(name).on_click(
-                                                move |_, _, cx| {
-                                                    page.update(cx, |this, cx| {
-                                                        this.layout = Some(config.clone());
-                                                        cx.notify();
-                                                    })
-                                                },
-                                            ))
+                                            menu.item(
+                                                PopupMenuItem::new(name)
+                                                    .icon(Lucide::LayoutTemplate)
+                                                    .on_click(move |_, _, cx| {
+                                                        page.update(cx, |this, cx| {
+                                                            this.layout = Some(config.clone());
+                                                            cx.notify();
+                                                        })
+                                                    }),
+                                            )
                                         })
                                 }
                             }),

@@ -127,9 +127,13 @@ fn list(mut menu: PopupMenu, view: &WeakEntity<BoardView>, cx: &App) -> PopupMen
             let text = text
                 .rsplit_once(" · ")
                 .map_or(text.clone(), |(rest, _)| rest.to_string());
-            menu = menu.item(PopupMenuItem::new(text).on_click(move |_, _, cx| {
-                let _ = view.update(cx, |view, cx| view.go_to_work(&id, cx));
-            }));
+            menu = menu.item(
+                PopupMenuItem::new(text)
+                    .icon(crate::menu_icons::WORK)
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |view, cx| view.go_to_work(&id, cx));
+                    }),
+            );
         }
         if works.is_empty()
             && let Some(at) = agent.at
@@ -139,9 +143,13 @@ fn list(mut menu: PopupMenu, view: &WeakEntity<BoardView>, cx: &App) -> PopupMen
                 true => "Working".to_string(),
                 false => capitalized(&agent.doing),
             };
-            menu = menu.item(PopupMenuItem::new(text).on_click(move |_, _, cx| {
-                let _ = view.update(cx, |view, cx| view.go_to(at.page, at.point, cx));
-            }));
+            menu = menu.item(
+                PopupMenuItem::new(text)
+                    .icon(crate::menu_icons::AGENT)
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |view, cx| view.go_to(at.page, at.point, cx));
+                    }),
+            );
         }
     }
     menu

@@ -3,9 +3,10 @@
 use std::path::Path;
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{Escape, Input};
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
@@ -425,38 +426,80 @@ pub(super) struct MenuState {
 }
 
 fn file_menu(menu: PopupMenu, focus: FocusHandle, can: MenuState) -> PopupMenu {
+    use crate::menu_icons as icon;
+    let item = |label: &'static str, glyph: Lucide, action: Box<dyn Action>| {
+        PopupMenuItem::new(label).icon(glyph).action(action)
+    };
     menu.action_context(focus)
-        .menu("New File", Box::new(NewFile))
-        .menu("New Folder", Box::new(NewFolder))
+        .item(item("New File", icon::NEW_FILE, Box::new(NewFile)))
+        .item(item("New Folder", icon::NEW_FOLDER, Box::new(NewFolder)))
         .separator()
-        .menu("Reveal in Finder", Box::new(RevealInFinder))
-        .menu("Open in Default App", Box::new(OpenInDefaultApp))
-        .menu("Open in Terminal", Box::new(OpenInTerminal))
+        .item(item(
+            "Reveal in Finder",
+            icon::REVEAL,
+            Box::new(RevealInFinder),
+        ))
+        .item(item(
+            "Open in Default App",
+            icon::OPEN_EXTERNAL,
+            Box::new(OpenInDefaultApp),
+        ))
+        .item(item(
+            "Open in Terminal",
+            icon::OPEN_TERMINAL,
+            Box::new(OpenInTerminal),
+        ))
         .separator()
-        .menu("Find in Folder…", Box::new(FindInFolder))
+        .item(item(
+            "Find in Folder…",
+            Lucide::Search,
+            Box::new(FindInFolder),
+        ))
         .separator()
-        .menu("Cut", Box::new(Cut))
-        .menu("Copy", Box::new(CopyEntry))
-        .menu("Duplicate", Box::new(Duplicate))
-        .menu_with_disabled("Paste", Box::new(Paste), !can.paste)
-        .menu_with_disabled("Undo", Box::new(Undo), !can.undo)
-        .menu_with_disabled("Redo", Box::new(Redo), !can.redo)
+        .item(item("Cut", icon::CUT, Box::new(Cut)))
+        .item(item("Copy", icon::COPY, Box::new(CopyEntry)))
+        .item(item("Duplicate", icon::DUPLICATE, Box::new(Duplicate)))
+        .item(item("Paste", icon::PASTE, Box::new(Paste)).disabled(!can.paste))
+        .item(item("Undo", icon::UNDO, Box::new(Undo)).disabled(!can.undo))
+        .item(item("Redo", icon::REDO, Box::new(Redo)).disabled(!can.redo))
         .separator()
-        .menu("Copy Path", Box::new(CopyPath))
-        .menu("Copy Relative Path", Box::new(CopyRelativePath))
+        .item(item("Copy Path", icon::LINK, Box::new(CopyPath)))
+        .item(item(
+            "Copy Relative Path",
+            icon::LINK,
+            Box::new(CopyRelativePath),
+        ))
         .separator()
-        .menu_with_disabled("Add to .gitignore", Box::new(AddToGitignore), !can.git)
-        .menu_with_disabled(
-            "Add to .git/info/exclude",
-            Box::new(AddToGitExclude),
-            !can.git,
+        .item(
+            item(
+                "Add to .gitignore",
+                Lucide::EyeOff,
+                Box::new(AddToGitignore),
+            )
+            .disabled(!can.git),
         )
-        .menu_with_disabled("View History", Box::new(ViewHistory), !can.git)
+        .item(
+            item(
+                "Add to .git/info/exclude",
+                Lucide::EyeOff,
+                Box::new(AddToGitExclude),
+            )
+            .disabled(!can.git),
+        )
+        .item(item("View History", icon::HISTORY, Box::new(ViewHistory)).disabled(!can.git))
         .separator()
-        .menu("Rename", Box::new(Rename))
-        .menu("Trash", Box::new(Trash))
-        .menu("Delete", Box::new(Delete))
+        .item(item(
+            "Expand All",
+            Lucide::UnfoldVertical,
+            Box::new(ExpandAll),
+        ))
+        .item(item(
+            "Collapse All",
+            Lucide::FoldVertical,
+            Box::new(CollapseAll),
+        ))
         .separator()
-        .menu("Expand All", Box::new(ExpandAll))
-        .menu("Collapse All", Box::new(CollapseAll))
+        .item(item("Rename", icon::RENAME, Box::new(Rename)))
+        .item(item("Move to Trash", icon::DELETE, Box::new(Trash)).danger(true))
+        .item(item("Delete", Lucide::Delete, Box::new(Delete)).danger(true))
 }

@@ -293,33 +293,38 @@ impl AccountsPage {
                                 a.clone(),
                             );
                             let id = a.id.clone();
-                            menu.item(PopupMenuItem::new("Rename…").on_click(
-                                move |_, window, cx| {
-                                    p1.update(cx, |this, cx| {
-                                        let name = a1.name.clone();
-                                        this.rename
-                                            .update(cx, |s, cx| s.set_value(name, window, cx));
-                                        this.renaming = true;
-                                        cx.notify();
-                                    })
-                                },
-                            ))
-                            .item(PopupMenuItem::new("Check Sign-In Again").on_click(
-                                move |_, _, cx| {
-                                    p3.update(cx, |this, cx| {
-                                        this.model.update(cx, |m, cx| m.check(&id, cx))
-                                    })
-                                },
-                            ))
+                            menu.item(
+                                PopupMenuItem::new("Rename…")
+                                    .icon(crate::menu_icons::RENAME)
+                                    .on_click(move |_, window, cx| {
+                                        p1.update(cx, |this, cx| {
+                                            let name = a1.name.clone();
+                                            this.rename
+                                                .update(cx, |s, cx| s.set_value(name, window, cx));
+                                            this.renaming = true;
+                                            cx.notify();
+                                        })
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Check Sign-In Again")
+                                    .icon(crate::menu_icons::REFRESH)
+                                    .on_click(move |_, _, cx| {
+                                        p3.update(cx, |this, cx| {
+                                            this.model.update(cx, |m, cx| m.check(&id, cx))
+                                        })
+                                    }),
+                            )
                             .separator()
                             .item(
-                                PopupMenuItem::new("Remove from Sawit…").on_click(
-                                    move |_, window, cx| {
+                                PopupMenuItem::new("Remove from Sawit…")
+                                    .icon(crate::menu_icons::DELETE)
+                                    .danger(true)
+                                    .on_click(move |_, window, cx| {
                                         p2.update(cx, |this, cx| {
                                             this.confirm_remove(a2.clone(), window, cx)
                                         })
-                                    },
-                                ),
+                                    }),
                             )
                         }
                     }),
