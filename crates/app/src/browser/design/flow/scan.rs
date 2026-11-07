@@ -10,7 +10,8 @@ use futures::channel::oneshot;
 use gpui_kit::{AsyncApp, Context, Task, WeakEntity};
 use sawit_core::annotations::page_key;
 use sawit_core::site_design::assets::{fetch_text, may_fetch_for, sheet_for_page};
-use sawit_core::site_design::scan::{AssetKind, AssetRef, Scan, SheetRules};
+use sawit_core::site_design::page::{self, PageRules, PageSamples, PageScan};
+use sawit_core::site_design::scan::{AssetKind, AssetRef, SheetRules};
 use sawit_core::site_design::tokens::derive;
 use serde_json::{Value, json};
 
@@ -88,10 +89,19 @@ async fn run_scan(
     fetch_deadline: std::time::Instant,
     cx: &mut AsyncApp,
 ) -> Result<Rc<Ready>, String> {
-    let mut scan: Scan = parse("scan", serde_json::from_value(page_answer(scan, cx).await?))?;
-    if scan.colors.is_empty() && scan.texts.is_empty() {
+    let page: PageScan = parse("scan", serde_json::from_value(page_answer(scan, cx).await?))?;
+    let plan = page::plan(page);
+    if plan.scan.colors.is_empty() && plan.scan.texts.is_empty() {
         return Err(NOTHING.into());
     }
+    let samples = this
+        .update(cx, |this, _| this.page_op(plan.samples_op()))
+        .map_err(gone)?;
+    let samples: PageSamples = parse(
+        "scan_samples",
+        serde_json::from_value(page_answer(samples, cx).await?),
+    )?;
+    let mut scan = plan.finish(samples);
     let referer = if scan.url.is_empty() {
         url.clone()
     } else {
@@ -123,8 +133,9 @@ async fn run_scan(
             .map_err(gone)?;
         let rules: SheetRules = parse(
             "rules",
-            serde_json::from_value(page_answer(rules, cx).await?),
-        )?;
+            serde_json::from_value::<PageRules>(page_answer(rules, cx).await?),
+        )?
+        .into();
         scan.merge_rules(rules);
     }
     add_icons(&mut scan.assets, extras.icons);

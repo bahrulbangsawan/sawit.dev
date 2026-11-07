@@ -1,0 +1,554 @@
+{
+ "snapshot": {
+  "snapshot": "- heading \"Pick an element\" [level=1] [ref=e1]\n- paragraph \"A pick click must never reach the page's own capture listener.\" [ref=e2]\n- button \"Target\" [ref=e3]",
+  "url": "http://fixture/pick.html",
+  "title": "Pick · fixture",
+  "ready": "complete",
+  "refs": 3,
+  "truncated": false
+ },
+ "design.summary": {
+  "url": "http://fixture/pick.html",
+  "title": "Pick · fixture",
+  "truncated": false,
+  "counts": {
+   "colors": 6,
+   "text_styles": 3,
+   "font_faces": 0,
+   "assets": 0,
+   "variables": 0,
+   "components": 0
+  },
+  "tokens": {
+   "site": "127.0.0.1",
+   "url": "http://fixture/pick.html",
+   "date": "DATE",
+   "palette": [
+    {
+     "role": "neutral",
+     "base": "#000000",
+     "steps": [
+      "#f5f5f5",
+      "#e8e8e8",
+      "#d7d7d7",
+      "#bebebe",
+      "#a1a1a1",
+      "#868686",
+      "#6f6f6f",
+      "#585858",
+      "#424242",
+      "#2e2e2e",
+      "#000000"
+     ],
+     "uses": 2
+    }
+   ],
+   "semantic": [
+    [
+     "foreground",
+     "#000000"
+    ],
+    [
+     "border",
+     "#c0c0c0"
+    ]
+   ],
+   "families": [
+    [
+     "sans",
+     "system-ui"
+    ]
+   ],
+   "type_roles": [
+    [
+     "display",
+     {
+      "family": "system-ui",
+      "size": 30,
+      "weight": 700,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ],
+    [
+     "body-md",
+     {
+      "family": "system-ui",
+      "size": 15,
+      "weight": 400,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ],
+    [
+     "label",
+     {
+      "family": "system-ui",
+      "size": 15,
+      "weight": 400,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ]
+   ],
+   "type_scale": [
+    [
+     "base",
+     15
+    ],
+    [
+     "lg",
+     30
+    ]
+   ],
+   "spacing_base": null,
+   "spacing": [
+    [
+     "xs",
+     10
+    ],
+    [
+     "sm",
+     15
+    ],
+    [
+     "md",
+     18
+    ],
+    [
+     "lg",
+     20
+    ],
+    [
+     "xl",
+     40
+    ]
+   ],
+   "radius": [],
+   "shadows": [],
+   "breakpoints": [],
+   "variables": [],
+   "components": [],
+   "facts": {
+    "primary_buttons": 0,
+    "primary_links": 0,
+    "smallest_text": 15,
+    "dark": false,
+    "colors_seen": 5,
+    "body": {
+     "family": "system-ui",
+     "size": 15,
+     "weight": 400,
+     "line_height": null,
+     "letter_spacing": null
+    }
+   }
+  }
+ },
+ "design.colors": {
+  "colors": [
+   {
+    "value": "rgb(0, 0, 0)",
+    "role": "text",
+    "count": 2,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.847)",
+    "role": "text",
+    "count": 1,
+    "on_button": 1,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(192, 192, 192)",
+    "role": "background",
+    "count": 1,
+    "on_button": 1,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(192, 192, 192)",
+    "role": "border",
+    "count": 1,
+    "on_button": 1,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(255, 255, 255)",
+    "role": "gradient",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 0
+   },
+   {
+    "value": "rgb(232, 238, 248)",
+    "role": "gradient",
+    "count": 1,
+    "on_button": 0,
+    "on_link": 0
+   }
+  ]
+ },
+ "design.fonts": {
+  "families": [
+   [
+    "sans",
+    "system-ui"
+   ]
+  ],
+  "font_faces": [],
+  "text_styles": [
+   {
+    "tag": "p",
+    "in_main": false,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 15,
+    "weight": 400,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgb(0, 0, 0)",
+    "chars": 62
+   },
+   {
+    "tag": "h1",
+    "in_main": false,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 30,
+    "weight": 700,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgb(0, 0, 0)",
+    "chars": 15
+   },
+   {
+    "tag": "button",
+    "in_main": false,
+    "family": "system-ui",
+    "used_family": "system-ui",
+    "size": 15,
+    "weight": 400,
+    "line_height": null,
+    "letter_spacing": null,
+    "color": "rgba(0, 0, 0, 0.847)",
+    "chars": 6
+   }
+  ]
+ },
+ "design.assets": {
+  "assets": []
+ },
+ "design.tokens": {
+  "tokens": {
+   "site": "127.0.0.1",
+   "url": "http://fixture/pick.html",
+   "date": "DATE",
+   "palette": [
+    {
+     "role": "neutral",
+     "base": "#000000",
+     "steps": [
+      "#f5f5f5",
+      "#e8e8e8",
+      "#d7d7d7",
+      "#bebebe",
+      "#a1a1a1",
+      "#868686",
+      "#6f6f6f",
+      "#585858",
+      "#424242",
+      "#2e2e2e",
+      "#000000"
+     ],
+     "uses": 2
+    }
+   ],
+   "semantic": [
+    [
+     "foreground",
+     "#000000"
+    ],
+    [
+     "border",
+     "#c0c0c0"
+    ]
+   ],
+   "families": [
+    [
+     "sans",
+     "system-ui"
+    ]
+   ],
+   "type_roles": [
+    [
+     "display",
+     {
+      "family": "system-ui",
+      "size": 30,
+      "weight": 700,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ],
+    [
+     "body-md",
+     {
+      "family": "system-ui",
+      "size": 15,
+      "weight": 400,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ],
+    [
+     "label",
+     {
+      "family": "system-ui",
+      "size": 15,
+      "weight": 400,
+      "line_height": null,
+      "letter_spacing": null
+     }
+    ]
+   ],
+   "type_scale": [
+    [
+     "base",
+     15
+    ],
+    [
+     "lg",
+     30
+    ]
+   ],
+   "spacing_base": null,
+   "spacing": [
+    [
+     "xs",
+     10
+    ],
+    [
+     "sm",
+     15
+    ],
+    [
+     "md",
+     18
+    ],
+    [
+     "lg",
+     20
+    ],
+    [
+     "xl",
+     40
+    ]
+   ],
+   "radius": [],
+   "shadows": [],
+   "breakpoints": [],
+   "variables": [],
+   "components": [],
+   "facts": {
+    "primary_buttons": 0,
+    "primary_links": 0,
+    "smallest_text": 15,
+    "dark": false,
+    "colors_seen": 5,
+    "body": {
+     "family": "system-ui",
+     "size": 15,
+     "weight": 400,
+     "line_height": null,
+     "letter_spacing": null
+    }
+   }
+  }
+ },
+ "design.variables": {
+  "variables": []
+ },
+ "inspect body": {
+  "selector": "body",
+  "label": "body",
+  "rect": {
+   "x": 40,
+   "y": 40,
+   "width": 1201,
+   "height": 3129.97
+  },
+  "box": {
+   "margin": [
+    40,
+    40,
+    40,
+    40
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui",
+   "used_family": "system-ui",
+   "size": 15,
+   "weight": 400,
+   "line_height": null,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 0)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgba(0, 0, 0, 0)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(0, 0, 0)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "block",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 21,
+   "large": false,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect h1": {
+  "selector": "body > h1",
+  "label": "h1",
+  "rect": {
+   "x": 40,
+   "y": 40,
+   "width": 1201,
+   "height": 35
+  },
+  "box": {
+   "margin": [
+    20.09375,
+    0,
+    20.09375,
+    0
+   ],
+   "border": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "padding": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "typography": {
+   "family": "system-ui",
+   "used_family": "system-ui",
+   "size": 30,
+   "weight": 700,
+   "line_height": null,
+   "letter_spacing": null,
+   "color": "rgb(0, 0, 0)",
+   "align": "start",
+   "transform": "none"
+  },
+  "background": {
+   "color": "rgba(0, 0, 0, 0)",
+   "image": null
+  },
+  "border": {
+   "color": "rgb(0, 0, 0)",
+   "style": "none",
+   "width": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "radius": "0px"
+  },
+  "effects": {
+   "shadow": null,
+   "opacity": 1,
+   "transition": "all"
+  },
+  "layout": {
+   "display": "block",
+   "position": "static",
+   "gap": null,
+   "flex_direction": null,
+   "justify": null,
+   "align": null,
+   "grid_template_columns": null
+  },
+  "states": [],
+  "effective_background": "rgb(255, 255, 255)",
+  "contrast": {
+   "ratio": 21,
+   "large": true,
+   "aa": true,
+   "aaa": true
+  }
+ },
+ "inspect #buy": {
+  "error": "Nothing on the page matches “#buy”."
+ },
+ "inspect .ghost": {
+  "error": "Nothing on the page matches “.ghost”."
+ },
+ "inspect #deep": {
+  "error": "Nothing on the page matches “#deep”."
+ },
+ "inspect .card": {
+  "error": "Nothing on the page matches “.card”."
+ },
+ "inspect a": {
+  "error": "Nothing on the page matches “a”."
+ },
+ "inspect input": {
+  "error": "Nothing on the page matches “input”."
+ },
+ "inspect #nope": {
+  "error": "Nothing on the page matches “#nope”."
+ },
+ "inspect html #buy": {
+  "error": "Nothing on the page matches “#buy”."
+ }
+}
