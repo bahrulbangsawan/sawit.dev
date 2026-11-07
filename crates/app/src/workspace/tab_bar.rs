@@ -112,6 +112,21 @@ impl Workspace {
                     let rename = self.canvas_tabs.rename.as_ref()?;
                     (rename.file == *file).then(|| rename.input.clone())
                 });
+                // An agent drawing (B2): the canvas's glyph gives way to the turning loader.
+                let canvas_activity = sawit_core::activity::canvas(agents.is_some());
+                let icon = match agents {
+                    Some(_) => div()
+                        .flex_none()
+                        .debug_selector(|| "tab-activity-busy".into())
+                        .child(crate::activity::tab_icon(
+                            canvas_activity,
+                            icon,
+                            ("tab-activity", ix),
+                            cx,
+                        ))
+                        .into_any_element(),
+                    None => icon,
+                };
                 let label: SharedString = match agents {
                     Some(_) => format!("{title}, agents at work").into(),
                     None => title.clone().into(),

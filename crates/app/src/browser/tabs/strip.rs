@@ -64,6 +64,7 @@ impl BrowserTabs {
                 .debug_selector(move || format!("browser-tab-{ix}"))
                 .role(Role::Tab)
                 .aria_label(title.clone())
+                .when(loading, |el| el.aria_description("Loading"))
                 .aria_selected(active)
                 .flex_1()
                 .min_w(px(TAB_MIN))
@@ -83,15 +84,23 @@ impl BrowserTabs {
                 .when(!active, |el| {
                     el.bg(cx.theme().tab).text_color(cx.theme().tab_foreground)
                 })
-                .child(
-                    Icon::new(if loading {
-                        Lucide::LoaderCircle
-                    } else {
-                        Lucide::Globe
-                    })
-                    .xsmall()
-                    .text_color(muted),
-                )
+                .child({
+                    // Busy while the page loads (B2): the loader turns in place of the globe.
+                    let activity = sawit_core::activity::browser(loading, false);
+                    div()
+                        .flex_none()
+                        .debug_selector(move || format!("browser-activity-{ix}-{}", activity.id()))
+                        .text_color(muted)
+                        .child(crate::activity::tab_icon(
+                            activity,
+                            Icon::new(Lucide::Globe)
+                                .xsmall()
+                                .text_color(muted)
+                                .into_any_element(),
+                            ("browser-activity", tab.id as usize),
+                            cx,
+                        ))
+                })
                 .child(
                     div()
                         .flex_1()

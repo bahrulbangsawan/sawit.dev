@@ -34,8 +34,9 @@ pub enum TermEvent {
     Wakeup,
     Title(String),
     Bell,
-    /// The program exited.
-    Exit,
+    /// The program exited, with its status when the PTY saw the child end (an event loop that
+    /// stops on its own has none).
+    Exit(Option<std::process::ExitStatus>),
     /// The program asked to copy text (OSC 52).
     Copy(String),
 }
@@ -192,7 +193,8 @@ impl EventListener for Listener {
             Event::Title(t) => Some(TermEvent::Title(t)),
             Event::ResetTitle => Some(TermEvent::Title(String::new())),
             Event::Bell => Some(TermEvent::Bell),
-            Event::Exit | Event::ChildExit(_) => Some(TermEvent::Exit),
+            Event::Exit => Some(TermEvent::Exit(None)),
+            Event::ChildExit(status) => Some(TermEvent::Exit(Some(status))),
             Event::ClipboardStore(_, text) => Some(TermEvent::Copy(text)),
             Event::PtyWrite(text) => {
                 self.reply(text);

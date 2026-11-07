@@ -23,6 +23,7 @@ impl TerminalView {
             let _ = this.update(cx, |this, cx| {
                 this.agent_check = None;
                 this.look_for_agent(cx);
+                this.refresh_activity(cx);
             });
         }));
     }

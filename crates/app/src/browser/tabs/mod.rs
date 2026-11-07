@@ -358,6 +358,7 @@ impl BrowserTabs {
                     "active": ix == self.active,
                     "live": v.is_live(),
                     "loading": v.loading,
+                    "activity": sawit_core::activity::browser(v.loading, false).to_json(),
                     "device": v.viewport_json()["device"],
                 })
             })
