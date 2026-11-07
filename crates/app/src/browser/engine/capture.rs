@@ -25,6 +25,32 @@ pub struct Pixels(Retained<CGImage>);
 unsafe impl Send for Pixels {}
 
 impl Pixels {
+    /// Its pixels as RGBA rows (premultiplied, sRGB as WebKit drew them), for stitching tiles.
+    pub fn rgba(&self) -> Option<Vec<u8>> {
+        use objc2_core_foundation::{CGPoint, CGRect};
+        use objc2_core_graphics::{CGBitmapContextCreate, CGColorSpace, CGContext};
+        let (w, h) = self.size();
+        let (w, h) = (w as usize, h as usize);
+        let mut out = vec![0u8; w * h * 4];
+        let space = CGImage::color_space(Some(&self.0)).or_else(CGColorSpace::new_device_rgb)?;
+        // SAFETY: `out` holds `h` rows of `w * 4` bytes and outlives the context.
+        let context = unsafe {
+            CGBitmapContextCreate(
+                out.as_mut_ptr().cast(),
+                w,
+                h,
+                8,
+                w * 4,
+                Some(&space),
+                1, /* PremultipliedLast, RGBA */
+            )
+        }?;
+        let rect = CGRect::new(CGPoint::ZERO, CGSize::new(w as f64, h as f64));
+        CGContext::draw_image(Some(&context), rect, Some(&self.0));
+        drop(context);
+        Some(out)
+    }
+
     /// Its size in pixels.
     pub fn size(&self) -> (u32, u32) {
         let width = CGImage::width(Some(&self.0));
@@ -65,6 +91,44 @@ impl Pixels {
 }
 
 impl Engine {
+    /// Holds the CSS viewport units (`vh`, `vw`) at `size` CSS px while the view is made taller
+    /// for a full-page capture, so `100vh` sections don't grow with it; `None` lets them follow
+    /// the view again. Private WebKit API, skipped where WebKit lacks it.
+    pub fn hold_viewport_units(&self, size: Option<(f64, f64)>) {
+        use objc2::{msg_send, sel};
+        use objc2_foundation::NSObjectProtocol as _;
+        let wk = self.webview.webview();
+        if !wk.respondsToSelector(sel!(_setViewportSizeForCSSViewportUnits:)) {
+            return;
+        }
+        // A zero size goes back to the view's own.
+        let (w, h) = size.unwrap_or((0., 0.));
+        unsafe {
+            let _: () = msg_send![&*wk, _setViewportSizeForCSSViewportUnits: CGSize::new(w, h)];
+        }
+    }
+
+    /// The view as a PDF (WebKit's vector rendering of what the view holds: the whole page while
+    /// it is as tall as the page).
+    pub fn create_pdf(&self, reply: oneshot::Sender<Result<Vec<u8>, String>>) {
+        use objc2_foundation::NSData;
+        let reply = Mutex::new(Some(reply));
+        let handler = block2::RcBlock::new(move |data: *mut NSData, error: *mut NSError| {
+            let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) else {
+                return;
+            };
+            let result = match unsafe { data.as_ref() } {
+                Some(data) => Ok(data.to_vec()),
+                None => Err(unsafe { error.as_ref() }
+                    .map(|e| format!("WebKit couldn't make the PDF: {}", e.localizedDescription()))
+                    .unwrap_or_else(|| "WebKit couldn't make the PDF.".into())),
+            };
+            let _ = reply.send(result);
+        });
+        let wk = self.webview.webview();
+        unsafe { wk.createPDFWithConfiguration_completionHandler(None, &handler) };
+    }
+
     /// The view's size in points, and the display's scale.
     pub fn view_metrics(&self) -> (f64, f64, f64) {
         let wk = self.webview.webview();

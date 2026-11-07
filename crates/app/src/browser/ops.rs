@@ -174,6 +174,7 @@ impl BrowserView {
             }
             BrowserOp::Capture {
                 target,
+                full_page,
                 device,
                 width,
                 height,
@@ -187,6 +188,7 @@ impl BrowserView {
                 let ask = (|| {
                     Ok::<_, String>(super::capture::CaptureAsk {
                         target,
+                        full_page,
                         device,
                         width,
                         height,
