@@ -104,3 +104,44 @@ sawitTest("code mode: one script runs a command, reads its terminal and the app'
     client.close();
   }
 });
+
+sawitTest("terminal reuse: fifty commands from one agent leave one or two tabs", async (ctx) => {
+  const client = await mcpClient(ctx.world, { SAWIT_MCP_TOOLS: "code" });
+  try {
+    const project = JSON.stringify(ctx.world.project);
+    const script = `
+      const before = sawit.app_state({}).windows[0].terminals.length;
+      let last;
+      for (let i = 0; i < 50; i++) {
+        last = sawit.terminal_run({ command: "echo step-" + i, cwd: ${project}, wait_secs: 0.2 });
+      }
+      const run = Number(last.match(/\\(run (\\d+)/)[1]);
+      let out = "";
+      for (let i = 0; i < 30 && !/^step-49$/m.test(out); i++) out = sawit.terminal_read({ run, lines: 20 });
+      // A one-off command in a tab of its own, which closes once it is done.
+      const once = sawit.terminal_run({ command: "echo one-off", new_tab: true, close_when_done: true, wait_secs: 3 });
+      const onceRun = Number(once.match(/\\(run (\\d+)/)[1]);
+      // Scripts have no timers: wait by the clock between looks, for up to 20 seconds.
+      let after = 0;
+      const until = Date.now() + 20_000;
+      while (Date.now() < until) {
+        after = sawit.app_state({}).windows[0].terminals.length;
+        if (after <= before + 1) break;
+        const next = Date.now() + 500;
+        while (Date.now() < next) {}
+      }
+      return { before, after, ok: /^step-49$/m.test(out), once: sawit.terminal_read({ run: onceRun, lines: 20 }) };
+    `;
+    const result = await client.request("tools/call", {
+      name: "run",
+      arguments: { code: script, timeout_secs: 300 },
+    });
+    assert.ok(!result.isError, text(result));
+    const answer = JSON.parse(text(result));
+    assert.equal(answer.ok, true, "the last command's output reads back by its run");
+    assert.ok(answer.after <= answer.before + 1, `tabs before ${answer.before}, after ${answer.after}`);
+    assert.match(answer.once, /one-off/);
+  } finally {
+    client.close();
+  }
+});

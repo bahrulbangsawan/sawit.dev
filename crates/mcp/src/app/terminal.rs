@@ -25,6 +25,23 @@ fn terminal_name(tab: Option<usize>, pane: Option<usize>) -> String {
     }
 }
 
+/// What `terminal_run`'s answer says of its run, when the app numbered it: " (run 5)", with
+/// "reused" when an idle terminal was used again and "closes when done" for a one-off tab.
+fn run_note(started: &Value) -> String {
+    let Some(run) = started["run"].as_u64() else {
+        return String::new();
+    };
+    let mut note = format!(" (run {run}");
+    if started["reused"].as_bool() == Some(true) {
+        note.push_str(", reused");
+    }
+    if started["closes"].as_bool() == Some(true) {
+        note.push_str(", closes when done");
+    }
+    note.push(')');
+    note
+}
+
 /// How long `terminal_run` waits before it reads the output: `wait_secs` (default 2), from 0 to
 /// [`MAX_WAIT`]. The number is bounded before it becomes a `Duration`, which panics on one too
 /// big for it or NaN, and a panic would leave the tool call without an answer.
@@ -42,10 +59,15 @@ pub struct TerminalRunArgs {
     )]
     pub cwd: Option<String>,
     #[schemars(
-        description = "Use a new terminal tab instead of an idle shell (the active one, unless the user is typing in it)"
+        description = "Use a new terminal tab. Without it the command goes to your own latest terminal that is idle (with a cd when cwd differs), else, without cwd, an idle shell; never one the user is typing in, a locked or pinned one, or one running something"
     )]
     #[serde(default)]
     pub new_tab: bool,
+    #[schemars(
+        description = "A tab opened for this command closes itself once the command is done; read its output afterwards with terminal_read's `run` (the number this answer gives). A reused terminal stays open. Default false"
+    )]
+    #[serde(default)]
+    pub close_when_done: bool,
     #[schemars(
         description = "Seconds to wait before returning the terminal's output (0-120, default 2)"
     )]
@@ -67,6 +89,10 @@ pub struct TerminalReadArgs {
     pub pane: Option<usize>,
     #[schemars(description = "Lines of scrollback + screen to return (default 200, max 5000)")]
     pub lines: Option<usize>,
+    #[schemars(
+        description = "The run number terminal_run gave (\"(run 5)\"): that command's terminal wherever it is now, or its output after its tab closed. Takes the place of tab and pane"
+    )]
+    pub run: Option<u64>,
     pub project: Option<String>,
 }
 
@@ -202,16 +228,21 @@ impl Sawit {
     ) -> CallToolResult {
         let tab = started["terminal"].as_u64().map(|t| t as usize);
         let pane = started["pane"].as_u64().map(|p| p as usize);
+        // A `terminal_run` the app numbered is read back by that number: the tab may have moved
+        // (another closed before it) or closed itself (`close_when_done`) meanwhile.
+        let run = started["run"].as_u64();
         tokio::time::sleep(run_wait(wait_secs)).await;
         let read = Command::TerminalRead {
             tab,
             pane,
             lines: Some(lines.unwrap_or(100)),
+            run,
         };
         match self.app_call(project, read).await {
             Ok(v) => ok(format!(
-                "{}:\n{}",
+                "{}{}:\n{}",
                 terminal_name(tab, pane),
+                run_note(started),
                 v["text"].as_str().unwrap_or_default()
             )),
             Err(e) => fail(e),
@@ -222,7 +253,7 @@ impl Sawit {
 #[tool_router(router = terminal_router, vis = "pub(super)")]
 impl Sawit {
     #[tool(
-        description = "Run a command in Sawit's terminal (visible to the user), wait, and return where it ran (\"Terminal 2, pane 0:\") with the terminal's latest output. Pass that tab and pane to terminal_read to check a long-running command later, and to terminal_input (key ctrl-c) to stop it: the terminal in front may be another, one the user types in"
+        description = "Run a command in Sawit's terminal (visible to the user), wait, and return where it ran (\"Terminal 2, pane 0 (run 5):\") with the terminal's latest output. Your next command reuses your own idle terminal rather than opening a tab; close_when_done closes a tab opened for a one-off command. Pass the run number (or that tab and pane) to terminal_read to check a long-running command later, and to terminal_input (key ctrl-c) to stop it: the terminal in front may be another, one the user types in"
     )]
     pub(super) async fn terminal_run(
         &self,
@@ -238,6 +269,7 @@ impl Sawit {
             command: a.command,
             cwd,
             new_tab: a.new_tab,
+            close_when_done: a.close_when_done,
         };
         let started = match self.app_call(a.project.clone(), command).await {
             Ok(v) => v,
@@ -292,6 +324,7 @@ impl Sawit {
             tab: a.tab,
             pane: a.pane,
             lines: a.lines,
+            run: a.run,
         };
         match self.app_call(a.project, command).await {
             Ok(v) => ok(v["text"].as_str().unwrap_or_default().to_string()),
