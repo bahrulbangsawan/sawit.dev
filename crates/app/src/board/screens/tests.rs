@@ -53,7 +53,10 @@ fn preview_sizes_fit_under_its_bar() {
     assert_eq!(preview(Size::Made, false).css_size(area), (390, 844));
     assert_eq!(preview(Size::Made, true).css_size(area), (844, 390));
     assert_eq!(preview(Size::Window, true).css_size(area), (1168, 824));
-    let desktop = sawit_core::browser::DEVICES.len() - 1;
+    let desktop = sawit_core::browser::DEVICES
+        .iter()
+        .position(|d| d.name == "Desktop")
+        .unwrap();
     assert_eq!(
         preview(Size::Device(desktop), false).css_size(area),
         (1440, 900)

@@ -149,13 +149,13 @@ pub fn plan(page: PageScan) -> ScanPlan {
     looks.sort_by_key(|l| l.0);
     // The first of the most used (a later one must be used more to win).
     let top = |ok: &dyn Fn(&Look) -> bool| {
-        looks.iter().filter(|l| ok(l)).fold(
-            None::<&Look>,
-            |best, l| match best {
+        looks
+            .iter()
+            .filter(|l| ok(l))
+            .fold(None::<&Look>, |best, l| match best {
                 Some(b) if l.2 <= b.2 => Some(b),
                 _ => Some(l),
-            },
-        )
+            })
     };
     let primary = top(&|l| l.3);
     let secondary = primary.and_then(|p| top(&|l| l.1 != p.1));

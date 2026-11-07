@@ -66,7 +66,7 @@ impl Pixels {
 
 impl Engine {
     /// The view's size in points, and the display's scale.
-    fn view_metrics(&self) -> (f64, f64, f64) {
+    pub fn view_metrics(&self) -> (f64, f64, f64) {
         let wk = self.webview.webview();
         let frame = wk.frame();
         let backing = wk.convertSizeToBacking(CGSize::new(1., 1.)).width;
@@ -96,9 +96,32 @@ impl Engine {
         frame_size(width, height, backing, max_width)
     }
 
+    /// A still capture at a chosen size: `rect` of the view (in its points; the whole view when
+    /// `None`), drawn afresh `width` points wide, so the picture is `width` × the display's scale
+    /// pixels wide whatever size the view shows at: WebKit paints the page again at that size
+    /// rather than scaling what it last drew.
+    pub fn capture_rect(
+        &self,
+        rect: Option<(f64, f64, f64, f64)>,
+        width: f64,
+        reply: oneshot::Sender<Result<Pixels, String>>,
+    ) {
+        self.snapshot_pixels_in(rect, Some(width), true, reply);
+    }
+
     /// Snapshots the whole view, `width` points wide (the view's own width when `None`).
     fn snapshot_pixels(
         &self,
+        width: Option<f64>,
+        after_screen_updates: bool,
+        reply: oneshot::Sender<Result<Pixels, String>>,
+    ) {
+        self.snapshot_pixels_in(None, width, after_screen_updates, reply);
+    }
+
+    fn snapshot_pixels_in(
+        &self,
+        rect: Option<(f64, f64, f64, f64)>,
         width: Option<f64>,
         after_screen_updates: bool,
         reply: oneshot::Sender<Result<Pixels, String>>,
@@ -111,6 +134,10 @@ impl Engine {
         };
         let config = unsafe { WKSnapshotConfiguration::new(mtm) };
         unsafe {
+            if let Some((x, y, w, h)) = rect {
+                use objc2_core_foundation::{CGPoint, CGRect};
+                config.setRect(CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)));
+            }
             if let Some(width) = width {
                 config.setSnapshotWidth(Some(&NSNumber::new_f64(width)));
             }

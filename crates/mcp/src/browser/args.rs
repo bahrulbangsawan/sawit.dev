@@ -303,7 +303,7 @@ pub struct AnnotationsArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ResizeArgs {
     #[schemars(
-        description = "iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop, or responsive to fill the tab"
+        description = "A device preset (iPhone SE, iPhone 15, iPhone 15 Pro Max, Pixel 8, Galaxy S, Small Android, iPad mini, iPad Air, iPad Pro 11″, iPad Pro 13″, Android tablet, Laptop, Laptop 1366, MacBook Air, MacBook Pro 14″, Laptop 1536, Desktop, Full HD, QHD, 4K), or responsive to fill the tab"
     )]
     pub device: Option<String>,
     #[schemars(description = "Viewport width in CSS px (with height)")]

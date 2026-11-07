@@ -172,6 +172,42 @@ impl BrowserView {
                 .detach();
                 return;
             }
+            BrowserOp::Capture {
+                target,
+                device,
+                width,
+                height,
+                scale,
+                format,
+                quality,
+                clip,
+                output_path,
+                mesurer,
+            } => {
+                let ask = (|| {
+                    Ok::<_, String>(super::capture::CaptureAsk {
+                        target,
+                        device,
+                        width,
+                        height,
+                        scale,
+                        format: sawit_core::browser::capture::ImageFormat::parse(
+                            format.as_deref().unwrap_or("png"),
+                        )?,
+                        quality,
+                        clip,
+                        output_path,
+                        mesurer: MesurerShot::named(mesurer.as_deref())?,
+                    })
+                })();
+                match ask {
+                    Ok(ask) => return self.capture_op(ask, reply, cx),
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                }
+            }
             BrowserOp::Screenshot { target, mesurer } => {
                 let mode = match MesurerShot::named(mesurer.as_deref()) {
                     Ok(mode) => mode,
@@ -306,7 +342,7 @@ pub(super) fn agent_call(op: &Value) -> String {
 }
 
 /// An element's box as the page's `rect` op answers it, refused when it has no size on screen.
-fn element_rect(r: &Value) -> Result<(f64, f64, f64, f64), String> {
+pub(super) fn element_rect(r: &Value) -> Result<(f64, f64, f64, f64), String> {
     let field = |k: &str| r[k].as_f64().unwrap_or_default();
     let rect = (field("x"), field("y"), field("width"), field("height"));
     if rect.2 < 1. || rect.3 < 1. {

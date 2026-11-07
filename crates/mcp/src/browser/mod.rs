@@ -292,7 +292,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Set the browser tab's viewport: a device (iPhone 15, Pixel 8, iPad mini, iPad Pro 11″, Laptop, Desktop), a width and height in CSS px, or responsive to fill the tab again"
+        description = "Set the browser tab's viewport: a device preset (Mobile: iPhone SE, iPhone 15, iPhone 15 Pro Max, Pixel 8, Galaxy S, Small Android; Tablet: iPad mini, iPad Air, iPad Pro 11″, iPad Pro 13″, Android tablet; Laptop: Laptop, Laptop 1366, MacBook Air, MacBook Pro 14″, Laptop 1536; Desktop: Desktop, Full HD, QHD, 4K), a width and height in CSS px, or responsive to fill the tab again"
     )]
     async fn browser_resize(&self, Parameters(a): Parameters<ResizeArgs>) -> CallToolResult {
         if let Err(e) = resize_mode(a.device.as_deref(), a.width, a.height) {
