@@ -1,48 +1,22 @@
-//! A board's timer and voting, in a pill at the canvas's bottom right, above the toolbar, shown only
-//! while one runs or a vote has results (`board.timer`, `board.vote`,
-//! `board.voteResults`): the countdown with Start 5 min, Pause or Resume, +1 min and Stop; and
-//! Start vote (3 votes each), Vote on the selection, End vote and the results, most votes first.
-//! The countdown is the board's own, the same for everyone in a live session; the pill draws
-//! itself again each second while it runs.
+//! The Pomodoro pill at the canvas's bottom right, above the toolbar ([`crate::pomodoro`]): Focus
+//! 25:00 to start; while it runs or waits paused, the phase, the time left and the round, with
+//! Pause or Resume, Skip and Stop. It is on every canvas unless the View menu's Pomodoro Timer hides
+//! it, never over Preview or Present, and draws itself again each second while it runs.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use figcraft_doc::BoardTimer;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::*;
-use serde_json::{Value, json};
 
 use super::BoardView;
 use super::float_bar::{BarButton, FloatBar};
 use crate::menu_icons;
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
-
-fn clock(ms: u64) -> String {
-    let s = ms.div_ceil(1000);
-    format!("{}:{:02}", s / 60, s % 60)
-}
+use crate::pomodoro::{self, Phase, ROUNDS, Run};
 
 impl BoardView {
-    fn facilitate(&mut self, command: &'static str, params: Value, cx: &mut Context<Self>) {
-        self.choose(command, params, cx);
-        self.tick_timer(cx);
-    }
-
     /// Draws the pill again in a second while the timer runs.
-    fn tick_timer(&mut self, cx: &mut Context<Self>) {
-        if self.timer_ticking {
-            return;
-        }
-        let running = self
-            .board()
-            .and_then(|b| b.session.ds().ok())
-            .is_some_and(|ds| matches!(ds.doc.timer, Some(BoardTimer::Running { .. })));
-        if !running {
+    fn tick_pomodoro(&mut self, cx: &mut Context<Self>) {
+        if self.timer_ticking || !pomodoro::get(cx).running() {
             return;
         }
         self.timer_ticking = true;
@@ -51,61 +25,15 @@ impl BoardView {
             let _ = this.update(cx, |view, cx| {
                 view.timer_ticking = false;
                 cx.notify();
-                view.tick_timer(cx);
+                view.tick_pomodoro(cx);
             });
         })
         .detach();
     }
-
-    /// The main menu's Start Timer (5 min) or Start Vote (3 votes each): on a board only.
-    pub(super) fn start_facilitation(&mut self, what: &str, cx: &mut Context<Self>) {
-        let board = self
-            .board()
-            .is_some_and(|b| b.kind() == sawit_board::DocKind::Board);
-        if !board {
-            self.show_toast("Timers and votes are for boards", cx);
-            return;
-        }
-        match what {
-            "timer" => self.facilitate("board.timer", json!({"action": "start", "minutes": 5}), cx),
-            _ => self.facilitate("board.vote", json!({"action": "start", "votes": 3}), cx),
-        }
-        cx.notify();
-    }
-
-    fn show_vote_results(&mut self, cx: &mut Context<Self>) {
-        let Some(board) = self.board_mut() else {
-            return;
-        };
-        let Ok(results) = board.execute("board.voteResults", &json!({})) else {
-            return;
-        };
-        let lines: Vec<String> = results
-            .get("results")
-            .and_then(Value::as_array)
-            .map(|list| {
-                list.iter()
-                    .take(5)
-                    .map(|r| {
-                        let name = r.get("name").and_then(Value::as_str).unwrap_or("Item");
-                        let votes = r.get("votes").and_then(Value::as_u64).unwrap_or(0);
-                        format!("{name}: {votes}")
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let said = if lines.is_empty() {
-            "No votes yet".to_string()
-        } else {
-            format!("Votes: {}", lines.join(" · "))
-        };
-        self.show_toast(said, cx);
-    }
 }
 
-/// The pill, on a board, while a timer or a vote is on: the canvas's one floating bar
-/// ([`FloatBar`]), at its bottom right above the toolbar, its
-/// buttons collapsing to icons when the canvas is narrow.
+/// The pill: the canvas's one floating bar ([`FloatBar`]), at its bottom right above the toolbar,
+/// its buttons collapsing to icons when the canvas is narrow.
 pub(super) fn render_facilitation(
     view: &mut BoardView,
     window: &mut Window,
@@ -115,113 +43,84 @@ pub(super) fn render_facilitation(
     if view.preview_open() || view.player.is_some() {
         return None;
     }
-    let board = view.board()?;
-    if board.kind() != sawit_board::DocKind::Board {
+    let timer = pomodoro::get(cx);
+    if !timer.shown {
         return None;
     }
-    let ds = board.session.ds().ok()?;
-    let timer = ds.doc.timer;
-    let voting = ds.doc.vote.as_ref().map(|v| !v.ended);
-    // Only while a timer or a vote is on, or a vote has results (B15): the main menu's View ›
-    // Start Timer and Start Vote begin them.
-    if timer.is_none() && voting.is_none() {
-        return None;
-    }
-    let has_selection = !ds.selection.is_empty();
+    let ds = view.board()?.session.ds().ok()?;
     // Half the canvas at most.
     let room = (ds.view.vw / 2.0) as f32;
-    let now = now_ms();
-    let this = cx.entity().downgrade();
-    let act = |command: &'static str, params: Value| {
-        let this = this.clone();
-        move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-            let _ = this.update(cx, |view, cx| view.facilitate(command, params.clone(), cx));
-        }
+    let now = Instant::now();
+    let act = |change: fn(&mut pomodoro::Pomodoro, Instant)| {
+        move |_: &ClickEvent, _: &mut Window, cx: &mut App| pomodoro::update(cx, change)
     };
-    let mut pill = FloatBar::new("board-facilitation");
-    match timer {
-        None => {
+    let mut pill = FloatBar::new("board-pomodoro");
+    match timer.run {
+        Run::Idle => {
             pill = pill.button(
-                BarButton::new("timer-start", Lucide::Timer, "Timer 5:00")
-                    .tooltip("Start a 5-minute timer for everyone on the board")
-                    .on_click(act("board.timer", json!({"action": "start", "minutes": 5}))),
+                BarButton::new(
+                    "pomodoro-start",
+                    Lucide::Timer,
+                    format!(
+                        "{} {}",
+                        timer.phase.label(),
+                        pomodoro::clock(timer.left(now))
+                    ),
+                )
+                .tooltip("Start a 25-minute focus")
+                .on_click(act(|p, now| p.start(now))),
             );
+            if timer.done > 0 {
+                pill = pill.text(
+                    "pomodoro-round",
+                    format!("Round {} of {ROUNDS}", timer.round()),
+                    false,
+                );
+            }
         }
-        Some(t) => {
-            let left = t.left(now);
-            let running = matches!(t, BoardTimer::Running { .. });
-            let (icon, label, action) = match running {
-                true => (Lucide::Pause, "Pause", "pause"),
-                false => (Lucide::Play, "Resume", "resume"),
+        Run::Running { .. } | Run::Paused { .. } => {
+            let running = timer.running();
+            let label = match timer.phase {
+                Phase::Focus => format!("Focus {} of {ROUNDS}", timer.round()),
+                phase => phase.label().to_string(),
+            };
+            let (icon, verb) = match running {
+                true => (Lucide::Pause, "Pause"),
+                false => (Lucide::Play, "Resume"),
+            };
+            let skip_to = match timer.phase {
+                Phase::Focus => "Skip to the Break",
+                _ => "Skip to the Next Focus",
             };
             pill = pill
-                .text("timer-left", clock(left), left == 0)
+                .text("pomodoro-phase", label, false)
+                .text("pomodoro-left", pomodoro::clock(timer.left(now)), false)
+                .divider()
                 .button(
-                    BarButton::new("timer-pause", icon, label)
-                        .on_click(act("board.timer", json!({"action": action}))),
+                    BarButton::new("pomodoro-pause", icon, verb).on_click(act(|p, now| {
+                        match p.running() {
+                            true => p.pause(now),
+                            false => p.start(now),
+                        }
+                    })),
                 )
                 .button(
-                    BarButton::new("timer-add", Lucide::Plus, "1 Min")
-                        .tooltip("Add a minute")
-                        .on_click(act("board.timer", json!({"action": "add", "minutes": 1}))),
+                    BarButton::new("pomodoro-skip", Lucide::SkipForward, "Skip")
+                        .tooltip(skip_to)
+                        .on_click(act(|p, now| {
+                            p.skip(now);
+                        })),
                 )
                 .button(
-                    BarButton::new("timer-stop", menu_icons::STOP, "Stop")
-                        .on_click(act("board.timer", json!({"action": "stop"}))),
+                    BarButton::new("pomodoro-stop", menu_icons::STOP, "Stop")
+                        .tooltip("Stop, Back to a Focus Not Started")
+                        .on_click(act(|p, _| p.stop())),
                 );
             if running {
-                view.tick_timer(cx);
+                view.tick_pomodoro(cx);
             }
         }
     }
-    pill = pill.divider();
-    pill = match voting {
-        Some(true) => {
-            let cast = {
-                let this = this.clone();
-                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                    let _ = this.update(cx, |view, cx| {
-                        let ids = view
-                            .board()
-                            .map(|b| b.session.selection().to_vec())
-                            .unwrap_or_default();
-                        view.facilitate("board.vote", json!({"action": "cast", "ids": ids}), cx)
-                    });
-                }
-            };
-            let end = {
-                let this = this.clone();
-                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                    let _ = this.update(cx, |view, cx| {
-                        view.facilitate("board.vote", json!({"action": "end"}), cx);
-                        view.show_vote_results(cx);
-                    });
-                }
-            };
-            pill.button(
-                BarButton::new("vote-cast", Lucide::Vote, "Vote on Selection")
-                    .disabled(!has_selection)
-                    .on_click(cast),
-            )
-            .button(BarButton::new("vote-end", Lucide::SquareCheck, "End Vote").on_click(end))
-        }
-        _ => {
-            let results = {
-                let this = this.clone();
-                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                    let _ = this.update(cx, |view, cx| view.show_vote_results(cx));
-                }
-            };
-            pill.button(
-                BarButton::new("vote-start", Lucide::Vote, "Start Vote")
-                    .tooltip("Start a vote, 3 votes each")
-                    .on_click(act("board.vote", json!({"action": "start", "votes": 3}))),
-            )
-            .button(
-                BarButton::new("vote-results", Lucide::ChartColumn, "Results").on_click(results),
-            )
-        }
-    };
     Some(
         div()
             .absolute()

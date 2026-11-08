@@ -111,15 +111,12 @@ pub const SAWIT_COMMANDS: &[(&str, &str, &str, &str)] = &[
     ),
     (VARIABLES, "Variables…", "View", "view.proofSrgb"),
     (COMMENTS, "Comments…", "View", VARIABLES),
-    (START_TIMER, "Start Timer (5 min)", "View", COMMENTS),
-    (START_VOTE, "Start Vote", "View", START_TIMER),
+    (POMODORO, "Pomodoro Timer", "View", COMMENTS),
 ];
 
-/// Start Timer and Start Vote: a board's countdown (`board.timer`, 5 minutes) and voting session
-/// (`board.vote`, 3 votes each). Sawit's own, which the app carries out: their pill over the
-/// canvas shows only while one runs or has results (B15).
-pub const START_TIMER: &str = "sawit.startTimer";
-pub const START_VOTE: &str = "sawit.startVote";
+/// Pomodoro Timer: shows or hides the Pomodoro pill on the canvases (25 minutes of focus, then a
+/// break), ticked while it shows. Sawit's own setting, which the app carries out and keeps.
+pub const POMODORO: &str = "sawit.pomodoro";
 
 /// How agents' builds play on the canvas (Full, Fast, Off), whether they click, and whether a
 /// session's subagents show as cursors of their own: Sawit's own settings, which the app keeps and

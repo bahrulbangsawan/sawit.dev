@@ -138,6 +138,7 @@ fn exact(id: &str) -> Option<Lucide> {
         policy::SUBAGENT_CURSORS => Lucide::MousePointer2,
         policy::VARIABLES => Lucide::Variable,
         policy::COMMENTS => Lucide::MessageSquareText,
+        policy::POMODORO => Lucide::Timer,
         policy::COPY_HANDOFF_PROMPT => icon::COPY,
         policy::REVEAL_HANDOFF => icon::REVEAL,
         _ if id.starts_with("sawit.sendTo.") => icon::AGENT,

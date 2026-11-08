@@ -244,15 +244,26 @@ fn control(request: app_control::Request, cx: &mut App) -> Result<Answer, String
                 "version": env!("CARGO_PKG_VERSION"),
                 "github": github,
                 "agent_accounts": accounts,
+                "pomodoro": crate::pomodoro::describe(cx),
                 "windows": windows,
                 "agents": agents,
             })));
         }
         ControlCommand::Reload { store } => {
+            if store == sawit_core::app_control::Store::Accounts {
+                crate::accounts::global(cx).update(cx, |m, cx| {
+                    m.reload();
+                    cx.notify();
+                });
+            }
             for (_, workspace) in workspaces(cx) {
                 workspace.update(cx, |w, cx| w.reload(store, cx));
             }
             return Ok(Answer::Now(serde_json::json!({ "reloaded": store })));
+        }
+        // The Pomodoro timer is the app's, not a window's.
+        ControlCommand::Pomodoro { action } => {
+            return crate::pomodoro::run(&action, cx).map(Answer::Now);
         }
         // The keymap is the app's, not a window's: no window needs to be open or found.
         ControlCommand::Keymap { op } => {

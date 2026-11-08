@@ -33,6 +33,7 @@ mod network;
 mod new_project_page;
 mod package_managers;
 mod permissions_page;
+mod pomodoro;
 mod ports;
 mod prompts;
 mod rt;
@@ -205,6 +206,12 @@ fn main() -> std::process::ExitCode {
             sawit_core::instances::AppPaths::default_macos()
                 .root
                 .join("agent-cursors.json"),
+            cx,
+        );
+        pomodoro::keep_setting(
+            sawit_core::instances::AppPaths::default_macos()
+                .root
+                .join("pomodoro.json"),
             cx,
         );
         terminal::init(cx);

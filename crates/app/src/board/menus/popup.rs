@@ -127,7 +127,9 @@ fn add_items(
                 // The keys as the keymap binds them now, not FigCraft's in the model.
                 let keys = crate::board::command_keys(id, cx);
                 // Sawit's build settings tick as the app holds them.
-                let checked = crate::agents::build_checked(id, cx).or(*checked);
+                let checked = crate::agents::build_checked(id, cx)
+                    .or_else(|| crate::pomodoro::checked(id, cx))
+                    .or(*checked);
                 menu.item(
                     menu_item(id, label, keys.as_deref(), view.clone())
                         .checked(checked == Some(true))
@@ -155,28 +157,7 @@ fn menu_item(
     view: WeakEntity<BoardView>,
 ) -> PopupMenuItem {
     let item = match keys {
-        Some(keys) => {
-            let label = SharedString::from(label.to_owned());
-            let keys = SharedString::from(keys.to_owned());
-            // no icon: the item's icon is given below, from its command.
-            PopupMenuItem::element(move |_, cx| {
-                h_flex()
-                    .debug_selector(move || format!("board-menu-{id}"))
-                    .w_full()
-                    .gap_6()
-                    .justify_between()
-                    // As text a screen reader reads: a menu item drawn from elements has no name.
-                    .child(crate::catalog::label(
-                        SharedString::from(format!("board-menu-{id}")),
-                        label.clone(),
-                    ))
-                    .child(
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(keys.clone()),
-                    )
-            })
-        }
+        Some(keys) => keyed_item(id, label, keys),
         // no icon: given below, from its command.
         None => PopupMenuItem::new(label.to_owned()),
     };
@@ -191,6 +172,39 @@ fn menu_item(
     };
     item.on_click(move |_, window, cx| {
         let _ = view.update(cx, |view, cx| view.run_menu(id, window, cx));
+    })
+}
+
+/// The item of command `id` called `label` with its `keys` on the right, as a screen reader reads
+/// it (a menu item drawn from elements has no name). Label and keys keep to one line, so the row
+/// is the menu's one height like the items without keys.
+fn keyed_item(id: &'static str, label: &str, keys: &str) -> PopupMenuItem {
+    let label = SharedString::from(label.to_owned());
+    let keys = SharedString::from(keys.to_owned());
+    // no icon: the caller gives the item its icon, from its command.
+    PopupMenuItem::element(move |_, cx| {
+        h_flex()
+            .debug_selector(move || format!("board-menu-{id}"))
+            .w_full()
+            .gap_6()
+            .justify_between()
+            .child(
+                crate::catalog::label(
+                    SharedString::from(format!("board-menu-{id}")),
+                    label.clone(),
+                )
+                .min_w_0()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .text_ellipsis(),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(keys.clone()),
+            )
     })
 }
 

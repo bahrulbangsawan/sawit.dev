@@ -225,6 +225,8 @@ gpui_kit::assets::icon_assets!(
         SquareMinus,
         SquarePen,
         Timer,
+        // The Pomodoro pill's Skip.
+        SkipForward,
         Ungroup,
         Variable,
         Vote,
