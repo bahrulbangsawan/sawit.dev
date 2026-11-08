@@ -3,6 +3,136 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.10] - 2026-11-08
+
+### Features
+
+- **mcp**: tools for the Pomodoro, tab menus, browser panels and Web Inspector, git merge, discard and init, account rename, move and remove, and a terminal's last output or errors; sawit account move
+- **canvas**: an agent's canvas comes forward when it starts drawing, so its cursor and work show without opening the file
+- **canvas**: Preview works as a prototype: switches flip, tabs select, links walk to other screens with Back, and agents wire and walk screens with canvas_preview
+- **canvas**: a Pomodoro timer takes the place of the timer and vote pill
+- **browser**: Copy Prompt copies every fix at once on the SEO panel's Overview, Checks and Agents tabs
+- **permissions**: the Permissions page in the catalog lists' style, with search, section tabs, status pills and Add Rule
+- **accounts**: the Accounts page fills the width, its charts answer on hover, avatars show the agent's logo, and its buttons are compact with icons and the danger colour where it fits
+- **canvas**: the lint in exports and screen reads, and a starter with no lint errors
+- **canvas**: Preview zooms, frames, sizes to order and opens in the browser
+- **canvas**: panels fitted to the selection, a compact Layers panel
+- **canvas**: Convert to Layers, and layers as UI's default
+- **browser**: capture menu, recording timer and the capture bar
+- **skills**: Sawit Skills v2 teach every Sawit tool, with a coverage test
+- **browser**: an agent's click on a tab on screen is a real mouse click
+- **mcp**: screenshot options and browser_record tools
+- **browser**: full-page recording, a scroll through the whole page
+- **prompts**: deletes carry over, secrets ask first, Restore on a new Mac, pull on launch
+- **browser**: native video recording with AVAssetWriter
+- **new-project**: Upgrade to a newer create-better-t-stack, and Go Back
+- **accounts**: the pool's six views on the Accounts page, with the agents Sawit sees
+- **canvas**: a design lint, tokens over raw values and a starter system for agents
+- **keys**: open, close and fill each area with one key, new file and new project
+- **canvas**: agents' cursors show their client's logo, and a second agent gets a random name
+- **canvas**: fit the view when an agent starts, and Follow agent
+- **canvas**: every canvas function has an MCP path, kept by a test
+- **canvas**: Present shows screens, the timer pill only when used, and clearer panels
+- **accounts**: the account pool across agents in sawit-core, and account_pool for agents
+- **browser**: full-page screenshots, in tiles when tall, and as PDF
+- **browser**: every device class and resolution, captured at the chosen size
+- **browser**: agent-readiness checks in the SEO scan
+- **canvas**: redesign the screen, artboard and flow bars and Send to Agent's menu
+- **ui**: icons on every menu item, destructive items in the danger colour
+- **ui**: one menu look and one floating bar for the canvas
+- **accounts**: redesign the Accounts page, every tab, the list and the toggles
+- **terminal**: agents reuse their own idle terminal, and one-off tabs close when done
+- **browser**: SEO panel and browser_seo
+- **mcp**: audit every tool, add git fetch/pull/push, and a code mode (search_api + run)
+- **tabs**: activity icons on terminal, browser and canvas tabs
+- **browser**: page favicons on the browser's tabs
+- **cli**: sawit permissions, sawit shell and sawit prompts, on the same core as the app and MCP
+- **mcp**: canvas_get answers the page's comment threads, and the README says how agents reach the canvas's new tools
+- **canvas**: wire the new panels, windows and tools into the canvas
+- **canvas**: dialogs for commands that need a value, and version history
+- **canvas**: comments, canvas aids, Shape Builder, and a board's timer and votes
+- **canvas**: gradients, image fills, effect fields, layout and type details
+- **canvas**: Variables window, component properties and the Assets tab
+- **canvas**: Prototype tab, Present player and Dev Mode's Inspect panel
+- **canvas**: route frames show the whole page and follow their size
+- **canvas**: build animation settings, quiet synthesised sounds, reduced motion and canvas_settings
+- **canvas**: a screen an agent writes plays its build of what changed, then goes live
+- **canvas**: agents' ops play over the canvas as a designer would build them, a queue per lane
+- **canvas**: agents' pointers draw what they do and travel on curved, eased paths
+- **app**: import from Claude Pool, and offer to remove it
+- **mcp**: Agent Accounts tools
+- **app**: Agent Accounts' sessions, Continue On…, usage analytics, limit alerts and diagnostics
+- **app**: Sawit's own status line for Claude Code accounts
+- **app**: shared settings across Agent Accounts
+- **app**: the shell block, sawit account, cp1–cp9 and Open at Login
+- **app**: the Accounts page and the title bar's account chip
+- **core**: Agent Accounts' usage collector, 5h/7d usage and the tracking opt-in
+- **core**: Agent Accounts: accounts, the active pointer and Claude Code's sign-in and plan
+- **app**: the shared confirm covers the other tracks' destructive actions, and the terminal menus use find and full screen
+- **terminal**: the terminal's menus as complete as the file tab menu, and Safe/Force Close All
+- **terminal**: copy a command's output or its errors, and an instance's logs, in one step
+- **terminal**: lock, pin and close-all for terminal tabs
+- **terminal**: closing a project closes its terminals and stops what they started
+- **app**: every destructive action asks first, with one shared confirm dialog
+- **canvas**: several canvases per project, each in a tab of its own
+- **browser**: tabs in the browser, with only the tab on show keeping its page
+- **permissions**: a Permissions page for agents' rules, Sawit's confirm tools and macOS permissions
+- **canvas**: Send to Agent for artboards and flows, with a spec, and canvas_handoff for agents
+- **canvas**: Export HTML and Export React for artboards, everywhere a screen has them
+- **mcp**: the design standard is on by default: its digest goes with the work and its rules are checked
+- **app**: one ⌘F find bar in files, Markdown, PDFs, the browser, the canvas and the terminal
+- **app**: the terminal, the browser or the canvas fills the window, and the layout comes back as it was
+- **prompts**: back up the prompt library to GitHub and restore it
+- **app**: shell files and GitHub: one button per sign-in state, and a two-way sync
+- **browser**: list the local dev servers beside the address, and open one in a click
+- **browser**: a page loading shows a progress bar under the toolbar, so it never looks hung
+- **skills**: Design to Code from Atharvsinh-codez/skills
+- **skills**: shadcn/ui's official skills
+- **tools**: voxl, built on this Mac and started on 127.0.0.1 only
+- **tools**: HyperFrames CLI and Studio, FFmpeg, and the HyperFrames skills pack
+- **tools**: Herdr and Herdr TUI on the Dev Tools page
+- **tools**: MinIO and the MinIO Client from MinIO's Homebrew tap
+- **tools**: the GitHub CLI on the Dev Tools page, its gh sign-in, and Install GitHub CLI where it helps
+
+### Fixes
+
+- **ui**: tooltips step the browser's page and live frames back instead of hiding behind them, and keyed menu rows keep the menu's one height
+- **app**: the control socket answers every request, even when the client's close comes late
+- **canvas**: app_state reports every canvas tab's view, and Present is checked end to end
+- **canvas**: screens are pictured whole and sharp, never half-drawn or black
+- **canvas**: ⌘F on the canvas opens the app's find bar again
+- **mcp**: app_open_page names the Permissions and Accounts pages
+- **skills**: an install sheet that can't run here says why to a screen reader
+- **canvas**: the top bar's icon buttons have names
+- **app**: ⇧⌘↩ in the browser fills the window and keeps the layout to come back to
+- **core**: a run with another HOME never sees the Mac's Claude Pool
+- **app**: the Diagnostics tab's checks can be read by assistive technology
+- **browser**: a tab with no address yet no longer crashes the app when asked for its URL
+- **canvas**: every agent of a session gets its own cursor, not one shared pointer
+- **app**: embed the Users and FolderInput icons the Accounts page names
+- **app**: Agent Accounts' removals ask with the shared confirm
+- **app**: full screen finds the browser through its tabs
+- **browser**: mesurer's toolbar keeps its size at a device preview's scale, and the overlay's chips cut long names
+- **app**: the annotate agent menu grows to fit, and long routes, errors and account details stay in their boxes
+- **ui**: a menu item too long for its menu ends in an ellipsis, with the whole of it in a tooltip
+- **skills**: Factory Droid's skills are in the shared ~/.agents/skills, and its own folder still counts
+- **app**: what is typed in the terminal's find bar stays in the bar
+- **app**: ⌘F in a code file opens the app's find bar, not the editor input's own panel
+- **app**: the shell files' diff button uses an icon the app embeds
+- **app**: a GitHub sign-in survives restarts: only Sign Out or a 401 from GET /user ends it
+- **browser**: the note popover keeps its size and fits at any device size; agents never cover it
+- **browser**: a device preview shows the device's exact height, not a pixel off
+- **browser**: device preview scales the view, not the page zoom, so small text keeps its size
+- **app**: the user's keys go where the user is, never to a page an agent or a script focused
+
+### Performance
+
+- **app**: large blocks go back to the system when freed
+- **canvas**: system font files are mapped, not read
+- **editor**: one syntax set for the editors and Markdown's code blocks
+- **mermaid**: Pele's engine gives its memory back after two idle minutes
+- **core**: the Pele and mesurer bundles ship deflated
+
 ## [0.0.9] - 2026-11-03
 
 ### Features
