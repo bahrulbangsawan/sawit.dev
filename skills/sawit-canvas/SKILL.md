@@ -17,6 +17,10 @@ A screen, page or app view is a frame of editable layers, so the user can select
 
 An HTML screen is for a live web prototype the user asks for: `canvas_begin {kind: "screen"}`, then `canvas_screen_write` with its HTML and files. Each write renders on the canvas and answers the design standard's machine checks; fix them before `canvas_progress {status: "done"}`. `canvas_screen_get` reads a screen back with a PNG. `canvas_screen_to_layers` (Convert to Layers) turns a screen into editable layers beside it, with auto layout and its colours as variables; the HTML screen stays.
 
+Make HTML screens a working prototype: their controls work in Preview (a switch is `role="switch"` with `aria-checked` and flips, a tab or segment selects), and every button, link or tab that leads to another screen of the flow links to it with `href="sawit-screen://<screen>/"` (or `data-screen="<screen>"`). When you make screens that belong together (a tab bar, a sign-in that leads to a home, a list to its detail), wire them without being asked, so the user can walk the flow in Preview. Your first change to a canvas brings its tab forward, so the user watches you work.
+
+`canvas_preview` drives Preview and Present as the user does from a screen's bar: `open` a screen full size, `walk` to another screen as a click on its link does (Back returns), `back`, `set` the size (a device, or `[w, h]`), zoom and device frame, `state`, `close`, and `present`, and closes Present. Walk the flow you wired to check every link goes where it should.
+
 ## Systems and lint
 
 - `canvas_starter_system` lays out a starter design system (tokens as variables, Light and Dark, and Button, Input and Card components) so a design never starts from nothing; build screens from its components.

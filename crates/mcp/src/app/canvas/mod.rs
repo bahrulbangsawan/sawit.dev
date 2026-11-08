@@ -11,6 +11,7 @@ mod files;
 mod guide;
 mod handoff;
 mod lint_tools;
+mod preview;
 mod routes;
 mod screens;
 mod settings;
@@ -27,9 +28,9 @@ use serde_json::{Value, json};
 pub use args::{
     CanvasAddRoutesArgs, CanvasBeginArgs, CanvasCommandArgs, CanvasCommandsArgs, CanvasDeleteArgs,
     CanvasDesignGuideArgs, CanvasElementsArgs, CanvasExportArgs, CanvasHandoffArgs, CanvasLintArgs,
-    CanvasLoadArgs, CanvasMermaidArgs, CanvasProgressArgs, CanvasScreenExportArgs,
-    CanvasScreenGetArgs, CanvasScreenWriteArgs, CanvasSettingsArgs, CanvasStarterArgs,
-    CanvasTargetArgs, CanvasUpdateArgs,
+    CanvasLoadArgs, CanvasMermaidArgs, CanvasPreviewArgs, CanvasProgressArgs,
+    CanvasScreenExportArgs, CanvasScreenGetArgs, CanvasScreenWriteArgs, CanvasSettingsArgs,
+    CanvasStarterArgs, CanvasTargetArgs, CanvasUpdateArgs,
 };
 use dispatch::{command_list, in_work};
 use files::{absolute_path, is_sawit_file, read_scene};
@@ -324,7 +325,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Write a UI screen's HTML (begun with canvas_begin {kind: \"screen\"}): the whole page (`html`), or `edits` to it, and its other files (`files`: CSS, scripts, SVG, images as base64). Each write re-renders the screen on the canvas, so the user watches it build: lay it out, then fill in copy, then style it, writing as you go, and say each step with canvas_progress. Each answer has `design_checks`: the design standard's machine checks of the page as written (contrast, target and text sizes, the spacing scale, alt text, labels, focus rings, text that overflows), each failure {rule, selector, fix}, also shown on the frame; fix them before you finish. The page has no network: put fonts, images and scripts in its folder, or use system fonts. Answers the files written. With the app closed the files are written and nothing renders. Designing UI? Read canvas_design_guide first and follow it"
+        description = "Write a UI screen's HTML (begun with canvas_begin {kind: \"screen\"}): the whole page (`html`), or `edits` to it, and its other files (`files`: CSS, scripts, SVG, images as base64). Each write re-renders the screen on the canvas, so the user watches it build: lay it out, then fill in copy, then style it, writing as you go, and say each step with canvas_progress. Each answer has `design_checks`: the design standard's machine checks of the page as written (contrast, target and text sizes, the spacing scale, alt text, labels, focus rings, text that overflows), each failure {rule, selector, fix}, also shown on the frame; fix them before you finish. The page has no network: put fonts, images and scripts in its folder, or use system fonts. Make it a working prototype in Preview: its controls work (a switch is role=\"switch\" with aria-checked and flips; a tab, segment or chip selects), and every button, link or tab that leads to another screen of the flow links to it with href=\"sawit-screen://<screen>/\" (or data-screen=\"<screen>\"), so Preview walks from screen to screen; when you make screens that belong together, wire them so without being asked. Answers the files written. With the app closed the files are written and nothing renders. Designing UI? Read canvas_design_guide first and follow it"
     )]
     async fn canvas_screen_write(
         &self,
@@ -354,6 +355,17 @@ impl Sawit {
     ) -> CallToolResult {
         tri!(a.tab_into_file());
         self.canvas_screen_export_tool(a).await
+    }
+
+    #[tool(
+        description = "Preview and Present a UI screen as the user does from its bar, and walk it as a prototype: open shows the screen full size and live over the canvas; walk goes to another screen as a click on a link to it does (the size kept, and Back to return); back, set (size: made, window, a device or [w, h]; zoom: fit or 100%; device_frame; rotated), state (the screen shown, its title and size, and the other screens it can walk to), close; present and close_present for Present. Preview's page works: switches flip and tabs select when clicked, and links to other screens walk there. Answers what Preview shows after the action. Needs the app running, with the canvas's tab on screen for Preview to show"
+    )]
+    async fn canvas_preview(
+        &self,
+        Parameters(mut a): Parameters<CanvasPreviewArgs>,
+    ) -> CallToolResult {
+        tri!(a.tab_into_file());
+        self.canvas_preview_tool(a).await
     }
 
     #[tool(

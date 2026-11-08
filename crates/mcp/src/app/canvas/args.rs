@@ -416,3 +416,31 @@ pub struct CanvasAddRoutesArgs {
     #[schemars(description = CANVAS_PROJECT)]
     pub project: Option<String>,
 }
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CanvasPreviewArgs {
+    #[schemars(
+        description = "open (the screen in Preview, at the size it was made at), walk (to another screen, as a click on a prototype link to it does, keeping the size and the way back), back (to the screen Preview came from), set (size, zoom, device_frame, rotated), state (what Preview shows: screen, title, size, the screens it can walk to), close, present (Present from the screen, full screen) or close_present"
+    )]
+    pub action: String,
+    #[schemars(
+        description = "The screen: its folder name under .nyawit/screens/, as canvas_screen_get lists them (for open, walk and present)"
+    )]
+    pub screen: Option<String>,
+    #[schemars(
+        description = "For set: made (the size it was made at), window (the canvas's room), a device's name (\"iPhone 15\") or [width, height]"
+    )]
+    pub size: Option<Value>,
+    #[schemars(description = "For set: fit or 100%")]
+    pub zoom: Option<String>,
+    #[schemars(description = "For set: show the device frame")]
+    pub device_frame: Option<bool>,
+    #[schemars(description = "For set: turned on its side")]
+    pub rotated: Option<bool>,
+    #[schemars(description = CANVAS_FILE)]
+    pub file: Option<String>,
+    #[schemars(description = CANVAS_TAB)]
+    pub tab: Option<String>,
+    #[schemars(description = CANVAS_PROJECT)]
+    pub project: Option<String>,
+}

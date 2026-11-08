@@ -112,12 +112,8 @@ const PATHS: &[(&str, McpPath)] = &[
         McpPath::CommandAs("comment.list, comment.add, comment.reply, comment.resolve"),
     ),
     (
-        policy::START_TIMER,
-        McpPath::CommandAs("board.timer {action: \"start\", minutes}"),
-    ),
-    (
-        policy::START_VOTE,
-        McpPath::CommandAs("board.vote {action: \"start\", votes}"),
+        policy::POMODORO,
+        McpPath::UserOnly("the user's own focus timer: whether it shows, and when it runs"),
     ),
     (
         policy::COPY_HANDOFF_PROMPT,
@@ -158,9 +154,17 @@ pub const APP_CONTROLS: &[(&str, McpPath)] = &[
         ),
     ),
     (
+        "Preview: open, size, zoom, device frame, Back, a prototype's links, Close",
+        McpPath::Tool(
+            "canvas_preview",
+            "{action: open | walk | back | set | state | close, screen}",
+        ),
+    ),
+    (
         "Present",
-        McpPath::UserOnly(
-            "Present and Preview are the user's: app_state's canvases[].view says whether they show; canvas_screen_get and canvas_export picture what they would",
+        McpPath::Tool(
+            "canvas_preview",
+            "{action: present | close_present, screen}",
         ),
     ),
     (

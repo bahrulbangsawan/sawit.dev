@@ -142,6 +142,10 @@ impl BoardView {
         if let Some(frame) = self.screen_ui.open_preview.take() {
             self.open_preview(frame, window, cx);
         }
+        // A click in Preview's page led to another screen, which needs the window to build.
+        if let Some((frame, back)) = self.screen_ui.walk.take() {
+            self.walk_preview(frame, back, window, cx);
+        }
         if let Some(typed) = self.screen_ui.custom_typed.take() {
             self.preview_custom_typed(typed, window, cx);
         }

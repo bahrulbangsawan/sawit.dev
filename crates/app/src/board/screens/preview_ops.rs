@@ -19,7 +19,19 @@ impl BoardView {
             Size::Device(i) => DEVICES.get(i).map_or("", |d| d.name).to_string(),
             Size::Custom(w, h) => format!("custom {w}x{h}"),
         };
+        let screen = (self.board().and_then(|b| b.session.ds().ok()))
+            .and_then(|ds| sawit_board::screens::screen_of(ds.doc.node(p.frame)?))
+            .map(|d| d.screen);
+        // The screens a click in the page leads to, by name ([`super::prototype`]).
+        let links: Vec<String> = self
+            .page_screens()
+            .into_iter()
+            .map(|s| s.name)
+            .filter(|n| Some(n) != screen.as_ref())
+            .collect();
         serde_json::json!({
+            "frame": p.frame.0, "screen": screen, "title": p.title, "back": p.back.len(),
+            "other_screens": links,
             "size": size, "css": p.css_size((1.0, 1.0)), "rotated": p.rotated,
             "zoom": if p.zoom == Zoom::Actual { "100%" } else { "fit" },
             "device_frame": p.frame_shown(), "custom_open": p.custom.is_some(),

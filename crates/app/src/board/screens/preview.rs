@@ -72,6 +72,8 @@ pub(in crate::board) struct Preview {
     pub custom: Option<CustomEdit>,
     pub engine: Option<Engine>,
     pub placed: Option<(ViewFrame, f64)>,
+    /// The screens Preview walked from, the last the one Back goes to ([`super::prototype`]).
+    pub back: Vec<NodeId>,
 }
 
 impl Preview {
@@ -87,6 +89,7 @@ impl Preview {
             custom: None,
             engine,
             placed: None,
+            back: Vec::new(),
         }
     }
 
@@ -205,9 +208,11 @@ impl BoardView {
         };
         let to_view = web.to_view.clone();
         let name = data.screen.clone();
+        // The page works as a prototype: its controls, and its links to the page's other screens.
+        let prototype = super::prototype::script(&name, &self.page_screens());
         let spec = EngineSpec {
             url: screens::url(&name),
-            init_script: INIT.into(),
+            init_script: format!("{INIT}\n{prototype}"),
             data_store: None,
             visible: false,
             frame: ViewFrame {
@@ -246,6 +251,32 @@ impl BoardView {
         );
         self.screen_ui.preview = Some(Preview::new(frame, title, made, Some(engine)));
         cx.notify();
+    }
+
+    /// Shows screen frame `frame` in Preview in place of the one shown, as a click in its page led
+    /// there: at the same size, zoom, side and frame, with `back` the way back.
+    pub(in crate::board) fn walk_preview(
+        &mut self,
+        frame: NodeId,
+        back: Vec<NodeId>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(was) = self.screen_ui.preview.as_ref() else {
+            return;
+        };
+        let (size, rotated, zoom, framed) = (was.size, was.rotated, was.zoom, was.framed);
+        self.open_preview(frame, window, cx);
+        if let Some(preview) = self.screen_ui.preview.as_mut() {
+            // A device or custom size goes with the walk; the size a screen was made at is its own.
+            if size != Size::Made {
+                preview.size = size;
+            }
+            preview.rotated = rotated;
+            preview.zoom = zoom;
+            preview.framed = framed;
+            preview.back = back;
+        }
     }
 
     /// Ends Preview: its view goes.

@@ -53,4 +53,5 @@ canvas_tab!(
     CanvasAddRoutesArgs,
     CanvasLintArgs,
     CanvasStarterArgs,
+    CanvasPreviewArgs,
 );

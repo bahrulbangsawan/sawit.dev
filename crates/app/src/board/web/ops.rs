@@ -44,6 +44,9 @@ impl BoardView {
             ("bench", _) => self.web_bench(op, cx),
             ("config", _) => self.web_config(op),
             ("routes", _) => Ok(self.web_routes_dialog(op, cx)),
+            // Preview's way back and its state need no frame named.
+            ("back", _) => self.preview_back_op(cx).map(|_| json!("going back")),
+            ("preview_state", _) => Ok(self.preview_state()),
             (_, None) => Err("no web frame on this page".to_string()),
             // An agent's: the frame goes live without the user's keyboard.
             ("enter", Some(id)) => self.web_enter(id, false, cx).map(|state| json!(state)),
@@ -51,19 +54,21 @@ impl BoardView {
             ("settle", Some(id)) => self.web_settle_op(op, id, cx),
             ("probe", Some(id)) => self.web_probe(id, op),
             ("reload", Some(id)) => self.web_reload(id),
-            // The e2e specs' way into Preview and Present, which no agent tool opens: they are
-            // the user's (B15).
+            // Present and Preview, for agents (canvas_preview) and the e2e specs: Preview opens at
+            // the next draw, and its controls are set as the user's clicks set them.
             ("present", Some(id)) => {
                 self.open_player(Some(id), cx);
                 Ok(json!(self.player.is_some()))
             }
-            // Preview the same way, opened at the next draw, and its controls set as clicks do.
             ("preview", Some(id)) => {
                 self.screen_ui.open_preview = Some(id);
                 cx.notify();
                 Ok(json!("opening"))
             }
             ("preview_set", _) => self.preview_set(op, cx),
+            // A prototype's link followed: Preview shows `id`'s screen in place of its own, with
+            // the way back, as a click on a link to it in the page does.
+            ("walk", Some(id)) => self.preview_walk_to(id, cx).map(|_| json!("walking")),
             ("preview_custom", _) => {
                 let text = |k: &str| {
                     op.get(k)
@@ -95,10 +100,19 @@ impl BoardView {
         }
     }
 
-    /// The frame an op names by `id` (a node id or an agent's id), else the first on the page.
+    /// The frame an op names by `screen` (a screen's folder name), `id` (a node id or an agent's
+    /// id), else the first on the page.
     fn web_target(&self, op: &Value) -> Option<NodeId> {
         let ds = self.board()?.session.ds().ok()?;
         let nodes = web_nodes(&ds.doc, ds.page);
+        if let Some(name) = op.get("screen").and_then(Value::as_str) {
+            return nodes.iter().map(|node| node.id).find(|id| {
+                ds.doc
+                    .node(*id)
+                    .and_then(sawit_board::screens::screen_of)
+                    .is_some_and(|data| data.screen == name)
+            });
+        }
         let named = match op.get("id") {
             Some(Value::Number(n)) => n.as_u64().map(NodeId),
             Some(Value::String(s)) => sawit_board::skeleton::resolve(&ds.doc, s),

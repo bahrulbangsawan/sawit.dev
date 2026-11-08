@@ -306,6 +306,23 @@ pub(in crate::board) fn render_preview(
             zoom("screen-preview-actual", Zoom::Actual, "100%").into_any_element(),
         ],
     };
+    // Back, once a click in the page walked to another screen ([`super::prototype`]).
+    let back = (!preview.back.is_empty()).then(|| {
+        let this = this.clone();
+        let mut back = Button::new("screen-preview-back")
+            .small()
+            .ghost()
+            .icon(Lucide::ChevronLeft)
+            .accessibility_label("Back to the Previous Screen")
+            .tooltip("Back to the Previous Screen")
+            .on_click(move |_, _, cx| {
+                let _ = this.update(cx, |view, cx| view.preview_back(cx));
+            });
+        if !tight {
+            back = back.label("Back");
+        }
+        back
+    });
     let mut close = Button::new("screen-preview-close")
         .small()
         .icon(menu_icons::CLOSE)
@@ -341,6 +358,7 @@ pub(in crate::board) fn render_preview(
         .border_b_1()
         .border_color(theme.border)
         .bg(theme.background)
+        .children(back)
         .child(title)
         .child(div().flex_shrink_0().child(size_part));
     // While a custom size is typed, the bar holds its fields, then Close.

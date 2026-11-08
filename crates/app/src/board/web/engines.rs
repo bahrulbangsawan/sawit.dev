@@ -165,6 +165,15 @@ impl BoardView {
             WebMsg::Preview(EngineEvent::Ipc(body)) if body == "sawit-web:escape" => {
                 self.close_preview(cx);
             }
+            // A click in Preview's page led to another screen, or back ([`crate::board::screens`]'s
+            // prototype).
+            WebMsg::Preview(EngineEvent::Ipc(body)) if body.starts_with("sawit-web:go:") => {
+                let name = body.trim_start_matches("sawit-web:go:").to_string();
+                self.preview_go(&name, cx);
+            }
+            WebMsg::Preview(EngineEvent::Ipc(body)) if body == "sawit-web:back" => {
+                self.preview_back(cx);
+            }
             WebMsg::Preview(_) => {}
             WebMsg::Engine(..) => {}
         }

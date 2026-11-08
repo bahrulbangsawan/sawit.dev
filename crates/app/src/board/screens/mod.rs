@@ -16,6 +16,7 @@ mod pictures;
 mod preview;
 mod preview_bar;
 mod preview_ops;
+mod prototype;
 #[cfg(test)]
 mod tests;
 
@@ -48,6 +49,9 @@ pub(in crate::board) struct ScreenUi {
     pub checks_open: Option<NodeId>,
     /// A Preview to open at the next draw (the `web` op's `preview`, for the e2e specs).
     pub open_preview: Option<NodeId>,
+    /// The screen Preview walks to at the next draw, a click in its page having led there
+    /// ([`prototype`]), with the way back.
+    pub walk: Option<(NodeId, Vec<NodeId>)>,
     /// Custom size typed at the next draw (the `web` op's `preview_custom`): width, height, and
     /// whether Apply is pressed.
     pub custom_typed: Option<(String, String, bool)>,
