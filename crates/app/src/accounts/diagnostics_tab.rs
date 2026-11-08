@@ -180,7 +180,7 @@ impl AccountsPage {
                     .into_any_element()
             })
             .collect();
-        let (scroll, content) = ui::tab_body("accounts-diagnostics", ui::CONTENT_MAX);
+        let (scroll, content) = ui::tab_body("accounts-diagnostics");
         scroll
             .child(
                 content

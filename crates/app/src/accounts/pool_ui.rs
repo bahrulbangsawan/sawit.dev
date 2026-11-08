@@ -2,6 +2,7 @@
 //! Pool's data is there and Sawit hasn't imported it; the Settings tab offers to remove Claude
 //! Pool once nothing needs it. Both show everything first, back up first, and ask.
 
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::*;
@@ -205,8 +206,9 @@ impl AccountsPage {
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().secondary)
-                .child(div().flex_1().text_sm().child("Claude Pool's accounts, usage history, status line and settings are on this Mac. Bring them into Sawit?"))
-                .child(Button::new("accounts-import").small().primary().label("Import from Claude Pool…").on_click(cx.listener(|this, _, window, cx| this.confirm_import(window, cx))))
+                .flex_wrap()
+                .child(div().flex_1().min_w(px(240.)).text_sm().whitespace_normal().child("Claude Pool's accounts, usage history, status line and settings are on this Mac. Bring them into Sawit?"))
+                .child(Button::new("accounts-import").small().primary().icon(Lucide::FolderInput).label("Import from Claude Pool…").on_click(cx.listener(|this, _, window, cx| this.confirm_import(window, cx))))
                 .into_any_element(),
         )
     }
@@ -226,7 +228,8 @@ impl AccountsPage {
                 .border_color(cx.theme().border)
                 .child(div().text_sm().font_semibold().child("Claude Pool"))
                 .child(div().text_sm().text_color(muted).child("Claude Pool is still on this Mac. Once its accounts are imported and it has quit, Sawit can remove it, after packing its data into one backup."))
-                .child(Button::new("accounts-remove-pool").small().outline().label("Remove Claude Pool…").on_click(cx.listener(|this, _, window, cx| this.confirm_remove_pool(window, cx))))
+                // A compact button on the right, not one across the card.
+                .child(h_flex().justify_end().child(Button::new("accounts-remove-pool").small().danger().outline().icon(Lucide::Trash).label("Remove Claude Pool…").on_click(cx.listener(|this, _, window, cx| this.confirm_remove_pool(window, cx)))))
                 .into_any_element(),
         )
     }

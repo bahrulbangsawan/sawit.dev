@@ -9,7 +9,7 @@ use gpui_kit::*;
 use sawit_core::agent_accounts::pool::{self, FitVerdict, LimitKind, PoolAccount, Reading};
 use sawit_core::date;
 
-use super::money;
+use super::{heat, money};
 use crate::accounts::page::AccountsPage;
 use crate::accounts::ui;
 
@@ -201,61 +201,7 @@ impl AccountsPage {
                 cx,
             ));
         // Weekday by hour: darker is more use; a dot marks hours spent at the limit.
-        let max = heat.max().max(1e-9);
-        let primary = cx.theme().primary;
-        let grid = v_flex()
-            .id("an-heatmap")
-            .role(Role::Image)
-            .aria_label(match busiest {
-                Some((d, h, _)) => format!(
-                    "Use by weekday and hour; busiest {} {:02}:00",
-                    date::WEEKDAYS[d],
-                    h
-                ),
-                None => "Use by weekday and hour: no use in the history yet".into(),
-            })
-            .gap(px(2.))
-            .children((0..7).map(|d| {
-                h_flex()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .w(px(32.))
-                            .text_xs()
-                            .text_color(muted)
-                            .child(date::WEEKDAYS[d]),
-                    )
-                    .children((0..24).map(|h| {
-                        let v = heat.used[d][h] / max;
-                        div()
-                            .flex_1()
-                            .h(px(14.))
-                            .rounded(px(2.))
-                            .bg(primary.opacity(0.06 + 0.8 * v as f32))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when(heat.locked[d][h] > 0, |el| {
-                                el.child(div().size(px(4.)).rounded_full().bg(cx.theme().danger))
-                            })
-                    }))
-            }))
-            .child(
-                h_flex()
-                    .gap(px(2.))
-                    .child(div().w(px(32.)))
-                    .children((0..24).map(|h| {
-                        div()
-                            .flex_1()
-                            .text_size(px(10.))
-                            .text_color(muted)
-                            .child(if h % 6 == 0 {
-                                format!("{h:02}")
-                            } else {
-                                String::new()
-                            })
-                    })),
-            );
+        let grid = heat::grid(&heat, busiest, cx);
         // Plan fit, sortable by its columns.
         let mut fits: Vec<(String, pool::PlanFit)> = chosen
             .iter()
@@ -382,25 +328,49 @@ impl AccountsPage {
                             .h(px(14.))
                             .rounded(px(3.))
                             .bg(cx.theme().accent)
-                            .children(spans.iter().filter(|w| w.end > period_start).map(|w| {
-                                let l = ((w.start.max(period_start) - period_start)
-                                    / (now - period_start))
-                                    .clamp(0.0, 1.0) as f32;
-                                let r = ((w.end.min(now) - period_start) / (now - period_start))
-                                    .clamp(0.0, 1.0) as f32;
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .bottom_0()
-                                    .left(relative(l))
-                                    .w(relative((r - l).max(0.003)))
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(cx.theme().background)
-                                    .bg(ui::meter_color(w.peak_pct, cx).opacity(
-                                        0.25 + 0.75 * (w.peak_pct / 100.0).min(1.0) as f32,
-                                    ))
-                            })),
+                            .children(
+                                spans
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, w)| w.end > period_start)
+                                    .map(|(i, w)| {
+                                        let l = ((w.start.max(period_start) - period_start)
+                                            / (now - period_start))
+                                            .clamp(0.0, 1.0)
+                                            as f32;
+                                        let r = ((w.end.min(now) - period_start)
+                                            / (now - period_start))
+                                            .clamp(0.0, 1.0)
+                                            as f32;
+                                        let said = format!(
+                                            "Weekly window {} – {} · peak {:.0}%{}",
+                                            date::when_label(w.start as i64, now as i64),
+                                            date::when_label(w.end as i64, now as i64),
+                                            w.peak_pct,
+                                            match w.hit_at {
+                                                Some(t) => format!(
+                                                    " · at the limit from {}",
+                                                    date::when_label(t as i64, now as i64)
+                                                ),
+                                                None => String::new(),
+                                            }
+                                        );
+                                        let id = format!("an-week-{}-{i}", a.id);
+                                        let bar = div()
+                                            .absolute()
+                                            .top_0()
+                                            .bottom_0()
+                                            .left(relative(l))
+                                            .w(relative((r - l).max(0.003)))
+                                            .rounded(px(3.))
+                                            .border_1()
+                                            .border_color(cx.theme().background)
+                                            .bg(ui::meter_color(w.peak_pct, cx).opacity(
+                                                0.25 + 0.75 * (w.peak_pct / 100.0).min(1.0) as f32,
+                                            ));
+                                        ui::chart_tip(bar, id, said, cx)
+                                    }),
+                            ),
                     )
                     .child(
                         div()

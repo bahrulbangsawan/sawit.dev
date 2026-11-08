@@ -110,8 +110,8 @@ impl AccountsPage {
                 ui::group_box(cx).children(ui::rows(items, cx)).into_any_element()
             });
         let notices_box = v_flex()
-            .w(px(380.))
-            .flex_none()
+            .flex_1()
+            .min_w(px(320.))
             .child(
                 ui::section_header(Lucide::Bell, "Notifications", cx)
                     .when(unread > 0, |el| {

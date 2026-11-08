@@ -13,6 +13,7 @@ use gpui_kit::*;
 use sawit_core::agent_accounts::advice;
 use sawit_core::agent_accounts::analytics::{self, Totals};
 use sawit_core::agent_accounts::sessions::{self, Session};
+use sawit_core::terminal::AgentKind;
 
 use super::page::AccountsPage;
 use super::ui;
@@ -314,7 +315,7 @@ impl AccountsPage {
                                     .flex_1()
                                     .min_w_0()
                                     .gap_2()
-                                    .child(ui::avatar(&name, &color, 20., cx))
+                                    .child(ui::avatar(AgentKind::ClaudeCode, &color, 20., cx))
                                     .child(div().truncate().child(name)),
                             )
                             .child(div().w(px(120.)).flex_none().truncate().text_color(muted).child(model.clone()))
@@ -366,7 +367,7 @@ impl AccountsPage {
                         .px_4()
                         .py_2()
                         .gap_2()
-                        .child(ui::avatar(&name, &color, 20., cx))
+                        .child(ui::avatar(AgentKind::ClaudeCode, &color, 20., cx))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -384,6 +385,7 @@ impl AccountsPage {
                             Button::new(SharedString::from(format!("hand-off-{}", s.pid)))
                                 .xsmall()
                                 .outline()
+                                .icon(Lucide::ArrowLeftRight)
                                 .label("Continue On…")
                                 .disabled(targets.is_empty())
                                 .dropdown_menu(move |menu, _, _| {
@@ -413,7 +415,8 @@ impl AccountsPage {
                         .child(
                             Button::new(SharedString::from(format!("end-{}", s.pid)))
                                 .xsmall()
-                                .ghost()
+                                .danger()
+                                .outline()
                                 .icon(Lucide::CircleStop)
                                 .label("End…")
                                 .disabled(s.busy())
@@ -455,7 +458,7 @@ impl AccountsPage {
                     .children(ui::rows(session_rows, cx))
                     .into_any_element()
             });
-        let (scroll, content) = ui::tab_body("accounts-usage", px(960.));
+        let (scroll, content) = ui::tab_body("accounts-usage");
         scroll
             .child(
                 content

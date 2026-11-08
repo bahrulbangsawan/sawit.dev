@@ -4,12 +4,11 @@
 //! usage meters and empty states. Everything takes its colours from the theme.
 
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-
-/// The widest the content of a tab gets: wider, bars and rows are hard to read across.
-pub const CONTENT_MAX: Pixels = px(720.);
+use sawit_core::terminal::AgentKind;
 
 /// A section's header: an icon, the title and whatever trails it (a note, an action).
 pub fn section_header(icon: Lucide, title: impl Into<SharedString>, cx: &App) -> Div {
@@ -165,31 +164,62 @@ pub fn account_color(hex: &str) -> Hsla {
     gpui_kit::rgb(rgb).into()
 }
 
-/// The account's avatar: its colour as a tinted disc, ringed in the colour, with the name's
-/// first letter. Not a status: status is a pill with words.
-pub fn avatar(name: &str, hex: &str, size: f32, cx: &App) -> Div {
+/// An account's avatar: its agent's logo (Claude Code's, Codex's) on a disc in the account's
+/// colour, so two accounts of one agent still tell apart. Its name is beside it wherever it shows,
+/// and the agent's in its tooltip.
+pub fn avatar(kind: AgentKind, hex: &str, size: f32, cx: &App) -> Stateful<Div> {
     let color = account_color(hex);
-    let letter = name
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".into());
-    // The letter is the colour lifted toward the text, so it reads on the tinted disc.
-    let ink = color.blend(cx.theme().foreground.opacity(0.45));
     div()
+        .id(SharedString::from(format!(
+            "avatar-{}-{hex}-{size}",
+            kind.id()
+        )))
         .size(px(size))
         .flex_none()
         .rounded_full()
-        .bg(color.opacity(0.22))
+        .bg(color.opacity(0.18))
         .border_1()
-        .border_color(color.opacity(0.55))
+        .border_color(color.opacity(0.6))
         .flex()
         .items_center()
         .justify_center()
-        .text_color(ink)
-        .text_size(px((size * 0.42).round()))
-        .font_semibold()
-        .child(letter)
+        .child(crate::terminal::agent_logo_2x(
+            kind,
+            px((size * 0.58).round()),
+            cx,
+        ))
+        .tooltip(move |window, cx| Tooltip::new(kind.name()).build(window, cx))
+}
+
+/// A chart's mark (a bar, a cell, a meter) that says what it shows: its data in a tooltip on
+/// hover, and an outline while the pointer is on it. The chart's own accessible summary stays the
+/// way to read it without a pointer.
+pub fn chart_tip(
+    mark: Div,
+    id: impl Into<SharedString>,
+    text: impl Into<SharedString>,
+    cx: &App,
+) -> Stateful<Div> {
+    let text = text.into();
+    let ring = cx.theme().foreground.opacity(0.6);
+    mark.id(ElementId::Name(id.into()))
+        .hover(move |el| el.border_1().border_color(ring))
+        .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+}
+
+/// The agent of an account Sawit keeps.
+pub fn account_agent(kind: sawit_core::agent_accounts::AgentKind) -> AgentKind {
+    match kind {
+        sawit_core::agent_accounts::AgentKind::ClaudeCode => AgentKind::ClaudeCode,
+    }
+}
+
+/// The agent of a pool account's provider.
+pub fn provider_agent(provider: sawit_core::agent_accounts::pool::Provider) -> AgentKind {
+    match provider {
+        sawit_core::agent_accounts::pool::Provider::ClaudeCode => AgentKind::ClaudeCode,
+        sawit_core::agent_accounts::pool::Provider::Codex => AgentKind::Codex,
+    }
 }
 
 /// The meter's colour at `used` percent: the accent, the warning colour from 70%, the danger
@@ -274,10 +304,10 @@ pub fn empty_state(
         )
 }
 
-/// A tab's scrolling body, with the content capped at [`CONTENT_MAX`] (or `max`).
-pub fn tab_body(id: &'static str, max: Pixels) -> (Stateful<Div>, Div) {
+/// A tab's scrolling body. The content fills the page's width, like the other pages.
+pub fn tab_body(id: &'static str) -> (Stateful<Div>, Div) {
     (
         div().id(id).flex_1().min_w_0().h_full().overflow_y_scroll(),
-        v_flex().w_full().max_w(max).p_6().gap_6(),
+        v_flex().w_full().p_6().gap_6(),
     )
 }

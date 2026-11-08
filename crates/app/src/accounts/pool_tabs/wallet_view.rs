@@ -164,7 +164,12 @@ impl AccountsPage {
                             .px_4()
                             .py_2()
                             .gap_3()
-                            .child(ui::avatar(&a.name, &a.color, 20., cx))
+                            .child(ui::avatar(
+                                ui::provider_agent(a.provider),
+                                &a.color,
+                                20.,
+                                cx,
+                            ))
                             .child(
                                 div()
                                     .w(px(120.))
@@ -195,7 +200,7 @@ impl AccountsPage {
                                 Button::new(SharedString::from(format!("w-edit-{}", a.id)))
                                     .xsmall()
                                     .ghost()
-                                    .icon(Lucide::Pencil)
+                                    .icon(if open { Lucide::X } else { Lucide::Pencil })
                                     .label(if open { "Close" } else { "Edit Price" })
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         let open =
@@ -285,6 +290,7 @@ impl AccountsPage {
                     .child(
                         Button::new(SharedString::from(format!("w-del-{}", t.id)))
                             .xsmall()
+                            .danger()
                             .ghost()
                             .icon(Lucide::Trash)
                             .accessibility_label("Delete Top-Up")
@@ -311,7 +317,7 @@ impl AccountsPage {
             .h(px(120.))
             .items_end()
             .gap_3()
-            .children(months.iter().map(|(_, mo, v)| {
+            .children(months.iter().map(|(year, mo, v)| {
                 const M: [&str; 12] = [
                     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
                     "Dec",
@@ -330,14 +336,24 @@ impl AccountsPage {
                                 String::new()
                             }),
                     )
-                    .child(
-                        div()
+                    .child({
+                        let bar = div()
                             .w_full()
                             .h(px((80.0 * v / bar_max).max(2.0) as f32))
                             .rounded(px(3.))
                             .bg(cx.theme().primary)
-                            .when(*v == 0.0, |el| el.opacity(0.3)),
-                    )
+                            .when(*v == 0.0, |el| el.opacity(0.3));
+                        let said = format!(
+                            "{} {year} · {}",
+                            M[(*mo - 1) as usize],
+                            if *v > 0.0 {
+                                format!("{} in paid top-ups", money(*v, &cur))
+                            } else {
+                                "no paid top-ups".to_string()
+                            }
+                        );
+                        ui::chart_tip(bar, format!("w-month-{year}-{mo}"), said, cx)
+                    })
                     .child(
                         div()
                             .text_xs()

@@ -61,6 +61,12 @@ pub fn logo_in(kind: AgentKind, side: Pixels, tint: Hsla, window: &Window, cx: &
     draw(kind, side, Some(tint), window, cx)
 }
 
+/// [`logo`] where no window is at hand (the Accounts page's avatars): a colour logo is rasterised
+/// at twice its size, as a Retina screen draws it.
+pub fn logo_2x(kind: AgentKind, side: Pixels, cx: &App) -> AnyElement {
+    draw_at(kind, side, None, 2.0, cx)
+}
+
 /// [`logo`], its one colour `tint` when given, else the text's.
 fn draw(
     kind: AgentKind,
@@ -69,6 +75,11 @@ fn draw(
     window: &Window,
     cx: &App,
 ) -> AnyElement {
+    draw_at(kind, side, tint, window.scale_factor(), cx)
+}
+
+/// [`draw`] at the screen's `scale`.
+fn draw_at(kind: AgentKind, side: Pixels, tint: Option<Hsla>, scale: f32, cx: &App) -> AnyElement {
     let Some(name) = kind.logo() else {
         return Icon::new(Lucide::Bot)
             .size(side)
@@ -77,7 +88,7 @@ fn draw(
             .into_any_element();
     };
     if name.ends_with("-color") {
-        let device = (f32::from(side) * window.scale_factor()).ceil() as u32;
+        let device = (f32::from(side) * scale).ceil() as u32;
         if let Some(image) = raster(name, device, cx) {
             return img(ImageSource::Render(image))
                 .size(side)

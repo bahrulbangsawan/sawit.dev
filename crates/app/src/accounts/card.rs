@@ -205,7 +205,7 @@ impl AccountsPage {
                             h_flex()
                                 .gap_2()
                                 .child(div().flex_1().child(Input::new(&self.code).small().aria_label("Code from the Sign-In Page")))
-                                .child(Button::new("account-login-submit").small().label("Complete").on_click(cx.listener(|this, _, window, cx| {
+                                .child(Button::new("account-login-submit").small().primary().icon(Lucide::Check).label("Complete").on_click(cx.listener(|this, _, window, cx| {
                                     let code = this.code.read(cx).value().to_string();
                                     this.code.update(cx, |s, cx| s.set_value("", window, cx));
                                     this.model.update(cx, |m, cx| m.submit_code(&code, cx));
@@ -217,6 +217,7 @@ impl AccountsPage {
                         Button::new("account-login-cancel")
                             .xsmall()
                             .ghost()
+                            .icon(Lucide::X)
                             .label("Cancel Sign-In")
                             .on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |m, cx| m.cancel_login(cx)))),
                     ),

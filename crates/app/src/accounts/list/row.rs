@@ -65,7 +65,7 @@ impl AccountsPage {
             .when(selected, |el| el.bg(cx.theme().list_active))
             .when(selected && focused, |el| el.border_color(cx.theme().ring))
             .when(!selected, |el| el.hover(|el| el.bg(cx.theme().secondary)))
-            .child(ui::avatar(&a.name, &a.color, 28., cx))
+            .child(ui::avatar(ui::account_agent(a.kind), &a.color, 28., cx))
             .child(
                 v_flex()
                     .flex_1()
@@ -109,12 +109,14 @@ impl AccountsPage {
                                 .mt_1p5()
                                 .gap_3()
                                 .child(mini_meter(
+                                    format!("list-5h-{}", a.id),
                                     "5h",
                                     usage.as_ref().and_then(|u| u.five_hour),
                                     now,
                                     cx,
                                 ))
                                 .child(mini_meter(
+                                    format!("list-7d-{}", a.id),
                                     "7d",
                                     usage.as_ref().and_then(|u| u.seven_day),
                                     now,

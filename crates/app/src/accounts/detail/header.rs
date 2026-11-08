@@ -50,6 +50,7 @@ impl AccountsPage {
                     Button::new("account-rename-save")
                         .small()
                         .primary()
+                        .icon(Lucide::Check)
                         .label("Rename")
                         .on_click(save),
                 )
@@ -57,6 +58,7 @@ impl AccountsPage {
                     Button::new("account-rename-cancel")
                         .small()
                         .ghost()
+                        .icon(Lucide::X)
                         .label("Cancel")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.renaming = false;
@@ -94,7 +96,7 @@ impl AccountsPage {
                     .flex_1()
                     .min_w(px(220.))
                     .gap_3()
-                    .child(ui::avatar(&a.name, &a.color, 40., cx))
+                    .child(ui::avatar(ui::account_agent(a.kind), &a.color, 40., cx))
                     .child(
                         v_flex()
                             .min_w_0()

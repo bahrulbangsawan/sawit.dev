@@ -18,7 +18,7 @@ use super::SignIn;
 use super::list::adopt_button;
 use super::page::AccountsPage;
 use super::rows;
-use super::ui::{self, CONTENT_MAX};
+use super::ui;
 
 /// One window's card: what it is, "% used", the bar, and when it resets, in words and on the
 /// clock. Past warning a card also carries an icon beside its colour.
@@ -60,7 +60,7 @@ fn meter_card(
                 rows::resets_in(&w, now)
             );
             card.role(Role::Label)
-                .aria_label(spoken)
+                .aria_label(spoken.clone())
                 .child(head(ui::level_icon(used), color))
                 .child(
                     h_flex()
@@ -76,12 +76,15 @@ fn meter_card(
                         )
                         .child(div().text_sm().text_color(muted).child("used")),
                 )
-                .child(div().when(stale, |el| el.opacity(0.5)).child(ui::track(
-                    (used / 100.0) as f32,
-                    color,
-                    6.,
+                .child(ui::chart_tip(
+                    div()
+                        .py_1()
+                        .when(stale, |el| el.opacity(0.5))
+                        .child(ui::track((used / 100.0) as f32, color, 6., cx)),
+                    format!("detail-meter-{title}"),
+                    spoken,
                     cx,
-                )))
+                ))
                 .child(
                     h_flex()
                         .text_xs()
@@ -199,7 +202,6 @@ impl AccountsPage {
             .child(
                 v_flex()
                     .w_full()
-                    .max_w(CONTENT_MAX)
                     .p_6()
                     .gap_6()
                     .child(header)

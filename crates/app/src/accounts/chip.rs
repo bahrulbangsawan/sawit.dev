@@ -27,14 +27,19 @@ pub fn account_chip(cx: &mut App) -> AnyElement {
         },
         None => "No Active Account".into(),
     };
-    let (name, color) = active
+    let (kind, color) = active
         .as_ref()
-        .map(|a| (a.name.clone(), a.color.clone()))
-        .unwrap_or_else(|| ("?".into(), "#888888".into()));
+        .map(|a| (super::ui::account_agent(a.kind), a.color.clone()))
+        .unwrap_or_else(|| {
+            (
+                sawit_core::terminal::AgentKind::ClaudeCode,
+                "#888888".into(),
+            )
+        });
     Button::new("account-chip")
         .ghost()
         .xsmall()
-        .child(super::ui::avatar(&name, &color, 16., cx))
+        .child(super::ui::avatar(kind, &color, 16., cx))
         .child(div().child(label.clone()))
         .accessibility_label(format!("Claude Code Account: {label}"))
         .tooltip("The Claude Code account new sessions use")

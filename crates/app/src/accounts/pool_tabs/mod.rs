@@ -7,6 +7,7 @@
 
 mod analytics;
 mod compare;
+mod heat;
 mod overview;
 mod timeline;
 mod wallet_forms;
@@ -112,10 +113,33 @@ fn money(v: f64, currency: &str) -> String {
     }
 }
 
-/// One limit as a cell: "23% used" (or left) with the time to its reset over a bar.
-fn limit_cell(a: &PoolAccount, kind: LimitKind, show_left: bool, now: f64, cx: &App) -> Div {
+/// One limit as a cell: "23% used" (or left) with the time to its reset over a bar; hovered, its
+/// whole reading in a tooltip.
+fn limit_cell(
+    a: &PoolAccount,
+    kind: LimitKind,
+    show_left: bool,
+    now: f64,
+    cx: &App,
+) -> Stateful<Div> {
+    let said = match a.limit(kind) {
+        Some(l) if l.current(now) => format!(
+            "{} limit · {:.0}% used, {:.0}% left · resets in {}",
+            kind.label(),
+            l.used_pct,
+            l.left_pct(),
+            span(l.resets_at - now)
+        ),
+        Some(_) => format!("{} limit · reset since its last reading", kind.label()),
+        None => format!("{} limit · not reported yet", kind.label()),
+    };
+    let cell = limit_cell_body(a, kind, show_left, now, cx);
+    ui::chart_tip(cell, format!("pool-limit-{}-{}", a.id, kind.id()), said, cx)
+}
+
+fn limit_cell_body(a: &PoolAccount, kind: LimitKind, show_left: bool, now: f64, cx: &App) -> Div {
     let muted = cx.theme().muted_foreground;
-    let cell = v_flex().w(px(160.)).flex_none().gap_1();
+    let cell = v_flex().flex_1().min_w(px(140.)).gap_1();
     match a.limit(kind).filter(|l| l.current(now)) {
         Some(l) => {
             let value = if show_left {
@@ -172,7 +196,12 @@ fn pool_row(a: &PoolAccount, show_left: bool, narrow: bool, now: f64, cx: &App) 
         .gap_3()
         .px_4()
         .py_2p5()
-        .child(ui::avatar(&a.name, &a.color, 28., cx))
+        .child(ui::avatar(
+            ui::provider_agent(a.provider),
+            &a.color,
+            28.,
+            cx,
+        ))
         .child(
             v_flex()
                 .w(px(150.))
@@ -201,7 +230,7 @@ fn pool_row(a: &PoolAccount, show_left: bool, narrow: bool, now: f64, cx: &App) 
             el.child(limit_cell(a, LimitKind::FiveHour, show_left, now, cx))
                 .child(limit_cell(a, LimitKind::Weekly, show_left, now, cx))
         })
-        .child(div().flex_1())
+        .when(narrow, |el| el.child(div().flex_1()))
         .child(ui::pill(
             SharedString::from(format!("pool-status-{}", a.id)),
             tone,
@@ -264,7 +293,7 @@ impl AccountsPage {
             Tab::Analytics => self.render_analytics(cx),
             _ => self.render_wallet(cx),
         };
-        let (scroll, content) = ui::tab_body("accounts-pool", px(1040.));
+        let (scroll, content) = ui::tab_body("accounts-pool");
         scroll.child(content.children(body)).into_any_element()
     }
 
@@ -332,7 +361,12 @@ impl AccountsPage {
             .border_1()
             .border_color(cx.theme().primary.opacity(0.35))
             .bg(cx.theme().sidebar)
-            .child(ui::avatar(&best.name, &best.color, 40., cx))
+            .child(ui::avatar(
+                ui::provider_agent(best.provider),
+                &best.color,
+                40.,
+                cx,
+            ))
             .child(
                 v_flex()
                     .flex_1()

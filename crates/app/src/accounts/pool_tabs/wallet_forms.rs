@@ -215,7 +215,7 @@ impl AccountsPage {
                     .gap_3()
                     .child(
                         v_flex().gap_1().child(div().text_xs().font_medium().child("Account")).child(
-                            Button::new("w-topup-account").xsmall().outline().label(label).dropdown_caret(true).dropdown_menu(move |menu, _, _| {
+                            Button::new("w-topup-account").xsmall().outline().icon(Lucide::Users).label(label).dropdown_caret(true).dropdown_menu(move |menu, _, _| {
                                 names.iter().fold(menu, |menu, (id, name)| {
                                     let (page, id) = (page.clone(), id.clone());
                                     menu.item(PopupMenuItem::new(name.clone()).icon(crate::menu_icons::ACCOUNT).on_click(move |_, _, cx| {
@@ -277,7 +277,7 @@ impl AccountsPage {
                                 cx.notify();
                             })),
                     )
-                    .child(Button::new("w-topup-cancel").xsmall().ghost().label("Cancel").on_click(cx.listener(|this, _, _, cx| {
+                    .child(Button::new("w-topup-cancel").xsmall().ghost().icon(Lucide::X).label("Cancel").on_click(cx.listener(|this, _, _, cx| {
                         this.pool_view.adding_topup = false;
                         cx.notify();
                     }))),

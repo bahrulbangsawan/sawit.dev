@@ -245,6 +245,7 @@ impl AccountsPage {
                         Button::new("accounts-shell-install")
                             .xsmall()
                             .outline()
+                            .icon(Lucide::Download)
                             .label(label)
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.confirm_shell(window, cx)),
@@ -255,7 +256,8 @@ impl AccountsPage {
                     el.child(
                         Button::new("accounts-shell-remove")
                             .xsmall()
-                            .ghost()
+                            .danger()
+                            .outline()
                             .icon(Lucide::Trash)
                             .label("Remove…")
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -283,7 +285,8 @@ impl AccountsPage {
                 .child(
                     Button::new("accounts-cp-remove")
                         .xsmall()
-                        .ghost()
+                        .danger()
+                        .outline()
                         .icon(Lucide::Trash)
                         .label("Remove…")
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -461,7 +464,7 @@ impl AccountsPage {
             )
             .into_any_element(),
         }];
-        let (scroll, content) = ui::tab_body("accounts-settings", ui::CONTENT_MAX);
+        let (scroll, content) = ui::tab_body("accounts-settings");
         scroll
             .child(
                 content

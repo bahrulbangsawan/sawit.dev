@@ -76,24 +76,43 @@ pub fn status_of(
     }
 }
 
-/// A compact meter for the list: "5h 23% used" over a thin bar, or why there is none.
-fn mini_meter(label: &str, w: Option<aa::usage::Window>, now: f64, cx: &App) -> Div {
+/// A compact meter for the list: "5h 23% used" over a thin bar, or why there is none. Its words
+/// may be cut in a narrow list: hovered, the whole reading shows in a tooltip.
+fn mini_meter(
+    id: String,
+    label: &str,
+    w: Option<aa::usage::Window>,
+    now: f64,
+    cx: &App,
+) -> Stateful<Div> {
     let muted = cx.theme().muted_foreground;
-    let (text, fill, color) = match rows::current(w, now) {
+    let (text, fill, color, said) = match rows::current(w, now) {
         Some(w) => (
             format!("{label} {} used", rows::pct(&w)),
             (w.used_percentage / 100.0) as f32,
             ui::meter_color(w.used_percentage, cx),
+            format!(
+                "{label} · {} used · {}",
+                rows::pct(&w),
+                rows::resets_in(&w, now)
+            ),
         ),
-        None if w.is_some() => (format!("{label} · reset"), 0.0, muted),
-        None => (format!("{label} · no data"), 0.0, muted),
+        None if w.is_some() => {
+            let t = format!("{label} · reset");
+            (t.clone(), 0.0, muted, format!("{t} since its last reading"))
+        }
+        None => {
+            let t = format!("{label} · no data");
+            (t, 0.0, muted, format!("{label} · not reported yet"))
+        }
     };
-    v_flex()
+    let meter = v_flex()
         .flex_1()
         .min_w_0()
         .gap_1()
         .child(div().text_xs().text_color(muted).truncate().child(text))
-        .child(ui::track(fill, color, 4., cx))
+        .child(ui::track(fill, color, 4., cx));
+    ui::chart_tip(meter, id, said, cx)
 }
 
 impl AccountsPage {
@@ -133,35 +152,37 @@ impl AccountsPage {
                 self.render_row(a, row, &home, cx)
             })
             .collect();
-        let top = if self.adding {
-            self.render_add_panel(adoptable, cx).into_any_element()
-        } else {
-            Button::new("account-add")
-                .small()
-                .outline()
-                .w_full()
-                .icon(Lucide::Plus)
-                .label("Add Account")
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.adding = true;
-                    this.new_name.read(cx).focus_handle(cx).focus(window, cx);
-                    cx.notify();
-                }))
-                .into_any_element()
-        };
+        // Add Account is a compact button on the list's header row; its panel opens above.
+        let top = self
+            .adding
+            .then(|| self.render_add_panel(adoptable, cx).into_any_element());
+        let add = Button::new("account-add")
+            .xsmall()
+            .outline()
+            .icon(Lucide::Plus)
+            .label("Add")
+            .accessibility_label("Add Account")
+            .tooltip("Add a Claude Code Account")
+            .disabled(self.adding)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.adding = true;
+                this.new_name.read(cx).focus_handle(cx).focus(window, cx);
+                cx.notify();
+            }));
         v_flex()
             .w(px(if narrow { NARROW_WIDTH } else { WIDTH }))
             .flex_none()
             .h_full()
             .border_r_1()
             .border_color(cx.theme().border)
-            .child(div().flex_none().p_3().pb_2().child(top))
+            .children(top.map(|top| div().flex_none().p_3().pb_2().child(top)))
             .child(
                 h_flex()
                     .flex_none()
-                    .px(px(14.))
-                    .pt_2()
-                    .pb_1()
+                    .pl(px(14.))
+                    .pr(px(10.))
+                    .pt_3()
+                    .pb_1p5()
                     .gap_1p5()
                     .child(crate::terminal::agents::logo(
                         sawit_core::terminal::AgentKind::ClaudeCode,
@@ -176,13 +197,8 @@ impl AccountsPage {
                             .text_color(muted)
                             .child(AgentKind::ClaudeCode.label()),
                     )
-                    .child(
-                        div()
-                            .ml_auto()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(count.to_string()),
-                    ),
+                    .child(div().text_xs().text_color(muted).child(count.to_string()))
+                    .child(div().ml_auto().child(add)),
             )
             .child(
                 v_flex()
@@ -240,9 +256,23 @@ impl AccountsPage {
                     .small()
                     .aria_label("Account Name"),
             )
+            // Cancel, then the action, on the right; on a narrow list they wrap rather than cut.
             .child(
                 h_flex()
+                    .flex_wrap()
+                    .justify_end()
                     .gap_2()
+                    .child(
+                        Button::new("account-add-cancel")
+                            .small()
+                            .ghost()
+                            .icon(Lucide::X)
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.adding = false;
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         Button::new("account-add-confirm")
                             .small()
@@ -250,16 +280,6 @@ impl AccountsPage {
                             .icon(Lucide::LogIn)
                             .label("Add and Sign In")
                             .on_click(cx.listener(|this, _, window, cx| this.add(window, cx))),
-                    )
-                    .child(
-                        Button::new("account-add-cancel")
-                            .small()
-                            .ghost()
-                            .label("Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.adding = false;
-                                cx.notify();
-                            })),
                     ),
             )
             .child(div().pt_1().text_xs().text_color(muted).child(if none {
@@ -267,7 +287,9 @@ impl AccountsPage {
             } else {
                 "Or adopt a Claude Code folder you already have:"
             }))
-            .when(!none, |el| el.child(adopt_button(adoptable)))
+            .when(!none, |el| {
+                el.child(h_flex().justify_end().child(adopt_button(adoptable)))
+            })
     }
 }
 

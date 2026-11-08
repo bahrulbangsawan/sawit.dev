@@ -15,7 +15,7 @@ pub use guard::{Ending, ask_before_closing, end_all};
 pub use panel::{CloseScope, stop_all_now};
 pub use panel::{JobTag, OpenFileRequest, Origin, Remote, TerminalPanel, ToggleMaximize};
 // The agents running in the terminals, and their logos, for the browser's Send to agent.
-pub use {agents::logo_in as agent_logo, panel::RunningAgent};
+pub use {agents::logo_2x as agent_logo_2x, agents::logo_in as agent_logo, panel::RunningAgent};
 
 actions!(
     terminal,

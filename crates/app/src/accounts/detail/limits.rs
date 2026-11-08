@@ -98,6 +98,7 @@ impl AccountsPage {
                     Button::new("account-track")
                         .small()
                         .outline()
+                        .icon(Lucide::Gauge)
                         .label(action)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.confirm_tracking(a.clone(), window, cx)
@@ -254,6 +255,7 @@ impl AccountsPage {
                         Button::new(SharedString::from(format!("detail-hand-off-{}", s.pid)))
                             .xsmall()
                             .outline()
+                            .icon(Lucide::ArrowLeftRight)
                             .label("Continue On…")
                             .disabled(targets.is_empty())
                             .dropdown_menu(move |menu, _, _| {

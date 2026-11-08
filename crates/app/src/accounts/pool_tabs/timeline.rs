@@ -105,31 +105,49 @@ impl AccountsPage {
                 } else {
                     15.
                 };
-                for w in spans.iter().filter(|w| w.end > from && w.start < to) {
+                let at = |t: f64| date::when_label(t as i64, now as i64);
+                for (i, w) in spans
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, w)| w.end > from && w.start < to)
+                {
                     let (l, r) = (x(w.start), x(w.end));
-                    bars.push(
-                        div()
+                    let id = format!("tl-{}-{}-{i}", a.id, kind.id());
+                    let said = format!(
+                        "{} window · {} – {} · peak {:.0}%{}",
+                        kind.label(),
+                        at(w.start),
+                        at(w.end),
+                        w.peak_pct,
+                        if w.end > now { " · now" } else { "" }
+                    );
+                    let bar = div()
+                        .absolute()
+                        .top(px(top))
+                        .h(px(10.))
+                        .left(relative(l))
+                        .w(relative((r - l).max(0.004)))
+                        .rounded(px(3.))
+                        .bg(primary.opacity(if w.end > now { 0.55 } else { 0.25 }));
+                    bars.push(ui::chart_tip(bar, id.clone(), said, cx).into_any_element());
+                    if let Some(hit) = w.hit_at {
+                        let hl = x(hit);
+                        let said = format!(
+                            "{} limit reached {} · room again {}",
+                            kind.label(),
+                            at(hit),
+                            at(w.end)
+                        );
+                        let bar = div()
                             .absolute()
                             .top(px(top))
                             .h(px(10.))
-                            .left(relative(l))
-                            .w(relative((r - l).max(0.004)))
+                            .left(relative(hl))
+                            .w(relative((r - hl).max(0.004)))
                             .rounded(px(3.))
-                            .bg(primary.opacity(if w.end > now { 0.55 } else { 0.25 }))
-                            .into_any_element(),
-                    );
-                    if let Some(hit) = w.hit_at {
-                        let hl = x(hit);
+                            .bg(danger);
                         bars.push(
-                            div()
-                                .absolute()
-                                .top(px(top))
-                                .h(px(10.))
-                                .left(relative(hl))
-                                .w(relative((r - hl).max(0.004)))
-                                .rounded(px(3.))
-                                .bg(danger)
-                                .into_any_element(),
+                            ui::chart_tip(bar, format!("{id}-hit"), said, cx).into_any_element(),
                         );
                     }
                 }
@@ -137,31 +155,35 @@ impl AccountsPage {
                 if let Some(cur) = a.limit(*kind).filter(|l| l.current(now)) {
                     let (l, r) = (x(cur.resets_at), x(cur.resets_at + kind.window_secs()));
                     if r > l {
-                        bars.push(
-                            div()
-                                .absolute()
-                                .top(px(top))
-                                .h(px(10.))
-                                .left(relative(l))
-                                .w(relative(r - l))
-                                .rounded(px(3.))
-                                .border_1()
-                                .border_color(muted)
-                                .into_any_element(),
+                        let said = format!(
+                            "Next {} window · opens {} · {:.0}% used now",
+                            kind.label(),
+                            date::when_label(cur.resets_at as i64, now as i64),
+                            cur.used_pct
                         );
+                        let bar = div()
+                            .absolute()
+                            .top(px(top))
+                            .h(px(10.))
+                            .left(relative(l))
+                            .w(relative(r - l))
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(muted);
+                        let id = format!("tl-{}-{}-next", a.id, kind.id());
+                        bars.push(ui::chart_tip(bar, id, said, cx).into_any_element());
                     }
                 }
             }
-            bars.push(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(relative(x(now)))
-                    .w(px(2.))
-                    .bg(cx.theme().foreground)
-                    .into_any_element(),
-            );
+            let line = div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(relative(x(now)))
+                .w(px(2.))
+                .bg(cx.theme().foreground);
+            let said = format!("Now · {}", date::when_label(now as i64, now as i64));
+            bars.push(ui::chart_tip(line, format!("tl-{}-now", a.id), said, cx).into_any_element());
             lanes.push(
                 h_flex()
                     .id(SharedString::from(format!("timeline-{}", a.id)))
@@ -174,7 +196,12 @@ impl AccountsPage {
                             .w(px(130.))
                             .flex_none()
                             .gap_2()
-                            .child(ui::avatar(&a.name, &a.color, 20., cx))
+                            .child(ui::avatar(
+                                ui::provider_agent(a.provider),
+                                &a.color,
+                                20.,
+                                cx,
+                            ))
                             .child(div().text_sm().truncate().child(a.name.clone())),
                     )
                     .child(div().relative().flex_1().h(px(28.)).children(bars))

@@ -396,7 +396,6 @@ impl AccountsPage {
                 v_flex()
                     .flex_none()
                     .w_full()
-                    .max_w(ui::CONTENT_MAX)
                     .px_6()
                     .pt_6()
                     .pb_4()
@@ -416,7 +415,6 @@ impl AccountsPage {
                     .child(
                         v_flex()
                             .w_full()
-                            .max_w(ui::CONTENT_MAX)
                             .px_6()
                             .pb_6()
                             .gap_6()

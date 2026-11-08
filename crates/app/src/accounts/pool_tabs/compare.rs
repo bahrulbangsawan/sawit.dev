@@ -52,19 +52,36 @@ impl AccountsPage {
                         h_flex()
                             .w(px(160.))
                             .gap_2()
-                            .child(ui::avatar(&a.name, &a.color, 20., cx))
+                            .child(ui::avatar(
+                                ui::provider_agent(a.provider),
+                                &a.color,
+                                20.,
+                                cx,
+                            ))
                             .child(div().truncate().child(a.name.clone())),
                     )
                     .child(
                         h_flex()
                             .w(px(180.))
                             .gap_2()
-                            .child(div().w(px(120.)).child(ui::track(
-                                (room.unwrap_or(0.0) / 100.0) as f32,
-                                ui::meter_color(100.0 - room.unwrap_or(100.0), cx),
-                                6.,
+                            .child(ui::chart_tip(
+                                div().w(px(120.)).py_1().child(ui::track(
+                                    (room.unwrap_or(0.0) / 100.0) as f32,
+                                    ui::meter_color(100.0 - room.unwrap_or(100.0), cx),
+                                    6.,
+                                    cx,
+                                )),
+                                format!("compare-room-{}", a.id),
+                                match (room, held) {
+                                    (Some(r), Some(l)) => format!(
+                                        "{r:.0}% room · the {} limit holds it",
+                                        l.kind.label()
+                                    ),
+                                    (Some(r), None) => format!("{r:.0}% room"),
+                                    _ => "No limits reported yet".to_string(),
+                                },
                                 cx,
-                            )))
+                            ))
                             .child(
                                 div().text_xs().child(
                                     room.map(|r| format!("{r:.0}%"))
