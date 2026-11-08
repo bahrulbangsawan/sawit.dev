@@ -3,7 +3,8 @@
 //! external score when asked for (or why there is none), and the checks of each layer, problems
 //! first.
 
-use gpui_kit::component::button::{Button, ButtonGroup};
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -28,8 +29,49 @@ impl SeoPanel {
         let url = report.url.clone();
         let current = report.scan_type;
         let external_on = self.external;
+        let is_agent = |c: &CheckResult| Layer::AGENT.contains(&c.layer);
+        let all_to_fix = report
+            .checks
+            .iter()
+            .filter(|c| is_agent(c) && matches!(c.status, Status::Fail | Status::Warn))
+            .count();
+        let all_prompt = sawit_core::web::seo::fix_prompt_where(report, true, is_agent);
         v_flex()
             .gap_4()
+            .when(all_to_fix > 0, |el| {
+                el.child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(if all_to_fix == 1 {
+                                    "1 check to fix".to_string()
+                                } else {
+                                    format!("{all_to_fix} checks to fix")
+                                }),
+                        )
+                        .child(
+                            Button::new("seo-agents-copy-all")
+                                .xsmall()
+                                .primary()
+                                .icon(Lucide::Copy)
+                                .label("Copy Prompt")
+                                .tooltip("Copy One Prompt That Lists Every Check to Fix")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.copy(
+                                        all_prompt.clone(),
+                                        "Copied every fix as one prompt",
+                                        cx,
+                                    )
+                                })),
+                        ),
+                )
+            })
             .child(
                 v_flex()
                     .gap_2()
@@ -169,16 +211,40 @@ impl SeoPanel {
                     .into_iter()
                     .map(|c| self.check_row(c, &url, cx).into_any_element())
                     .collect();
+                let this_layer = *layer;
+                let prompt = (to_fix > 0).then(|| {
+                    sawit_core::web::seo::fix_prompt_where(report, true, |c| c.layer == this_layer)
+                });
                 panel::section(
                     layer.name(),
                     Some(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(if to_fix == 0 {
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().text_xs().text_color(muted).child(if to_fix == 0 {
                                 "Nothing to fix".to_string()
                             } else {
                                 format!("{to_fix} to fix")
+                            }))
+                            .when_some(prompt, |el, prompt| {
+                                el.child(
+                                    Button::new(SharedString::from(format!(
+                                        "seo-copy-{}",
+                                        layer.name()
+                                    )))
+                                    .xsmall()
+                                    .ghost()
+                                    .icon(Lucide::Copy)
+                                    .label("Copy Prompt")
+                                    .tooltip(format!("Copy One Prompt for the {to_fix} to Fix"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.copy(
+                                            prompt.clone(),
+                                            "Copied the layer's fixes as one prompt",
+                                            cx,
+                                        )
+                                    })),
+                                )
                             })
                             .into_any_element(),
                     ),

@@ -14,6 +14,7 @@ mod checks;
 pub mod external;
 mod mcp;
 mod openapi;
+mod prompts;
 pub mod robots;
 mod site;
 pub mod sitemap;
@@ -26,6 +27,7 @@ mod tests_agent;
 use serde::{Deserialize, Serialize};
 
 pub use catalog::{CHECKS, CheckDef};
+pub use prompts::fix_prompt_where;
 pub use site::{Site, image_size};
 
 /// What a check found.
@@ -336,28 +338,7 @@ pub fn fix_prompt(url: &str, check: &CheckResult) -> String {
 
 /// A prompt for every failing or warning check, worst first.
 pub fn fix_prompt_all(report: &Report, seo_only: bool) -> String {
-    let mut out = format!(
-        "Fix these SEO and agent-readiness problems on {}:\n\n",
-        report.url
-    );
-    let mut list: Vec<&CheckResult> = report
-        .checks
-        .iter()
-        .filter(|c| (!seo_only || c.seo) && matches!(c.status, Status::Fail | Status::Warn))
-        .filter(|c| !c.external)
-        .collect();
-    list.sort_by_key(|c| (c.status != Status::Fail, c.tier as u8));
-    for c in list {
-        out.push_str(&format!(
-            "- [{}] {}: {} Fix: {}\n",
-            c.status.as_str(),
-            c.name,
-            c.details,
-            c.fix
-        ));
-    }
-    out.push_str("\nMake the changes in this project's code, then check again with browser_seo.");
-    out
+    prompts::fix_prompt_where(report, false, |c| !seo_only || c.seo)
 }
 
 /// The report as text for an agent: the scores, then every check that ran, problems first, each

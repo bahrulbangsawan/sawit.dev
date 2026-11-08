@@ -282,6 +282,11 @@ impl SeoPanel {
         list.sort_by_key(|c| rows::status_rank(c.status));
         let scored = list.iter().filter(|c| c.status.scored()).count();
         let passed = list.iter().filter(|c| c.status == Status::Pass).count();
+        let to_fix = list
+            .iter()
+            .filter(|c| matches!(c.status, Status::Fail | Status::Warn))
+            .count();
+        let prompt = (to_fix > 0).then(|| sawit_core::web::seo::fix_prompt_all(report, true));
         let url = report.url.clone();
         let rows: Vec<AnyElement> = list
             .into_iter()
@@ -290,10 +295,28 @@ impl SeoPanel {
         panel::section(
             "Search and sharing",
             Some(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("{passed} of {scored} pass"))
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("{passed} of {scored} pass")),
+                    )
+                    .when_some(prompt, |el, prompt| {
+                        el.child(
+                            Button::new("seo-checks-copy-all")
+                                .xsmall()
+                                .ghost()
+                                .icon(Lucide::Copy)
+                                .label("Copy Prompt")
+                                .tooltip(format!("Copy One Prompt for the {to_fix} to Fix"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.copy(prompt.clone(), "Copied every fix as one prompt", cx)
+                                })),
+                        )
+                    })
                     .into_any_element(),
             ),
             v_flex().gap_1().children(rows),

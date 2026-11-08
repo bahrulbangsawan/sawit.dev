@@ -73,8 +73,8 @@ impl SeoPanel {
                         .xsmall()
                         .outline()
                         .icon(Lucide::Copy)
-                        .label("Copy fixes for an agent")
-                        .tooltip("Copy a prompt that lists every problem and its fix")
+                        .label("Copy Prompt")
+                        .tooltip("Copy One Prompt That Lists Every Problem and Its Fix")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.copy(all_prompt.clone(), "Copied the fixes as a prompt", cx)
                         }))
