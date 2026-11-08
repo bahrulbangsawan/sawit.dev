@@ -16,8 +16,14 @@ workspace `Cargo.toml`. Changes (search for "Sawit patch"):
   room above), never a dimmed item. `PopupMenuItem::danger` draws a destructive item's icon and
   label in the danger colour; `PopupMenuItem::leading` draws a picture (an agent's colour logo)
   in the icon's slot; `has_picture` and `PopupMenu::items` let tests check every item has one.
+- `src/menu/popup_menu.rs`: an item drawn from elements (`PopupMenuItem::element`: the canvas's
+  keyed commands, its option rows, Send to Agent) keeps to one line (`whitespace_nowrap`), so it is
+  the same 28 px as a labelled item: the canvas's View menu drew its keyed items taller than the
+  rest, which made its spacing look uneven.
 - `src/tooltip.rs`: a text tooltip is at most 360 px wide and wraps, so a long one (a whole
-  session title, a path, an error) never runs off the window on one line.
+  session title, a path, an error) never runs off the window on one line. It blocks the mouse
+  (`occlude`), as menus do, so Sawit's native views (the browser's page, live web frames) see it
+  over them and step back instead of hiding it.
 - `src/highlighter/syntect_backend.rs`, `src/highlighter/mod.rs`: `highlighter::syntax_set()`
   hands out the syntect syntax set the Markdown code blocks use, so Sawit's own editors'
   highlighter (`crates/app/src/highlight`) shares it instead of loading a second copy (several MB

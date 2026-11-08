@@ -7,7 +7,7 @@ use std::{
 
 use gpui::{
     Action, AnyElement, AnyView, App, AppContext, Bounds, Context, ElementId, GlobalElementId,
-    IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 pub use gpui_base::TooltipDefaults;
@@ -110,7 +110,11 @@ impl Render for Tooltip {
             }
         };
 
-        div().child(
+        // Sawit patch: the tooltip blocks the mouse, as menus and popovers do, so a native view
+        // under it (the browser's page, the canvas's live web frames) sees it with GPUI's hit
+        // test and steps back instead of drawing over it. It opens past the pointer, so it never
+        // takes the hover from what it describes.
+        div().occlude().child(
             // Wrap in a child, to ensure the left margin is applied to the tooltip
             BaseTooltip::new("tooltip-popup")
                 .h_flex()

@@ -1473,6 +1473,10 @@ impl PopupMenu {
                             div()
                                 .flex_1()
                                 .min_w_0()
+                                // Sawit patch: an item drawn from elements keeps to one line, as
+                                // a labelled item does, so its row is the menu's one height (the
+                                // canvas's keyed View items drew taller than the rest).
+                                .whitespace_nowrap()
                                 .when(*danger && !*disabled, |this| {
                                     this.text_color(cx.theme().danger)
                                 })

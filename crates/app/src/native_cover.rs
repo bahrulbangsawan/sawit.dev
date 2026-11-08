@@ -12,8 +12,10 @@ use gpui_kit::*;
 /// The points tested are this far inside the area's edges: a resize handle that reaches a few
 /// pixels over a pane's edge isn't a menu.
 const INSET: f32 = 6.;
-/// And this far apart: every menu, popover, dialog and notification is wider and taller.
-const STEP: f32 = 48.;
+/// And this far apart across: every menu, popover, dialog, notification and tooltip is wider.
+const STEP: f32 = 40.;
+/// And this far apart down: a one-line tooltip (about 26 px) is the shortest thing that covers.
+const STEP_Y: f32 = 16.;
 
 /// What [`watch`] knows of one native view's place: whether something covers it, and the hitbox
 /// of the frame drawn last, the only one whose answer counts.
@@ -67,15 +69,19 @@ pub fn watch<V: 'static>(
 /// must be the frame `hitbox` was inserted in.
 pub fn covered(hitbox: &Hitbox, window: &Window) -> bool {
     let area = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-    let xs = stops(f32::from(area.origin.x), f32::from(area.size.width));
-    let ys = stops(f32::from(area.origin.y), f32::from(area.size.height));
+    let xs = stops(f32::from(area.origin.x), f32::from(area.size.width), STEP);
+    let ys = stops(
+        f32::from(area.origin.y),
+        f32::from(area.size.height),
+        STEP_Y,
+    );
     ys.iter()
         .any(|&y| (xs.iter()).any(|&x| !hitbox.is_hovered_at(point(px(x), px(y)), window)))
 }
 
 /// The coordinates tested along a side `len` long from `start`: [`INSET`] in from each end and
-/// [`STEP`] apart between them, or the middle of a side too short for that. None for no side.
-fn stops(start: f32, len: f32) -> Vec<f32> {
+/// `step` apart between them, or the middle of a side too short for that. None for no side.
+fn stops(start: f32, len: f32, step: f32) -> Vec<f32> {
     if len <= 0. {
         return Vec::new();
     }
@@ -87,7 +93,7 @@ fn stops(start: f32, len: f32) -> Vec<f32> {
     let mut stops = Vec::new();
     while at < end {
         stops.push(at);
-        at += STEP;
+        at += step;
     }
     stops.push(end);
     stops
@@ -107,12 +113,12 @@ mod tests {
     /// point tested: a menu that reaches past the inset anywhere along a side is found.
     #[test]
     fn the_points_reach_both_ends_and_leave_no_gap_wider_than_a_step() {
-        let at = stops(100., 1000.);
+        let at = stops(100., 1000., STEP);
         assert_eq!(at.first(), Some(&106.));
         assert_eq!(at.last(), Some(&1094.));
         assert!(at.windows(2).all(|w| w[1] > w[0] && w[1] - w[0] <= STEP));
-        assert_eq!(stops(0., 8.), vec![4.]);
-        assert!(stops(0., 0.).is_empty());
+        assert_eq!(stops(0., 8., STEP), vec![4.]);
+        assert!(stops(0., 0., STEP).is_empty());
     }
 
     /// A place and, while `menu`, a menu over part of it, drawn above everything as GPUI defers
