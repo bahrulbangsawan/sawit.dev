@@ -7,8 +7,9 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{Pending, PermissionsPage};
-use crate::catalog::tilde;
+use super::sections::{file_matches, macos_matches, other_matches, tool_matches};
+use super::{Pending, PermissionsPage, Section};
+use crate::catalog::{self, tilde};
 
 impl PermissionsPage {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -43,6 +44,51 @@ impl PermissionsPage {
                         cx.notify();
                     })),
             )
+    }
+
+    /// Search, and the tabs with what each holds that the search leaves.
+    fn render_toolbar(&self, query: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use sawit_core::dev_tools::extras::Privacy;
+        let files = self.files.iter().filter(|f| file_matches(f, query)).count();
+        let tools = self.tools.iter().filter(|t| tool_matches(t, query)).count();
+        let macos = Privacy::ALL
+            .iter()
+            .filter(|p| macos_matches(p, query))
+            .count();
+        let others = self
+            .others
+            .iter()
+            .filter(|o| other_matches(o, query))
+            .count();
+        let mut choices = vec![
+            (Section::All.label(), files + tools + macos + others),
+            (Section::Claude.label(), files),
+            (Section::Tools.label(), tools),
+            (Section::MacOs.label(), macos),
+        ];
+        if !self.others.is_empty() {
+            choices.push((Section::Others.label(), others));
+        }
+        let current = Section::ALL
+            .iter()
+            .position(|s| *s == self.section)
+            .unwrap_or(0);
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .when_some(self.search.as_ref(), |el, search| {
+                el.child(catalog::search(search, cx))
+            })
+            .child(catalog::tabs(
+                "perms-section",
+                choices,
+                current,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.section = Section::ALL[*ix];
+                    cx.notify();
+                }),
+                cx,
+            ))
     }
 
     fn render_message(&self, cx: &App) -> Option<AnyElement> {
@@ -177,7 +223,12 @@ impl PermissionsPage {
 
 impl Render for PermissionsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let files = self.render_files(window, cx);
+        if self.search.is_none() {
+            self.make_search(window, cx);
+        }
+        let query = self.query(cx);
+        let toolbar = self.render_toolbar(&query, cx);
+        let sections = self.render_sections(&query, window, cx);
         let overlay = self.pending.as_ref().map(|p| self.render_sheet(p, cx));
         if overlay.is_some() && !self.sheet_focus.contains_focused(window, cx) {
             self.sheet_focus.focus(window, cx);
@@ -196,13 +247,11 @@ impl Render for PermissionsPage {
                     .child(
                         v_flex()
                             .p_6()
-                            .gap_6()
+                            .gap_4()
                             .child(self.render_header(cx))
+                            .child(toolbar)
                             .children(self.render_message(cx))
-                            .child(files)
-                            .child(self.render_tools(cx))
-                            .child(self.render_macos(cx))
-                            .children(self.render_others(cx)),
+                            .child(v_flex().gap_6().children(sections)),
                     ),
             )
             .when_some(overlay, |el, sheet| {

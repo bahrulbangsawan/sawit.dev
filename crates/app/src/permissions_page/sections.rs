@@ -1,309 +1,267 @@
-//! The page's sections: Claude Code's settings files with their rules, Sawit's tools that need
-//! `confirm`, the macOS permissions, and the other agents' settings.
+//! The page's sections, each a list in the catalog pages' style (MCP, Skills, Dev Tools): a card
+//! with column titles, then a row per item with its tile, name and details, a status pill and
+//! its buttons. Claude Code's settings files (`files.rs`), Sawit's tools that need `confirm`, the
+//! macOS permissions, and the other agents' settings.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::*;
-use gpui_kit::component::input::Input;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sawit_core::dev_tools::extras::Privacy;
-use sawit_core::permissions::{Bucket, Change, RulesFile};
+use sawit_core::permissions::{Bucket, OtherAgent, RulesFile, ToolState};
 
-use super::PermissionsPage;
-use crate::catalog::tilde;
+use super::{PermissionsPage, Section};
+use crate::catalog::{self, Mark, tilde};
 
-fn section(title: &'static str, note: &'static str, cx: &App) -> Div {
-    v_flex().gap_2().child(
-        v_flex()
-            .gap_0p5()
-            .child(div().text_base().font_semibold().child(title))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .whitespace_normal()
-                    .child(note),
-            ),
+/// A section: its title and what it is over the list.
+pub(super) fn section(
+    title: &'static str,
+    note: &'static str,
+    list: AnyElement,
+    cx: &App,
+) -> AnyElement {
+    v_flex()
+        .gap_2()
+        .child(
+            v_flex()
+                .gap_0p5()
+                .child(div().text_base().font_semibold().child(title))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .whitespace_normal()
+                        .child(note),
+                ),
+        )
+        .child(list)
+        .into_any_element()
+}
+
+/// The list card: column titles, then the rows, the last without a rule under it.
+pub(super) fn list(column: &'static str, rows: Vec<Stateful<Div>>, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let last = rows.len().saturating_sub(1);
+    v_flex()
+        .id(column)
+        .role(Role::List)
+        .rounded(theme.radius_lg)
+        .border_1()
+        .border_color(theme.border)
+        .overflow_hidden()
+        .child(catalog::header(None, column, cx))
+        .children(rows.into_iter().enumerate().map(|(ix, row)| {
+            row.px_4()
+                .py_3()
+                .when(ix < last, |el| el.border_b_1().border_color(theme.border))
+                .hover(|el| el.bg(theme.list_hover))
+        }))
+        .into_any_element()
+}
+
+/// A logo tile with an icon, as the catalog rows lead with.
+pub(super) fn icon_tile(icon: Lucide, cx: &App) -> Div {
+    catalog::tile(
+        Icon::new(icon)
+            .size(px(18.))
+            .text_color(cx.theme().muted_foreground)
+            .into_any_element(),
+        cx,
     )
 }
 
-fn card(id: impl Into<ElementId>, name: String, cx: &App) -> Stateful<Div> {
-    v_flex()
-        .id(id)
-        .role(Role::Group)
-        .aria_label(name)
-        .p_3()
-        .gap_2()
-        .rounded(cx.theme().radius_lg)
-        .border_1()
-        .border_color(cx.theme().border)
+pub(super) fn mono_line(text: impl Into<SharedString>, cx: &App) -> Div {
+    div()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .font_family(cx.theme().mono_font_family.clone())
+        .whitespace_normal()
+        .child(text.into())
+}
+
+/// Whether `query` (lower case) is in any of `texts`.
+fn has(query: &str, texts: &[&str]) -> bool {
+    query.is_empty() || texts.iter().any(|t| t.to_lowercase().contains(query))
+}
+
+pub(super) fn file_matches(file: &RulesFile, query: &str) -> bool {
+    let path = tilde(&file.path);
+    has(query, &[&file.scope.label(), &path])
+        || Bucket::ALL
+            .iter()
+            .any(|b| file.rules.get(*b).iter().any(|r| has(query, &[r])))
+}
+
+pub(super) fn tool_matches(tool: &ToolState, query: &str) -> bool {
+    has(query, &[tool.tool, tool.what])
+}
+
+pub(super) fn macos_matches(p: &Privacy, query: &str) -> bool {
+    has(query, &[p.name(), p.why()])
+}
+
+pub(super) fn other_matches(o: &OtherAgent, query: &str) -> bool {
+    has(query, &[o.agent, &tilde(&o.path)]) || o.lines.iter().any(|l| has(query, &[l]))
 }
 
 impl PermissionsPage {
-    pub(super) fn render_files(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let files = self.files.clone();
-        let cards: Vec<AnyElement> = files
-            .iter()
-            .enumerate()
-            .map(|(ix, file)| self.render_file(ix, file, window, cx))
-            .collect();
-        section(
-            "Claude Code",
-            "permissions.allow, ask and deny in each settings file, highest priority first. A rule is a tool, optionally with what it applies to: Bash(npm run test:*), Read(~/notes/**), mcp__sawit__query. Project files show for the open projects; adding a rule to one that isn't there yet creates it.",
-            cx,
-        )
-        .children(cards)
-    }
-
-    fn render_file(
+    /// The sections the tab and the search leave, or the empty state.
+    pub(super) fn render_sections(
         &mut self,
-        ix: usize,
-        file: &RulesFile,
+        query: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let project = file
-            .scope
-            .project()
-            .and_then(|p| p.file_name())
-            .map(|n| format!(" · {}", n.to_string_lossy()))
-            .unwrap_or_default();
-        let name = format!("{}{project}", file.scope.label());
-        let label = name.clone();
-        let mut el = card(("perms-file", ix), name.clone(), cx).child(
-            h_flex()
-                .gap_2()
-                .child(div().text_sm().font_semibold().child(name))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_xs()
-                        .text_color(muted)
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .child(tilde(&file.path)),
-                )
-                .when(!file.exists, |el| {
-                    el.child(crate::catalog::tag(None, "Not there yet", cx))
-                })
-                .when(!file.editable && file.problem.is_none(), |el| {
-                    el.child(crate::catalog::tag(None, "Read only", cx))
-                }),
-        );
-        if let Some(problem) = &file.problem {
-            el = el.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().danger)
-                    .whitespace_normal()
-                    .child(format!(
-                        "Its rules can't be read, so Sawit doesn't edit it: {problem}"
-                    )),
-            );
+    ) -> Vec<AnyElement> {
+        let current = self.section;
+        let show = |s: Section| current == Section::All || current == s;
+        let mut out = Vec::new();
+        if show(Section::Claude) {
+            out.extend(self.render_files(query, window, cx));
         }
-        let lists = h_flex()
-            .gap_3()
-            .items_start()
-            .children(Bucket::ALL.map(|bucket| {
-                let rules = file.rules.get(bucket).to_vec();
+        if show(Section::Tools) {
+            out.extend(self.render_tools(query, cx));
+        }
+        if show(Section::MacOs) {
+            out.extend(self.render_macos(query, cx));
+        }
+        if show(Section::Others) {
+            out.extend(self.render_others(query, cx));
+        }
+        if out.is_empty() {
+            let title = if query.is_empty() {
+                "Nothing here".to_string()
+            } else {
+                format!("Nothing matches “{query}”")
+            };
+            out.push(
                 v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_semibold()
-                            .text_color(muted)
-                            .child(format!("{} ({})", bucket.title(), rules.len())),
-                    )
-                    .children(
-                        rules
-                            .into_iter()
-                            .enumerate()
-                            .map(|(r, rule)| self.render_rule(ix, bucket, r, rule, file, cx)),
-                    )
-            }));
-        el = el.child(lists);
-        if file.editable {
-            let input = self.input(&file.path, &label, window, cx);
-            let path = file.path.clone();
-            el = el.child(
-                h_flex()
-                    .gap_2()
-                    .child(div().flex_1().min_w_0().child(Input::new(&input).small()))
-                    .children(Bucket::ALL.map(|bucket| {
-                        let path = path.clone();
-                        Button::new(SharedString::from(format!(
-                            "perms-add-{ix}-{}",
-                            bucket.key()
-                        )))
-                        .outline()
-                        .small()
-                        .label(format!("Add to {}…", bucket.title()))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.add_typed(path.clone(), bucket, window, cx)
-                            },
-                        ))
-                    })),
+                    .rounded(cx.theme().radius_lg)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(catalog::empty(
+                        title,
+                        Button::new("perms-clear-filters")
+                            .outline()
+                            .small()
+                            .icon(Lucide::FunnelX)
+                            .label("Clear Filters")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.clear_filters(window, cx)),
+                            ),
+                        cx,
+                    ))
+                    .into_any_element(),
             );
         }
-        el.into_any_element()
+        out
     }
 
-    fn render_rule(
-        &self,
-        ix: usize,
-        bucket: Bucket,
-        r: usize,
-        rule: String,
-        file: &RulesFile,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let id = SharedString::from(format!("perms-rule-{ix}-{}-{r}", bucket.key()));
-        let chip = Button::new(id)
-            .outline()
-            .xsmall()
-            .label(rule.clone())
-            .tooltip(rule.clone());
-        if !file.editable {
-            return chip.disabled(true).into_any_element();
-        }
-        let (page, path) = (cx.weak_entity(), file.path.clone());
-        chip.dropdown_caret(true)
-            .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _, _| {
-                for to in Bucket::ALL.into_iter().filter(|b| *b != bucket) {
-                    let (page, path, rule) = (page.clone(), path.clone(), rule.clone());
-                    menu = menu.item(
-                        PopupMenuItem::new(format!("Move to {}…", to.title()))
-                            .icon(crate::menu_icons::MOVE)
-                            .on_click(move |_, _, cx| {
-                                let _ = page.update(cx, |this, cx| {
-                                    this.propose(
-                                        path.clone(),
-                                        Change::Move {
-                                            rule: rule.clone(),
-                                            to,
-                                        },
-                                        cx,
-                                    )
-                                });
-                            }),
-                    );
-                }
-                let (page, path, rule) = (page.clone(), path.clone(), rule.clone());
-                menu.separator().item(
-                    PopupMenuItem::new("Remove Rule…")
-                        .icon(crate::menu_icons::DELETE)
-                        .danger(true)
-                        .on_click(move |_, _, cx| {
-                            let _ = page.update(cx, |this, cx| {
-                                this.propose(
-                                    path.clone(),
-                                    Change::Remove { rule: rule.clone() },
-                                    cx,
-                                )
-                            });
-                        }),
-                )
-            })
-            .into_any_element()
-    }
-
-    pub(super) fn render_tools(&self, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().muted_foreground;
-        let rows =
-            self.tools.iter().enumerate().map(|(ix, t)| {
-                let state = match &t.rule {
-                    Some((Bucket::Deny, rule, file)) => format!("Denied by {rule} ({file})"),
-                    Some((Bucket::Ask, rule, file)) => format!("Asks: {rule} ({file})"),
-                    Some((Bucket::Allow, rule, file)) => {
-                        format!("Allowed without asking: {rule} ({file})")
+    fn render_tools(&self, query: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let theme = cx.theme().clone();
+        let muted = theme.muted_foreground;
+        let rows: Vec<Stateful<Div>> = self
+            .tools
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| tool_matches(t, query))
+            .map(|(ix, t)| {
+                let bucket = t.rule.as_ref().map(|(b, _, _)| *b);
+                let (mark, status, color) = match bucket {
+                    Some(Bucket::Deny) => (Lucide::Ban, "Denied", theme.danger),
+                    Some(Bucket::Ask) => (Lucide::CircleCheck, "Always asks", theme.success),
+                    Some(Bucket::Allow) => {
+                        (Lucide::CircleAlert, "Runs without asking", theme.warning)
                     }
-                    None => "Asks (Claude Code's default)".into(),
+                    None => (Lucide::Info, "Asks by default", muted),
                 };
                 let tool = t.tool;
-                h_flex()
-                    .id(("perms-tool", ix))
-                    .role(Role::Group)
-                    .aria_label(tool)
-                    .gap_3()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
+                let details = v_flex()
+                    .gap_0p5()
                     .child(
-                        v_flex()
-                            .w(px(220.))
-                            .flex_none()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_family(cx.theme().mono_font_family.clone())
-                                    .child(tool),
-                            )
-                            .child(div().text_xs().text_color(muted).child(t.what)),
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .font_family(theme.mono_font_family.clone())
+                            .child(tool),
                     )
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
                             .text_xs()
+                            .text_color(muted)
                             .whitespace_normal()
-                            .child(state),
+                            .child(t.what),
                     )
-                    .child(
-                        Button::new(("perms-tool-ask", ix))
-                            .ghost()
-                            .xsmall()
-                            .label("Always Ask…")
-                            .tooltip("Adds mcp__sawit__… to Ask in Your User Settings")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.set_tool(tool, Bucket::Ask, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new(("perms-tool-deny", ix))
-                            .ghost()
-                            .xsmall()
-                            .label("Deny…")
-                            .tooltip("Adds mcp__sawit__… to Deny in Your User Settings")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.set_tool(tool, Bucket::Deny, cx)
-                            })),
-                    )
-            });
-        section(
+                    .when_some(t.rule.as_ref(), |el, (_, rule, file)| {
+                        el.child(mono_line(format!("{rule} · {file}"), cx))
+                    });
+                let actions = h_flex()
+                    .gap_1()
+                    .when(bucket != Some(Bucket::Ask), |el| {
+                        el.child(
+                            Button::new(("perms-tool-ask", ix))
+                                .outline()
+                                .small()
+                                .label("Always Ask…")
+                                .tooltip("Adds mcp__sawit__… to Ask in Your User Settings")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_tool(tool, Bucket::Ask, cx)
+                                })),
+                        )
+                    })
+                    .when(bucket != Some(Bucket::Deny), |el| {
+                        el.child(
+                            Button::new(("perms-tool-deny", ix))
+                                .outline()
+                                .small()
+                                .label("Deny…")
+                                .tooltip("Adds mcp__sawit__… to Deny in Your User Settings")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_tool(tool, Bucket::Deny, cx)
+                                })),
+                        )
+                    });
+                let row = catalog::columns(
+                    None,
+                    icon_tile(Lucide::Wrench, cx),
+                    details,
+                    catalog::pill(Mark::Icon(mark), status, color),
+                    actions,
+                );
+                catalog::list_item(row, ("perms-tool", ix), tool)
+            })
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        Some(section(
             "Sawit's Tools That Need Confirmation",
             "These sawit MCP tools act only when called with confirm=true. Claude Code's rules decide whether it asks you first; an MCP tool no rule names asks.",
+            list("Tool", rows, cx),
             cx,
-        )
-        .child(v_flex().children(rows))
+        ))
     }
 
-    pub(super) fn render_macos(&self, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().muted_foreground;
-        let rows = Privacy::ALL.iter().enumerate().map(|(ix, p)| {
-            let url = p.settings_url();
-            let (state, color) = match p.state() {
-                Some(true) => ("Allowed", cx.theme().success),
-                Some(false) => ("Not Allowed", cx.theme().danger),
-                None => ("See System Settings", muted),
-            };
-            h_flex()
-                .id(("perms-macos", ix))
-                .role(Role::Group)
-                .aria_label(p.name())
-                .gap_3()
-                .py_1()
-                .child(
+    fn render_macos(&self, query: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let theme = cx.theme().clone();
+        let muted = theme.muted_foreground;
+        let rows: Vec<Stateful<Div>> = Privacy::ALL
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| macos_matches(p, query))
+            .map(|(ix, p)| {
+                let url = p.settings_url();
+                let (mark, state, color) = match p.state() {
+                    Some(true) => (Lucide::CircleCheck, "Allowed", theme.success),
+                    Some(false) => (Lucide::CircleX, "Not allowed", theme.danger),
+                    None => (Lucide::Info, "See System Settings", muted),
+                };
+                let row = catalog::columns(
+                    None,
+                    icon_tile(Lucide::Lock, cx),
                     v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .child(div().text_sm().child(p.name()))
+                        .gap_0p5()
+                        .child(div().text_sm().font_semibold().child(p.name()))
                         .child(
                             div()
                                 .text_xs()
@@ -311,67 +269,84 @@ impl PermissionsPage {
                                 .whitespace_normal()
                                 .child(p.why()),
                         ),
-                )
-                .child(
-                    div()
-                        .w(px(140.))
-                        .flex_none()
-                        .text_xs()
-                        .text_color(color)
-                        .child(state),
-                )
-                .child(
+                    catalog::pill(Mark::Icon(mark), state, color),
                     Button::new(("perms-macos-open", ix))
                         .outline()
-                        .xsmall()
+                        .small()
                         .icon(Lucide::Settings)
                         .label("Open Settings")
                         .tooltip(format!("Privacy & Security, {}", p.name()))
                         .on_click(move |_, _, cx| cx.open_url(url)),
-                )
-        });
-        section(
-            "macOS",
-            "What Sawit, and the programs in its terminals (which macOS asks about as Sawit), may do. macOS shows Automation and Files & Folders only in System Settings.",
-            cx,
-        )
-        .child(v_flex().children(rows))
-    }
-
-    pub(super) fn render_others(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if self.others.is_empty() {
+                );
+                catalog::list_item(row, ("perms-macos", ix), p.name())
+            })
+            .collect();
+        if rows.is_empty() {
             return None;
         }
-        let cards = self.others.iter().enumerate().map(|(ix, o)| {
-            card(("perms-other", ix), o.agent.to_string(), cx)
-                .child(
-                    h_flex()
-                        .gap_2()
+        Some(section(
+            "macOS",
+            "What Sawit, and the programs in its terminals (which macOS asks about as Sawit), may do. macOS shows Automation and Files & Folders only in System Settings.",
+            list("Permission", rows, cx),
+            cx,
+        ))
+    }
+
+    fn render_others(&self, query: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let muted = cx.theme().muted_foreground;
+        let rows: Vec<Stateful<Div>> = self
+            .others
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| other_matches(o, query))
+            .map(|(ix, o)| {
+                let n = o.lines.len();
+                let row = catalog::columns(
+                    None,
+                    icon_tile(Lucide::Bot, cx),
+                    v_flex()
+                        .gap_0p5()
                         .child(div().text_sm().font_semibold().child(o.agent))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(tilde(&o.path)),
-                        )
-                        .child(crate::catalog::tag(None, "Read only", cx)),
-                )
-                .children(o.lines.iter().map(|l| {
-                    div()
-                        .text_xs()
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .child(l.clone())
-                }))
-        });
-        Some(
-            section(
-                "Other Agents",
-                "Their permission settings as their files hold them. Sawit shows them; change them in the agent or its file.",
-                cx,
-            )
-            .children(cards),
-        )
+                        .child(mono_line(tilde(&o.path), cx))
+                        .when(n > 0, |el| {
+                            el.child(
+                                v_flex()
+                                    .mt_1p5()
+                                    .p_2()
+                                    .gap_0p5()
+                                    .rounded(cx.theme().radius)
+                                    .bg(cx.theme().secondary)
+                                    .children(o.lines.iter().map(|l| {
+                                        div()
+                                            .text_xs()
+                                            .font_family(cx.theme().mono_font_family.clone())
+                                            .whitespace_normal()
+                                            .child(l.clone())
+                                    })),
+                            )
+                        }),
+                    catalog::pill(
+                        Mark::Icon(Lucide::Lock),
+                        if n == 1 {
+                            "Read only · 1 setting".to_string()
+                        } else {
+                            format!("Read only · {n} settings")
+                        },
+                        muted,
+                    ),
+                    div(),
+                );
+                catalog::list_item(row, ("perms-other", ix), o.agent)
+            })
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        Some(section(
+            "Other Agents",
+            "Their permission settings as their files hold them. Sawit shows them; change them in the agent or its file.",
+            list("Agent", rows, cx),
+            cx,
+        ))
     }
 }

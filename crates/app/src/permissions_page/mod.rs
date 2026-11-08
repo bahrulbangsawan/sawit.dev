@@ -6,6 +6,7 @@
 //! System Settings panes. Every change shows its diff in a sheet first; Save backs the file up
 //! and writes only that change.
 
+mod files;
 mod render;
 mod sections;
 #[cfg(test)]
@@ -13,11 +14,41 @@ mod tests;
 
 use std::path::PathBuf;
 
-use gpui_kit::component::input::InputState;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use sawit_core::permissions::{
     self as perms, Bucket, Change, OtherAgent, Plan, RulesFile, ToolState,
 };
+
+/// The page's filter tabs: every section, or one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Section {
+    All,
+    Claude,
+    Tools,
+    MacOs,
+    Others,
+}
+
+impl Section {
+    pub const ALL: [Section; 5] = [
+        Section::All,
+        Section::Claude,
+        Section::Tools,
+        Section::MacOs,
+        Section::Others,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Section::All => "All",
+            Section::Claude => "Claude Code",
+            Section::Tools => "Sawit Tools",
+            Section::MacOs => "macOS",
+            Section::Others => "Other Agents",
+        }
+    }
+}
 
 /// A change waiting in the sheet: what it does, to which file, and its plan.
 pub(crate) struct Pending {
@@ -36,6 +67,12 @@ pub struct PermissionsPage {
     pending: Option<Pending>,
     /// What the last change did, or why it couldn't.
     message: Option<(bool, String)>,
+    /// The tab: which sections show.
+    section: Section,
+    /// The file whose new-rule field is open, by its path.
+    adding: Option<PathBuf>,
+    search: Option<Entity<InputState>>,
+    _search: Option<Subscription>,
     focus: FocusHandle,
     sheet_focus: FocusHandle,
 }
@@ -50,6 +87,10 @@ impl PermissionsPage {
             inputs: Vec::new(),
             pending: None,
             message: None,
+            section: Section::All,
+            adding: None,
+            search: None,
+            _search: None,
             focus: cx.focus_handle(),
             sheet_focus: cx.focus_handle(),
         };
@@ -73,6 +114,60 @@ impl PermissionsPage {
         );
         self.tools = perms::sawit_tool_states(&self.files);
         self.others = perms::other_agents(&self.projects);
+    }
+
+    /// The search field, made on first render (it needs the window).
+    pub(crate) fn make_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Search rules, tools and permissions")
+        });
+        self._search = Some(
+            cx.subscribe_in(&search, window, |_, _, e: &InputEvent, _, cx| {
+                if matches!(e, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
+        );
+        self.search = Some(search);
+    }
+
+    pub(crate) fn query(&self, cx: &App) -> String {
+        self.search
+            .as_ref()
+            .map(|s| s.read(cx).value().trim().to_lowercase())
+            .unwrap_or_default()
+    }
+
+    /// Back to every section, with the search cleared.
+    pub(crate) fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.section = Section::All;
+        if let Some(search) = &self.search {
+            search.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        cx.notify();
+    }
+
+    /// Opens the new-rule field under the file at `path` (closing another's), or closes it.
+    pub(crate) fn toggle_adding(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.adding.as_ref() == Some(&path) {
+            self.adding = None;
+        } else {
+            let label = self
+                .files
+                .iter()
+                .find(|f| f.path == path)
+                .map(|f| f.scope.label())
+                .unwrap_or_default();
+            let input = self.input(&path, &label, window, cx);
+            input.update(cx, |i, cx| i.focus(window, cx));
+            self.adding = Some(path);
+        }
+        cx.notify();
     }
 
     /// The rule field of the file at `path`, made on first use.
@@ -176,6 +271,7 @@ impl PermissionsPage {
                     )
                 };
                 self.message = Some((true, format!("Saved: {}.{backup}", pending.title)));
+                self.adding = None;
                 if let Some((_, input)) = self.inputs.iter().find(|(p, _)| *p == pending.plan.path)
                 {
                     input.update(cx, |i, cx| i.set_value("", window, cx));
