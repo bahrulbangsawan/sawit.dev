@@ -184,15 +184,16 @@ impl Workspace {
 
     /// The canvas of the canvas file an agent's op names, `file`: its tab, opened as `sawit <file>`
     /// opens it ([`Self::open_board_file`]: a project's canvas file is that project's canvas tab,
-    /// and an `.excalidraw` file's canvas is bound to the `.sawit` file beside it), shown with
-    /// the tab area and its project, but with the keyboard left where the user has it.
+    /// and an `.excalidraw` file's canvas is bound to the `.sawit` file beside it), reached as
+    /// `reach` says, with the keyboard left where the user has it either way.
     pub(super) fn agent_canvas_file(
         &mut self,
         file: PathBuf,
+        reach: super::super::canvas::Reach,
         cx: &mut Context<Self>,
     ) -> Result<Entity<BoardView>, String> {
         let kind = canvas_file_kind(&file)?;
-        let board = self.open_board_file(file, kind, super::super::canvas::Reach::Quietly, cx);
+        let board = self.open_board_file(file, kind, reach, cx);
         board.ok_or_else(|| "The canvas didn't open.".into())
     }
 

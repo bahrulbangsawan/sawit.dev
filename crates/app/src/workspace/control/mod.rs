@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use super::*;
 
 mod answers;
+mod follow_agent;
 mod tabs;
 mod targets;
 #[cfg(test)]
@@ -49,6 +50,8 @@ impl Workspace {
                     p.run_panel.update(cx, |r, cx| r.reload_saved(cx));
                 }
             }
+            // The app's one list, read again once by the caller for every window.
+            Store::Accounts => {}
         }
     }
 
@@ -128,6 +131,9 @@ impl Workspace {
                 self.activate_tab(ix, cx);
                 done(json!({ "tab": ix }))
             }
+            Command::TabAction { tab, action } => {
+                done(self.agent_tab_action(&tab, &action, window, cx)?)
+            }
             Command::CloseTab { tab } => {
                 let ix = self.find_tab(&tab, cx)?;
                 let asking = self.close(CloseOp::This, ix, window, cx);
@@ -173,12 +179,19 @@ impl Workspace {
                 pane,
                 lines,
                 run,
+                output,
             } => {
                 let lines = lines.unwrap_or(READ_LINES).clamp(1, MAX_READ_LINES);
                 let terminal = self.terminal.read(cx);
-                let text = match run {
-                    Some(run) => terminal.run_text(run, lines, cx)?,
-                    None => terminal.text(tab, pane, lines, cx)?,
+                let text = match (run, output.as_deref()) {
+                    (_, Some(which @ ("last" | "errors"))) => {
+                        terminal.last_output(tab, pane, which == "errors", cx)?
+                    }
+                    (_, Some(other)) => {
+                        return Err(format!("Unknown output “{other}”: use last or errors."));
+                    }
+                    (Some(run), None) => terminal.run_text(run, lines, cx)?,
+                    (None, None) => terminal.text(tab, pane, lines, cx)?,
                 };
                 done(json!({ "text": text }))
             }
@@ -379,15 +392,29 @@ impl Workspace {
                 done(json!({ "tab": self.active }))
             }
             // The canvas of the agent's project ([`agent_project`]), or of the canvas file it
-            // names, where it is: the user's tab, project, layout and keyboard stay as they are,
-            // reads included, and a canvas not open yet opens behind the tab on show. It answers
+            // names. A read leaves the user's tab, project, layout and keyboard as they are, and a
+            // canvas not open yet opens behind the tab on show. The first change of an agent's
+            // burst of work brings the canvas forward, so its cursor and what it builds show as
+            // they happen ([`follow_agent`]); the keyboard stays where the user has it. It answers
             // at once, with the op's own reply: `{ok: false, error}` when it failed.
             Command::Canvas { op, file } => {
+                let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
+                let canvas = match (&file, &root) {
+                    (Some(file), _) => file.display().to_string(),
+                    (None, Some(root)) => root.display().to_string(),
+                    (None, None) => String::new(),
+                };
+                let who = agent.map_or("", |a| a.id.as_str());
+                let reach = match follow_agent::changes_canvas(&op)
+                    && follow_agent::starts_burst(who, &canvas, std::time::Instant::now(), cx)
+                {
+                    true => super::canvas::Reach::Show,
+                    false => super::canvas::Reach::Quietly,
+                };
                 let board = match file {
-                    Some(file) => self.agent_canvas_file(file, cx)?,
+                    Some(file) => self.agent_canvas_file(file, reach, cx)?,
                     None => {
-                        let root = agent_project(&self.roots(cx), agent_folder, self.root(cx));
-                        let board = self.canvas_of(root, super::canvas::Reach::Quietly, cx);
+                        let board = self.canvas_of(root, reach, cx);
                         board.ok_or("The canvas didn't open.")?
                     }
                 };
@@ -455,7 +482,7 @@ impl Workspace {
                 done(json!({ "terminal": tab, "pane": pane }))
             }
             // The keymap is every window's: the caller answers it for the whole app.
-            Command::Keymap { .. } => done(json!({})),
+            Command::Keymap { .. } | Command::Pomodoro { .. } => done(json!({})),
             Command::NewProject {
                 location,
                 stack,
