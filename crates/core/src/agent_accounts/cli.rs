@@ -24,6 +24,7 @@ sawit account: Claude Code accounts (the Accounts page)
   sawit account usage [account]        5-hour and 7-day usage as Claude Code last reported it
   sawit account add <name> [--dir D]   adds an account (~/.claude-<name> unless --dir)
   sawit account rename <account> <name>
+  sawit account move <account> up|down  its place in the list, and so its cp<n> number
   sawit account remove <account> [--yes]  takes it out of Sawit; the folder and sign-in stay
 
 Options after `open <account>` that aren't a folder go to claude.
@@ -43,6 +44,26 @@ fn ctx() -> Ctx {
 
 fn load(c: &Ctx) -> Result<Accounts, String> {
     Accounts::load(&c.root).map_err(|e| e.to_string())
+}
+
+/// Saves the list, and has a running app read it again (its Accounts page and account chip).
+fn save(all: &Accounts, c: &Ctx) -> Result<(), String> {
+    all.save(&c.root).map_err(|e| e.to_string())?;
+    crate::app_control::notify_reload(
+        &AppPaths::default_macos(),
+        crate::app_control::Store::Accounts,
+    );
+    Ok(())
+}
+
+/// `up` or `down` (`-1` or `+1`) for `sawit account move`, or why not.
+pub(crate) fn move_delta(word: Option<&str>) -> Result<isize, String> {
+    match word.map(str::to_ascii_lowercase).as_deref() {
+        Some("up" | "atas" | "naik") => Ok(-1),
+        Some("down" | "bawah" | "turun") => Ok(1),
+        Some(other) => Err(format!("move up or down, not “{other}”.")),
+        None => Err("Say up or down: sawit account move <account> up.".into()),
+    }
 }
 
 fn pick<'a>(all: &'a Accounts, what: Option<&str>, c: &Ctx) -> Result<&'a super::Account, String> {
@@ -137,8 +158,25 @@ fn run_cli(args: &[String], c: &Ctx) -> Result<i32, String> {
             let name = all
                 .rename(&id, arg(1).ok_or("Give the new name.")?)
                 .map_err(|e| e.to_string())?;
-            all.save(&c.root).map_err(|e| e.to_string())?;
+            save(&all, c)?;
             println!("Renamed to {name}.");
+            Ok(0)
+        }
+        "move" | "mv" => {
+            let mut all = load(c)?;
+            let acc = pick(&all, Some(arg(0).ok_or("Name the account.")?), c)?;
+            let (id, name) = (acc.id.clone(), acc.name.clone());
+            let delta = move_delta(arg(1))?;
+            if !all.move_by(&id, delta) {
+                return Err(format!("{name} is already at that end of the list."));
+            }
+            save(&all, c)?;
+            let place = all
+                .of(AgentKind::ClaudeCode)
+                .iter()
+                .position(|a| a.id == id)
+                .map_or(0, |i| i + 1);
+            println!("{name} is cp{place} now.");
             Ok(0)
         }
         "remove" | "rm" => remove(c, rest),
@@ -375,7 +413,7 @@ fn add(c: &Ctx, rest: &[String]) -> Result<i32, String> {
         created_at: crate::github::now(),
     };
     let added = all.add(account).map_err(|e| e.to_string())?.clone();
-    all.save(&c.root).map_err(|e| e.to_string())?;
+    save(&all, c)?;
     println!(
         "Added {} ({}). Sign it in: sawit account login {}",
         added.name,
@@ -405,7 +443,7 @@ fn remove(c: &Ctx, rest: &[String]) -> Result<i32, String> {
         let _ = super::tracking::disable(&c.root, &mut gone, crate::github::now());
     }
     all.remove(&a.id);
-    all.save(&c.root).map_err(|e| e.to_string())?;
+    save(&all, c)?;
     println!(
         "Removed {}. {} and its sign-in are still there.",
         a.name,

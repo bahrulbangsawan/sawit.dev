@@ -189,3 +189,15 @@ fn diagnostics_name_variables_never_their_values() {
     );
     assert_eq!(find("Account gone").level, advice::Level::Fail);
 }
+
+/// `sawit account move <account> up|down`, in English or Indonesian; anything else says how.
+#[test]
+fn account_move_reads_up_and_down() {
+    use crate::agent_accounts::cli::move_delta;
+    assert_eq!(move_delta(Some("up")), Ok(-1));
+    assert_eq!(move_delta(Some("NAIK")), Ok(-1));
+    assert_eq!(move_delta(Some("down")), Ok(1));
+    assert_eq!(move_delta(Some("turun")), Ok(1));
+    assert!(move_delta(Some("left")).unwrap_err().contains("up or down"));
+    assert!(move_delta(None).unwrap_err().contains("sawit account move"));
+}

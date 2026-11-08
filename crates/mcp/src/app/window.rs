@@ -12,6 +12,14 @@ use super::{FILL_PANELS, PAGES, PANELS, variant};
 use crate::{Sawit, fail};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PomodoroArgs {
+    #[schemars(
+        description = "state, start (or resume), pause, skip (end this phase now: a focus starts its break, a break leads to the next focus), stop (back to a focus not started), show or hide (its pill on the canvases)"
+    )]
+    pub action: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WindowArgs {
     #[schemars(
         description = "Project folder (or a path inside it) whose window to use; default the window with your working folder open, else the frontmost"
@@ -67,6 +75,17 @@ pub struct PageArgs {
         description = "canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap, new_project, permissions or accounts"
     )]
     pub page: String,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TabActionArgs {
+    #[schemars(description = "Tab index (from app_state) or title")]
+    pub tab: String,
+    #[schemars(
+        description = "close_others, close_left, close_right, close_clean (every tab without unsaved changes), pin, unpin, read_only or editable (a file's tab)"
+    )]
+    pub action: String,
     pub project: Option<String>,
 }
 
@@ -148,6 +167,14 @@ impl Sawit {
     }
 
     #[tool(
+        description = "The app's Pomodoro timer, as its pill on the canvas and the View menu's Pomodoro Timer drive it: 25 minutes of focus, then a 5-minute break, a 15-minute break after every fourth focus; a focus that ends starts its break, a break that ends waits for the next focus, and each end shows a macOS notification. action state, start, pause, skip, stop, show or hide. It is the user's own focus timer: change it only when the user asks. Answers the timer: phase, state (idle, running, paused), time left, round and whether the pill shows. Needs the app running"
+    )]
+    async fn app_pomodoro(&self, Parameters(a): Parameters<PomodoroArgs>) -> CallToolResult {
+        self.app_tool(None, Command::Pomodoro { action: a.action })
+            .await
+    }
+
+    #[tool(
         description = "Toggle filling the window with the terminal (and back): app_maximize with panel terminal"
     )]
     async fn app_maximize_terminal(&self, Parameters(a): Parameters<WindowArgs>) -> CallToolResult {
@@ -179,6 +206,17 @@ impl Sawit {
     async fn app_close_tab(&self, Parameters(a): Parameters<TabArgs>) -> CallToolResult {
         self.app_tool(a.project, Command::CloseTab { tab: a.tab })
             .await
+    }
+
+    #[tool(
+        description = "A center tab's menu action, as the user's click on it does: close_others, close_left or close_right of the tab, close_clean (every tab without unsaved changes), pin or unpin it (pinned tabs sit first and Safe Close All keeps them), read_only or editable (a file's tab). Bulk closes leave tabs that would lose something (unsaved changes) open. Answers how many closed, or the tab's place and pin. Needs the app running"
+    )]
+    async fn app_tab(&self, Parameters(a): Parameters<TabActionArgs>) -> CallToolResult {
+        let command = Command::TabAction {
+            tab: a.tab,
+            action: a.action,
+        };
+        self.app_tool(a.project, command).await
     }
 
     #[tool(

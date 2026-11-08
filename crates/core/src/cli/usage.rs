@@ -24,7 +24,7 @@ Usage:
   sawit shell [status] | upload|download <file ...> [--overwrite] [-y]
   sawit prompts backup|restore [--repo <name>] [--overwrite <id>] [-y]
   sawit github token --header | --exec <program> [args ...]
-  sawit account [list|open|use|login|status|usage|add|remove|help]
+  sawit account [list|open|use|login|status|usage|add|rename|move|remove|help]
 
 Examples:
   sawit .                  open this folder as a project (joins the open

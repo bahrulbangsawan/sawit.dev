@@ -14,6 +14,11 @@ pub const CONFIRM_TOOLS: &[(&str, &str)] = &[
     ("drop_database", "Drops a PostgreSQL database"),
     ("drop_relation", "Drops a table, view or other relation"),
     ("edit_permission", "Changes a Claude Code permission rule"),
+    (
+        "git_discard",
+        "Throws away files' unstaged changes, with no undo",
+    ),
+    ("git_merge", "Aborts a merge, throwing away what it left"),
     ("execute_sql", "Runs SQL that can change or delete data"),
     (
         "install_dev_tools",
@@ -29,6 +34,10 @@ pub const CONFIRM_TOOLS: &[(&str, &str)] = &[
     ),
     ("keymap_bind", "Changes a key binding"),
     ("keymap_unbind", "Removes a key binding"),
+    (
+        "manage_agent_account",
+        "Takes a Claude Code account off Sawit's list",
+    ),
     (
         "local_explorer_request",
         "Sends a request that can change a local Workers resource",

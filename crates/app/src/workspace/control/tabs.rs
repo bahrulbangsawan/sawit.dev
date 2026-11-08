@@ -152,7 +152,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
-        let _ = window;
         let root = root.ok_or("Canvas tabs are a project's: open a project folder first.")?;
         let named = || -> Result<PathBuf, String> {
             let tab = tab
@@ -198,9 +197,24 @@ impl Workspace {
                 let to = self.rename_canvas(&file, to, cx)?;
                 json!({ "renamed": sawit_core::canvases::canvas_name(&to) })
             }
+            // As the tab menu's Delete Canvas: the user is asked, and the file goes to the Trash.
+            "delete" => {
+                let file = named()?;
+                let name = sawit_core::canvases::canvas_name(&file).to_string();
+                if name == "canvas" {
+                    return Err("The project's own canvas isn't deleted: clear it instead.".into());
+                }
+                if !file.is_file() {
+                    return Err(format!(
+                        "No canvas is “{name}”. canvas_tabs list shows them."
+                    ));
+                }
+                self.delete_canvas(file, window, cx);
+                json!({ "asking": format!("The user is asked whether to delete the canvas {name}; it goes to the Trash if they agree.") })
+            }
             other => {
                 return Err(format!(
-                    "Unknown action “{other}”: use list, open, close, activate or rename."
+                    "Unknown action “{other}”: use list, open, close, activate, rename or delete."
                 ));
             }
         };
@@ -250,4 +264,52 @@ impl Workspace {
 
 fn no_tab(name: &str) -> String {
     format!("No browser tab is “{name}”. browser_tabs lists them by id, title and address.")
+}
+
+impl Workspace {
+    /// An agent's `app_tab`: a center tab's menu action, as the user's click on it does.
+    pub(super) fn agent_tab_action(
+        &mut self,
+        tab: &str,
+        action: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        let ix = self.find_tab(tab, cx)?;
+        let before = self.tabs.len();
+        let pinned = self.tabs.get(ix).is_some_and(|t| t.pinned);
+        let op = match action.trim().to_lowercase().as_str() {
+            "close_others" => Some(CloseOp::Others),
+            "close_left" => Some(CloseOp::Left),
+            "close_right" => Some(CloseOp::Right),
+            "close_clean" => Some(CloseOp::Clean),
+            "pin" | "unpin" => {
+                if pinned != (action.trim().eq_ignore_ascii_case("pin")) {
+                    self.toggle_pin(ix, cx);
+                }
+                None
+            }
+            "read_only" | "editable" => {
+                let PaneItem::File(editor) = &self.tabs[ix].item else {
+                    return Err("Only a file's tab is read-only or editable.".into());
+                };
+                let want = action.trim().eq_ignore_ascii_case("read_only");
+                if editor.read(cx).read_only != want {
+                    self.toggle_read_only(ix, cx);
+                }
+                None
+            }
+            other => {
+                return Err(format!(
+                    "Unknown action “{other}”: use close_others, close_left, close_right, close_clean, pin, unpin, read_only or editable."
+                ));
+            }
+        };
+        if let Some(op) = op {
+            self.close(op, ix, window, cx);
+            return Ok(json!({ "closed": before - self.tabs.len(), "tabs": self.tabs.len() }));
+        }
+        let at = self.find_tab(tab, cx).unwrap_or(ix);
+        Ok(json!({ "tab": at, "pinned": self.tabs.get(at).is_some_and(|t| t.pinned) }))
+    }
 }

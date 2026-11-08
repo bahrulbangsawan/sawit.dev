@@ -63,6 +63,8 @@ pub enum Store {
     Prompts,
     Ssh,
     RunCommands,
+    /// Agent Accounts' list (`sawit_core::agent_accounts`): renamed, reordered or removed.
+    Accounts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +125,11 @@ pub enum Command {
     OpenPage {
         page: Page,
     },
+    /// The app's Pomodoro timer: `state`, `start` (or resume), `pause`, `skip` (to the next
+    /// phase), `stop` (back to a focus not started), `show` or `hide` (its pill on the canvases).
+    Pomodoro {
+        action: String,
+    },
     /// Activates the tab with this index (from `state`) or title, and its project.
     ActivateTab {
         tab: String,
@@ -131,6 +138,13 @@ pub enum Command {
     /// unsent annotations, a Dev Tools install) asks the user first, and the answer says so.
     CloseTab {
         tab: String,
+    },
+    /// A center tab's menu action on tab `tab` (index or title): `close_others`, `close_left`,
+    /// `close_right`, `close_clean` (every tab without unsaved changes), `pin`, `unpin`,
+    /// `read_only` or `editable` (a file's tab). Bulk closes leave tabs with unsaved changes.
+    TabAction {
+        tab: String,
+        action: String,
     },
     /// Types `command` and Enter into a shell: a new one in `cwd` when given
     /// or `new_tab` (without `cwd`, in the agent's own project, as for its
@@ -163,6 +177,11 @@ pub enum Command {
         /// now, or its output once it closed. Takes the place of `tab` and `pane`.
         #[serde(default)]
         run: Option<u64>,
+        /// `last`: only the output of the last command typed at the prompt (Copy Last Output);
+        /// `errors`: only its error lines and a few around each (Copy Error). Without it, the
+        /// last `lines` of the scrollback.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
     },
     /// Sends raw input to a terminal: text as typed, or a key named in
     /// [`KEY_NAMES`](super::KEY_NAMES) (`ctrl-c`, `enter`, `up`). `sawit-mcp` always names the

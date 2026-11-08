@@ -5,6 +5,10 @@
 /// only what the Sawit window shows (a panel, a tab, the layout, the browser page's scroll or
 /// size). MCP's `readOnlyHint`, which a client may act on by letting them through ([`hints`]).
 const READ_ONLY: &[&str] = &[
+    // Preview and the browser's panels change only what the window shows.
+    "canvas_preview",
+    "browser_panel",
+    "browser_devtools",
     "list_agent_accounts",
     "agent_account_sessions",
     "account_pool",
@@ -80,6 +84,13 @@ const READ_ONLY: &[&str] = &[
 /// shell command, a script, JavaScript, an install script. MCP's `destructiveHint`, which a client
 /// may act on by asking first. Every other tool that isn't [`READ_ONLY`] only adds.
 const DESTRUCTIVE: &[&str] = &[
+    // stop ends the focus that runs; discard and a merge's abort lose changes; a tab action
+    // closes tabs; an account can be taken off the list.
+    "app_pomodoro",
+    "git_discard",
+    "git_merge",
+    "app_tab",
+    "manage_agent_account",
     // The active account is replaced; shared settings can remove an entry from every account.
     "use_agent_account",
     "sync_agent_settings",
@@ -178,6 +189,7 @@ const DESTRUCTIVE: &[&str] = &[
 /// (the app, an instance, a session). Not read-only, and not destructive ([`hints`]). Every tool
 /// is in one of [`READ_ONLY`], [`DESTRUCTIVE`] and this list, so a new one has to be placed.
 const ADDS: &[&str] = &[
+    "git_init",
     "terminal_lock",
     "terminal_pin",
     // A usage check spends a few hundred tokens and records the result; a terminal tab opens.

@@ -70,14 +70,14 @@ pub struct PoolArgs {
     pub days: Option<u32>,
 }
 
-fn ctx(s: &Sawit) -> (std::path::PathBuf, std::path::PathBuf) {
+pub(crate) fn ctx(s: &Sawit) -> (std::path::PathBuf, std::path::PathBuf) {
     (
         s.paths.root.clone(),
         std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()),
     )
 }
 
-fn pick<'a>(
+pub(crate) fn pick<'a>(
     all: &'a Accounts,
     what: Option<&str>,
     root: &std::path::Path,

@@ -124,8 +124,76 @@ fn export_report(v: &Value) -> Result<String, String> {
     Ok(clip_out(out))
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PanelArgs {
+    #[schemars(
+        description = "annotate (the notes the user leaves on the page), design (the page's design) or seo (the SEO and agent-readiness scan); leave it out to close the open panel"
+    )]
+    pub panel: Option<String>,
+    #[schemars(
+        description = "The panel's tab: design's inspect, colors, fonts, assets or system; seo's overview, previews, checks or agents"
+    )]
+    pub tab: Option<String>,
+    #[serde(flatten)]
+    pub at: crate::browser::At,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DevtoolsArgs {
+    #[serde(flatten)]
+    pub at: crate::browser::At,
+}
+
+/// `panel` and `tab` checked against the panels and tabs there are.
+pub(crate) fn panel_op(panel: Option<String>, tab: Option<String>) -> Result<BrowserOp, String> {
+    let panel = panel
+        .map(|p| p.trim().to_lowercase())
+        .filter(|p| !p.is_empty());
+    let tabs: &[&str] = match panel.as_deref() {
+        None | Some("annotate") => &[],
+        Some("design") => &["inspect", "colors", "fonts", "assets", "system"],
+        Some("seo") => &["overview", "previews", "checks", "agents"],
+        Some(other) => {
+            return Err(format!(
+                "Unknown panel “{other}”: use annotate, design or seo, or leave it out to close."
+            ));
+        }
+    };
+    let tab = tab
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| !t.is_empty());
+    if let Some(t) = &tab
+        && !tabs.contains(&t.as_str())
+    {
+        return Err(match panel.as_deref() {
+            Some(p) if !tabs.is_empty() => {
+                format!("{p} has no tab “{t}”: use {}.", tabs.join(", "))
+            }
+            _ => "Only the design and seo panels have tabs.".to_string(),
+        });
+    }
+    Ok(BrowserOp::Panel { panel, tab })
+}
+
 #[tool_router(router = browser_design_router, vis = "pub(crate)")]
 impl Sawit {
+    #[tool(
+        description = "Open a side panel of the browser tab, as its toolbar buttons do: annotate (the user's notes on the page), design (the page's design, on a tab: inspect, colors, fonts, assets, system) or seo (the scan, on a tab: overview, previews, checks, agents); with no panel, close the open one. For the user to see: agents read notes, design and SEO through browser_annotations, browser_design and browser_seo, panel or not. Answers the panel open now. Needs the app running"
+    )]
+    async fn browser_panel(&self, Parameters(a): Parameters<PanelArgs>) -> CallToolResult {
+        let op = tri!(panel_op(a.panel, a.tab));
+        let v = tri!(self.browser(&a.at, op).await);
+        ok(pretty(&v))
+    }
+
+    #[tool(
+        description = "Open Safari's Web Inspector on the browser tab's page, as the toolbar's Inspect Element button does, for the user to debug with. Agents read the page with browser_snapshot, browser_console, browser_network and browser_evaluate. Needs the app running"
+    )]
+    async fn browser_devtools(&self, Parameters(a): Parameters<DevtoolsArgs>) -> CallToolResult {
+        let v = tri!(self.browser(&a.at, BrowserOp::Devtools).await);
+        ok(pretty(&v))
+    }
+
     #[tool(
         description = "Design details of one element in the browser tab: box model, typography, colors with contrast, :hover/:focus states; format json (default), css, tailwind or html"
     )]
@@ -271,5 +339,37 @@ mod tests {
     #[test]
     fn output_is_clip_out() {
         assert!(clip_out("é".repeat(40_000)).len() < 60_100);
+    }
+}
+
+#[cfg(test)]
+mod panel_tests {
+    use sawit_core::browser::BrowserOp;
+
+    use super::panel_op;
+
+    #[test]
+    fn a_panel_and_its_tab_are_checked() {
+        let op = panel_op(Some("SEO".into()), Some("agents".into())).unwrap();
+        let want = BrowserOp::Panel {
+            panel: Some("seo".into()),
+            tab: Some("agents".into()),
+        };
+        assert_eq!(format!("{op:?}"), format!("{want:?}"));
+        let closed = panel_op(None, None).unwrap();
+        assert_eq!(
+            format!("{closed:?}"),
+            format!(
+                "{:?}",
+                BrowserOp::Panel {
+                    panel: None,
+                    tab: None
+                }
+            )
+        );
+        let e = panel_op(Some("seo".into()), Some("colors".into())).unwrap_err();
+        assert!(e.contains("overview"), "{e}");
+        let e = panel_op(Some("ruler".into()), None).unwrap_err();
+        assert!(e.contains("annotate, design or seo"), "{e}");
     }
 }

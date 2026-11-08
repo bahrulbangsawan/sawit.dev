@@ -11,7 +11,7 @@ What you run in Sawit's terminal shows in the user's window, where they can watc
 
 1. `app_run_list` (or `list_scripts` with `project_dir`, which works without the app) lists the project's scripts (package.json with workspaces, Makefile, cargo, deno, composer) and saved commands, with their exact names.
 2. `app_run_script` with that `name` starts it in a terminal tab of its own and returns the tab and `pane`: keep both.
-3. `terminal_read` with that tab and pane reads its output: look for the ready line or the errors. `app_stop_script` stops it.
+3. `terminal_read` with that tab and pane reads its output: look for the ready line or the errors. `output: last` reads only the last command's output, `output: errors` only its error lines. `app_stop_script` stops it.
 4. `save_command` saves command lines to the project's Run panel (`mode`: sequence or parallel) when the project has no script for them; `remove_command` takes one out (`confirm`).
 
 ## Any command

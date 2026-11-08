@@ -19,6 +19,7 @@ use sawit_core::instances::{AppPaths, Instance};
 
 pub mod agent;
 pub mod agent_accounts;
+pub mod agent_accounts_manage;
 /// Every diagram type the diagram tools draw, by the keyword a source starts with
 /// (`sawit_core::mermaid::TYPES`, which a test holds this to), for their descriptions.
 macro_rules! diagram_types {
@@ -48,6 +49,7 @@ pub mod dev_tools;
 pub mod diagrams;
 pub mod files;
 pub mod git;
+pub mod git_ops;
 pub mod git_remote;
 mod hints;
 pub mod instances;
@@ -273,6 +275,7 @@ impl Sawit {
             + Self::ssh_router()
             + Self::scripts_router()
             + Self::git_router()
+            + Self::git_ops_router()
             + Self::git_remote_router()
             + Self::prompts_router()
             + Self::files_router()
@@ -284,6 +287,7 @@ impl Sawit {
             + Self::config_files_router()
             + Self::shell_sync_router()
             + Self::agent_accounts_router()
+            + Self::agent_accounts_manage_router()
             + Self::prompt_backup_router()
             + Self::permissions_router()
             // App-control tools (need the app running).

@@ -93,6 +93,10 @@ pub struct TerminalReadArgs {
         description = "The run number terminal_run gave (\"(run 5)\"): that command's terminal wherever it is now, or its output after its tab closed. Takes the place of tab and pane"
     )]
     pub run: Option<u64>,
+    #[schemars(
+        description = "last: only the output of the last command typed at the prompt (as Copy Last Output copies it); errors: only its error lines and a few around each (as Copy Error does). Without it, the last `lines` of the scrollback"
+    )]
+    pub output: Option<String>,
     pub project: Option<String>,
 }
 
@@ -237,6 +241,7 @@ impl Sawit {
             pane,
             lines: Some(lines.unwrap_or(100)),
             run,
+            output: None,
         };
         match self.app_call(project, read).await {
             Ok(v) => ok(format!(
@@ -314,7 +319,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Read a terminal pane's latest output (scrollback and screen) as text: name the tab, and the pane in a split tab, as terminal_run returned them; without a tab, the pane the user has in front"
+        description = "Read a terminal pane's latest output (scrollback and screen) as text: name the tab, and the pane in a split tab, as terminal_run returned them; without a tab, the pane the user has in front. output last answers only the last command's output, errors only its error lines"
     )]
     pub(super) async fn terminal_read(
         &self,
@@ -325,6 +330,7 @@ impl Sawit {
             pane: a.pane,
             lines: a.lines,
             run: a.run,
+            output: a.output,
         };
         match self.app_call(a.project, command).await {
             Ok(v) => ok(v["text"].as_str().unwrap_or_default().to_string()),

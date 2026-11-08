@@ -18,7 +18,8 @@ Most Sawit tools work without the app; the `app_*` and `keymap_*` tools need it.
 - `app_open_page` with `page`: canvas, browser, mcp, tools, skills, changelog, git_graph, github, instance, keymap, new_project, permissions or accounts.
 - `app_open_table`, `app_open_sql` (`run` runs it in the app), `app_open_diagram`, `app_open_prompt` and `app_instance` open data, prompts and instances in their tabs (see `sawit-databases` and `sawit-prompts`).
 - `app_layout` shows or hides the sidebar, the tabs and the terminal dock; `app_maximize` with `panel` (terminal, browser or canvas) fills the window and back; `app_focus` brings a window forward.
-- `app_activate_tab` and `app_close_tab` by index or title. A tab that would lose something asks the user and answers "asking". `app_close_all_tabs` is Safe Close All; `force` closes everything and needs `confirm`: ask first.
+- `app_pomodoro` drives the user's Pomodoro timer (25 minutes of focus, then a break): `state`, `start`, `pause`, `skip`, `stop`, `show` or `hide`. It is the user's own timer: change it only when they ask; `app_state`'s `pomodoro` says how it stands.
+- `app_activate_tab` and `app_close_tab` by index or title. A tab that would lose something asks the user and answers "asking". `app_close_all_tabs` is Safe Close All; `force` closes everything and needs `confirm`: ask first. `app_tab` does a tab's menu action (its `action`): close the others, the ones to the left or right, or every clean one; pin or unpin; make a file's tab read-only or editable.
 - Most take `project`: the folder of the window to act in, when several are open.
 
 ## Search
@@ -35,7 +36,7 @@ Most Sawit tools work without the app; the `app_*` and `keymap_*` tools need it.
 - `list_agent_accounts`: each account, the active one, and the 5-hour and 7-day usage Claude Code last reported; `agent_account_usage` (`check: true` asks for current numbers, which spends a few hundred tokens of that account).
 - `agent_account_sessions`: the running Claude Code sessions per account.
 - `account_pool` (`view`: overview, detailed, compare, timeline, …; `provider`; `days`): the pool of Claude Code and Codex accounts as the Accounts page shows it. Before long work, `view: "compare"` names the account with the most room left and why.
-- `use_agent_account` makes one active for new sessions; `open_agent_account` opens a terminal running `claude` as an account (`folder`).
+- `use_agent_account` makes one active for new sessions; `open_agent_account` opens a terminal running `claude` as an account (`folder`). `manage_agent_account` renames one (with `name`), moves it up or down the list, or takes it off Sawit's list (with `confirm: true`; its folder stays).
 - `sync_agent_settings` with `action` status or run: the MCP servers, skills, plugins, hooks and rules shared across accounts, when the user turned sharing on. Signing in is the user's.
 
 ## Permissions

@@ -255,6 +255,28 @@ impl TerminalPanel {
         Ok(view.read(cx).text_tail(lines))
     }
 
+    /// The output of the last command typed at a pane's prompt, as Copy Last Output copies it, or
+    /// only its errors (`errors`), as Copy Error does (see [`Self::target`]).
+    pub fn last_output(
+        &self,
+        tab: Option<usize>,
+        pane: Option<usize>,
+        errors: bool,
+        cx: &App,
+    ) -> Result<String, String> {
+        let (_, _, view) = self.target(tab, pane, cx)?;
+        let output = view.read(cx).last_output();
+        if !errors {
+            return Ok(output);
+        }
+        // As Copy Error does: with no error line in the output, the whole output, and it says so.
+        let found = sawit_core::copy_logs::errors_only(&output);
+        Ok(match found.trim().is_empty() {
+            true => format!("(No error lines found; the whole output follows.)\n{output}"),
+            false => found,
+        })
+    }
+
     /// Sends raw input to a pane (see [`Self::target`]). The pane counts
     /// as used from then on, as when the user types there.
     pub fn input(

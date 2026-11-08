@@ -21,6 +21,7 @@ Sawit's git tools run git on the repository that holds the folder you pass as `r
 ## Branches and the remote
 
 - `git_switch` with `branch`; `create: true` makes it from the current commit. A switch with changes git can't carry is refused: say so rather than stashing on your own.
+- `git_merge` with `branch` merges it into the current one; a merge that stops on conflicts lists them (resolve, `git_stage`, `git_commit`), and `abort` with `confirm: true` undoes it. `git_discard` throws away the named files' unstaged changes for good (`confirm: true`): only when the user asked. `git_init` makes a folder a repository with `main`.
 - `git_fetch` fetches every remote; `git_pull` fast-forwards only (a diverged branch is left for the user to merge); `git_push` pushes the current branch, setting its upstream on origin the first time, and never forces. Push only when the user asked.
 - They use the user's own git credentials first, then Sawit's GitHub sign-in for a github.com remote over HTTPS. Only the user signs in to GitHub: `app_state`'s `github` says whether they have.
 

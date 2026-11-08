@@ -30,7 +30,9 @@ pub struct SeoArgs {
     )]
     #[serde(default)]
     pub external: bool,
-    #[schemars(description = "text (default) or json (the whole report)")]
+    #[schemars(
+        description = "text (default), json (the whole report), or prompt: one prompt that lists every check to fix with its fix, as the SEO panel's Copy Prompt makes (checks that need outside work, such as directory listings, listed apart)"
+    )]
     pub format: Option<String>,
     #[serde(flatten)]
     pub at: crate::browser::At,
@@ -56,8 +58,8 @@ pub(crate) fn options(a: &SeoArgs) -> Result<ScanOptions, String> {
         ));
     }
     match a.format.as_deref() {
-        None | Some("text") | Some("json") => {}
-        Some(f) => return Err(format!("Unknown format “{f}”. Use text or json.")),
+        None | Some("text") | Some("json") | Some("prompt") => {}
+        Some(f) => return Err(format!("Unknown format “{f}”. Use text, json or prompt.")),
     }
     Ok(ScanOptions {
         scan_type,
@@ -70,7 +72,7 @@ pub(crate) fn options(a: &SeoArgs) -> Result<ScanOptions, String> {
 #[tool_router(router = browser_seo_router, vis = "pub(crate)")]
 impl Sawit {
     #[tool(
-        description = "Scan a page for SEO and agent readiness, as the browser's SEO panel does: title, description, canonical, robots, hreflang, headings, favicons, manifest, Open Graph and X tags with the share image's size, JSON-LD, sitemaps, llms.txt, alt text, broken links;, and the agent-readiness checks (discovery files, Markdown negotiation, AI bot rules, MCP endpoints, OAuth metadata, OpenAPI, WebMCP, accessibility tree), scored per layer with a total, grade and Essentials score. Each check gives pass/warning/fail, evidence and a fix. Default: the page open in the browser tab"
+        description = "Scan a page for SEO and agent readiness, as the browser's SEO panel does: title, description, canonical, robots, hreflang, headings, favicons, manifest, Open Graph and X tags with the share image's size, JSON-LD, sitemaps, llms.txt, alt text, broken links;, and the agent-readiness checks (discovery files, Markdown negotiation, AI bot rules, MCP endpoints, OAuth metadata, OpenAPI, WebMCP, accessibility tree), scored per layer with a total, grade and Essentials score. Each check gives pass/warning/fail, evidence and a fix; format prompt answers one prompt for every fix. Default: the page open in the browser tab"
     )]
     async fn browser_seo(&self, Parameters(a): Parameters<SeoArgs>) -> CallToolResult {
         let mut options = tri!(options(&a));
@@ -100,6 +102,9 @@ impl Sawit {
             }
         };
         let report = seo::scan(&url, options).await;
+        if a.format.as_deref() == Some("prompt") {
+            return ok(clip(seo::fix_prompt_where(&report, true, |_| true), 60_000));
+        }
         if a.format.as_deref() == Some("json") {
             return ok(clip(
                 pretty(&serde_json::to_value(&report).unwrap_or_default()),
@@ -146,5 +151,24 @@ mod tests {
         assert_eq!(normalize("kyzn.life"), "https://kyzn.life");
         assert_eq!(normalize("localhost:3000"), "http://localhost:3000");
         assert_eq!(normalize("http://x.dev/"), "http://x.dev/");
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::{SeoArgs, options};
+
+    fn args(format: &str) -> SeoArgs {
+        serde_json::from_value(serde_json::json!({ "format": format })).unwrap()
+    }
+
+    /// prompt is a format, as text and json are; an unknown one names the three.
+    #[test]
+    fn prompt_is_a_format_and_an_unknown_one_says_which_there_are() {
+        for f in ["text", "json", "prompt"] {
+            assert!(options(&args(f)).is_ok(), "{f}");
+        }
+        let error = options(&args("yaml")).unwrap_err();
+        assert!(error.contains("text, json or prompt"), "{error}");
     }
 }

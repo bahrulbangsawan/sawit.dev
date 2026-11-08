@@ -31,7 +31,9 @@ pub struct BrowserTabsArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanvasTabsArgs {
-    #[schemars(description = "list (default), open, close, activate or rename")]
+    #[schemars(
+        description = "list (default), open, close, activate, rename or delete (asks the user)"
+    )]
     pub action: Option<String>,
     #[schemars(
         description = "The canvas: canvas (the project's own) or another's name, a .sawit file in the project's .nyawit/. open makes a new one when there is none by that name"
@@ -64,7 +66,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "The project's canvases, each a .sawit file in .nyawit/ with its own tab (canvas.sawit, the project's canvas, first): list them (name, file, open, active), open one by name (a new one when there is none), close, activate or rename one. The canvas_* tools act on one with their file argument (the path list gives). Deleting a canvas is the user's, from its tab's menu"
+        description = "The project's canvases, each a .sawit file in .nyawit/ with its own tab (canvas.sawit, the project's canvas, first): list them (name, file, open, active), open one by name (a new one when there is none), close, activate, rename or delete one (delete asks the user, as the tab menu's Delete Canvas does, and the file goes to the Trash if they agree; the project's own canvas isn't deleted). The canvas_* tools act on one with their file argument (the path list gives)"
     )]
     async fn canvas_tabs(&self, Parameters(a): Parameters<CanvasTabsArgs>) -> CallToolResult {
         let command = Command::CanvasTabs {

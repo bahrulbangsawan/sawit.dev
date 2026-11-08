@@ -4,6 +4,7 @@ use super::*;
 
 mod lock_and_pin;
 mod naming_and_creating;
+mod tabs_and_timer;
 
 #[test]
 fn round_trip() {
@@ -105,6 +106,7 @@ fn the_agents_folder_round_trips() {
             pane: None,
             lines: None,
             run: None,
+            output: None,
         },
     };
     let bytes = encode(&request);

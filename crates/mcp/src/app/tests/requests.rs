@@ -148,6 +148,7 @@ async fn app_tools_name_the_agents_folder() {
         pane: None,
         lines: None,
         run: None,
+        output: None,
         project,
     };
     server.terminal_read(Parameters(read(None))).await;

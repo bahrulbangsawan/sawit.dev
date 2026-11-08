@@ -120,6 +120,7 @@ async fn terminal_run_reads_the_pane_it_ran_in() {
             pane: Some(1),
             lines: Some(100),
             run: None,
+            output: None,
         }
     );
 }
@@ -184,6 +185,7 @@ async fn terminal_split_reads_the_new_pane() {
             pane: Some(1),
             lines: Some(20),
             run: None,
+            output: None,
         }
     );
     for (direction, cwd, why) in [
@@ -393,6 +395,7 @@ async fn terminal_run_reads_its_run_by_number() {
             pane: Some(0),
             lines: Some(100),
             run: Some(7),
+            output: None,
         }
     );
 }
