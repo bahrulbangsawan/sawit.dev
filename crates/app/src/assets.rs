@@ -301,7 +301,10 @@ mod tests {
                 let path = entry.path();
                 if path.is_dir() {
                     dirs.push(path);
-                } else if path.extension().is_some_and(|e| e == "rs") {
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    // macOS's `._` metadata files beside sources on a non-Apple disk (exFAT).
+                    && !entry.file_name().to_string_lossy().starts_with("._")
+                {
                     let text = std::fs::read_to_string(&path).unwrap();
                     for prefix in ["Lucide::", "IconName::"] {
                         for (at, _) in text.match_indices(prefix) {

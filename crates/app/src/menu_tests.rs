@@ -254,7 +254,12 @@ fn sources() -> Vec<(String, String)> {
                 }
                 continue;
             }
-            if !name.ends_with(".rs") || name == "tests.rs" || name.ends_with("_tests.rs") {
+            // `._` files are macOS's metadata beside sources on a non-Apple disk (exFAT).
+            if !name.ends_with(".rs")
+                || name.starts_with("._")
+                || name == "tests.rs"
+                || name.ends_with("_tests.rs")
+            {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
