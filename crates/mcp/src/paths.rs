@@ -52,13 +52,14 @@ pub(crate) fn new_output_path(
     overwrite: bool,
 ) -> Result<Option<PathBuf>, String> {
     let named = self::output_path(tool, output_path)?;
-    if let Some(path) = &named {
-        if path.is_file() && !overwrite {
-            return Err(format!(
-                "{} already exists. Pass overwrite=true to replace it.",
-                path.display()
-            ));
-        }
+    if let Some(path) = &named
+        && path.is_file()
+        && !overwrite
+    {
+        return Err(format!(
+            "{} already exists. Pass overwrite=true to replace it.",
+            path.display()
+        ));
     }
     Ok(named)
 }
@@ -167,7 +168,10 @@ mod tests {
         std::fs::write(&old, "x").unwrap();
         let old = old.display().to_string();
         let err = new_output_path("canvas_export", Some(&old), false).unwrap_err();
-        assert!(err.contains("already exists") && err.contains("overwrite=true"), "{err}");
+        assert!(
+            err.contains("already exists") && err.contains("overwrite=true"),
+            "{err}"
+        );
         assert_eq!(
             new_output_path("canvas_export", Some(&old), true).unwrap(),
             Some(PathBuf::from(&old))
@@ -183,7 +187,10 @@ mod tests {
             Some(new)
         );
         assert_eq!(new_output_path("canvas_export", None, false).unwrap(), None);
-        assert_eq!(new_output_path("canvas_export", Some("  "), false).unwrap(), None);
+        assert_eq!(
+            new_output_path("canvas_export", Some("  "), false).unwrap(),
+            None
+        );
     }
 
     #[test]

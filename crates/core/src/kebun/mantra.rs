@@ -193,11 +193,11 @@ pub async fn mantra(args: MantraArgs, paths: &AppPaths) -> i32 {
                         notify_reload(paths, Store::Prompts);
                     }
                     // The state only after the library is on disk, never ahead of it.
-                    if let Some(base) = &done.restored_base {
-                        if let Err(e) = base.save(&state) {
-                            println!("  {} {e}", ink.red("✗"));
-                            return 1;
-                        }
+                    if let Some(base) = &done.restored_base
+                        && let Err(e) = base.save(&state)
+                    {
+                        println!("  {} {e}", ink.red("✗"));
+                        return 1;
                     }
                     report(&ink, "pulihkan", &done);
                     ink.footer("Selesai.");
