@@ -49,6 +49,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
                     tab: None,
                     format: Some(format.into()),
                     output_path: Some(target.display().to_string()),
+                    overwrite: None,
                     file: None,
                     project: project_arg(&project),
                 }))
@@ -79,6 +80,7 @@ async fn an_export_never_overwrites_the_canvas_file() {
                 tab: None,
                 format: Some(format.into()),
                 output_path: Some(out.display().to_string()),
+                overwrite: None,
                 file: None,
                 project: project_arg(&project),
             }))
@@ -102,6 +104,7 @@ async fn canvas_export_reads_its_path_and_format_as_every_tool_does() {
         tab: None,
         format: Some(format.into()),
         output_path: Some(output_path.into()),
+        overwrite: None,
         file: None,
         project: project_arg(&project),
     };
@@ -156,6 +159,7 @@ async fn exported_sticky(text: &str) -> String {
             tab: None,
             format: Some("svg".into()),
             output_path: Some(out.display().to_string()),
+            overwrite: None,
             file: None,
             project: project_arg(&project),
         }))
@@ -207,6 +211,7 @@ async fn an_export_path_is_read_as_every_tool_reads_one() {
             tab: None,
             format: Some("svg".into()),
             output_path: Some(format!("{}  ", out.display())),
+            overwrite: None,
             file: None,
             project: project_arg(&project),
         }))
@@ -237,6 +242,7 @@ async fn an_export_says_what_the_lint_finds() {
             tab: None,
             format: Some("svg".into()),
             output_path: Some(out.display().to_string()),
+            overwrite: None,
             file: None,
             project: project_arg(&project),
         }))

@@ -44,6 +44,25 @@ pub(crate) fn output_path(
     Ok(Some(path))
 }
 
+/// [`output_path`] for a tool that writes one file there: an existing file is refused unless
+/// `overwrite`, as the database exports refuse one.
+pub(crate) fn new_output_path(
+    tool: &str,
+    output_path: Option<&str>,
+    overwrite: bool,
+) -> Result<Option<PathBuf>, String> {
+    let named = self::output_path(tool, output_path)?;
+    if let Some(path) = &named {
+        if path.is_file() && !overwrite {
+            return Err(format!(
+                "{} already exists. Pass overwrite=true to replace it.",
+                path.display()
+            ));
+        }
+    }
+    Ok(named)
+}
+
 /// Refuses `path`, a file an agent asked `tool` to write, when it is a canvas file: a `.sawit` or
 /// `.excalidraw` file, or a copy Sawit keeps of one ([`sawit_board::ops::is_canvas_file`]).
 /// While the app is closed nothing else holds the board, so one mistaken path would replace it
@@ -140,6 +159,32 @@ fn project_holding(folder: &Path, home: Option<&Path>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_single_file_writer_refuses_an_existing_file_unless_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.svg");
+        std::fs::write(&old, "x").unwrap();
+        let old = old.display().to_string();
+        let err = new_output_path("canvas_export", Some(&old), false).unwrap_err();
+        assert!(err.contains("already exists") && err.contains("overwrite=true"), "{err}");
+        assert_eq!(
+            new_output_path("canvas_export", Some(&old), true).unwrap(),
+            Some(PathBuf::from(&old))
+        );
+    }
+
+    #[test]
+    fn a_single_file_writer_accepts_a_new_file_and_no_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let new = dir.path().join("new.svg");
+        assert_eq!(
+            new_output_path("canvas_export", Some(&new.display().to_string()), false).unwrap(),
+            Some(new)
+        );
+        assert_eq!(new_output_path("canvas_export", None, false).unwrap(), None);
+        assert_eq!(new_output_path("canvas_export", Some("  "), false).unwrap(), None);
+    }
 
     #[test]
     fn no_tool_may_write_a_canvas_file() {

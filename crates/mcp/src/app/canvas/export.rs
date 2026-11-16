@@ -24,9 +24,10 @@ impl Sawit {
         };
         // Read as every tool that writes a file reads its path (MCP-11): absolute, and never a
         // canvas file, since nothing else holds the board when the app is closed.
-        let named = tri!(crate::output_path(
+        let named = tri!(crate::new_output_path(
             "canvas_export",
-            a.output_path.as_deref()
+            a.output_path.as_deref(),
+            a.overwrite.unwrap_or(false)
         ));
         let op = json!({ "op": if png { "export_png" } else { "export_svg" } });
         let project = crate::agent_project(a.project.as_deref());

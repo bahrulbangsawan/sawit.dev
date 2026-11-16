@@ -154,6 +154,7 @@ async fn query_is_read_only() {
             database: None,
             format: SchemaFormat::Mermaid,
             output_path: None,
+            overwrite: None,
             theme: Theme::Light,
         })
         .await;
@@ -166,6 +167,7 @@ async fn query_is_read_only() {
             database: None,
             format: SchemaFormat::Svg,
             output_path: Some(svg_path.display().to_string()),
+            overwrite: None,
             theme: Theme::Dark,
         })
         .await;

@@ -150,6 +150,7 @@ async fn screens_export_as_html_and_react() {
         id: None,
         format: Some(format.into()),
         path: Some(path.display().to_string()),
+        overwrite: None,
         file: None,
         project: project_arg(&project),
     };

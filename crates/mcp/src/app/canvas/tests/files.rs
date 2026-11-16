@@ -81,6 +81,7 @@ async fn the_canvas_tools_work_on_a_design_file_named_by_file_with_sawit_closed(
             tab: None,
             format: None,
             output_path: None,
+            overwrite: None,
             file: file(),
             project: project_arg(&project),
         }))

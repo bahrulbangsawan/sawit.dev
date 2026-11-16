@@ -42,6 +42,8 @@ pub struct RenderArgs {
         description = "Where to write the .svg (absolute). Default: a new file in the project's .nyawit/diagrams folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
+    #[schemars(description = "Replace the file if it exists (default false)")]
+    pub overwrite: Option<bool>,
     #[schemars(description = "light (default) or dark")]
     #[serde(default)]
     pub theme: Theme,
@@ -69,6 +71,8 @@ pub struct SchemaDiagramArgs {
         description = "File to write (absolute). Required for nothing; svg defaults to the project's .nyawit/diagrams folder"
     )]
     pub output_path: Option<String>,
+    #[schemars(description = "Replace the file if it exists (default false)")]
+    pub overwrite: Option<bool>,
     #[schemars(description = "light (default) or dark; svg only")]
     #[serde(default)]
     pub theme: Theme,
@@ -138,7 +142,7 @@ impl Sawit {
         if a.source.trim().is_empty() {
             return fail("The diagram's source is empty.");
         }
-        let named = tri!(crate::output_path(tool, a.output_path.as_deref()));
+        let named = tri!(crate::new_output_path(tool, a.output_path.as_deref(), a.overwrite.unwrap_or(false)));
         let path = self.output_file(named, "diagram", "svg");
         let diagram = tri!(Self::render(a.source, a.theme).await);
         tri!(Self::write_file(path.clone(), diagram.svg.clone()).await);
@@ -146,9 +150,10 @@ impl Sawit {
     }
 
     pub async fn schema_diagram_tool(&self, a: SchemaDiagramArgs) -> CallToolResult {
-        let named = tri!(crate::output_path(
+        let named = tri!(crate::new_output_path(
             "schema_diagram",
-            a.output_path.as_deref()
+            a.output_path.as_deref(),
+            a.overwrite.unwrap_or(false)
         ));
         let schemas = match tri!(self.conn_for(&a.target, true, a.database.as_deref()).await) {
             Some(conn) => tri!(conn.load_schema().await.map_err(|e| e.to_string())),
@@ -302,6 +307,7 @@ mod tests {
         let render = |output: &std::path::Path| RenderArgs {
             source: source.clone(),
             output_path: Some(output.display().to_string()),
+            overwrite: None,
             theme: Theme::Light,
             inline: false,
         };
@@ -317,6 +323,7 @@ mod tests {
                 database: None,
                 format,
                 output_path: Some(board.display().to_string()),
+                overwrite: None,
                 theme: Theme::Light,
             };
             let drawn = server.schema_diagram_tool(schema).await;

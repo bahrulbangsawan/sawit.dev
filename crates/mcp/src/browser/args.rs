@@ -159,6 +159,8 @@ pub struct ScreenshotArgs {
         description = "Absolute path (or ~/…) to write the PNG to; default Sawit's cache folder"
     )]
     pub output_path: Option<String>,
+    #[schemars(description = "Replace the file if it exists (default false)")]
+    pub overwrite: Option<bool>,
     #[schemars(
         description = "While Annotate's page tools (mesurer) are on the page: hide (default) leaves them out; drawings keeps their drawings, guides, layout guides and comment pins, without the toolbar and panels; show keeps everything"
     )]

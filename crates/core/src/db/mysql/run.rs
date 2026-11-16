@@ -202,6 +202,15 @@ pub(super) async fn run_on(
     Ok(out)
 }
 
+/// Whether `sql` names the session's read-only mode: the variable, or `READ WRITE`.
+pub(super) fn changes_read_only_mode(sql: &str) -> bool {
+    let lowered = sql.to_lowercase();
+    let squeezed = lowered.split_whitespace().collect::<Vec<_>>().join(" ");
+    lowered.contains("transaction_read_only")
+        || lowered.contains("tx_read_only")
+        || squeezed.contains("read write")
+}
+
 impl My {
     /// Runs one or more statements (on the read-only handle, only reads).
     pub async fn run_sql(&self, sql: &str, max_rows: usize) -> Result<QueryOutcome> {
@@ -226,8 +235,7 @@ impl My {
         if let Some(why) = statements.iter().find_map(|s| write_reason(s)) {
             return Ok(ReadOnlyTry::Writes(why));
         }
-        let lowered = sql.to_lowercase();
-        if lowered.contains("transaction_read_only") || lowered.contains("tx_read_only") {
+        if changes_read_only_mode(sql) {
             return Ok(ReadOnlyTry::Writes(
                 "Read-only mode can't be changed.".into(),
             ));

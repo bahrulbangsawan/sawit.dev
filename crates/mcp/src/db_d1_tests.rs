@@ -188,6 +188,7 @@ async fn reads_describes_and_exports_a_local_d1_database() {
                 database: None,
                 format: SchemaFormat::Mermaid,
                 output_path: None,
+                overwrite: None,
                 theme: Default::default(),
             })
             .await,

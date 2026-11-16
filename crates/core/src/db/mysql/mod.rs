@@ -133,16 +133,26 @@ async fn server_version(mut conn: mysql_async::Conn) -> String {
     })
 }
 
+/// What each connection of a read-only handle runs first. The statement check
+/// (`split_statements`, `write_reason`) reads `\` as an escape and `"` as a string quote; with
+/// `NO_BACKSLASH_ESCAPES` or `ANSI_QUOTES` the server would read the same text as other
+/// statements than the ones checked, so the session drops those two flags.
+fn read_only_setup() -> Vec<String> {
+    vec![
+        "SET SESSION sql_mode = TRIM(BOTH ',' FROM REPLACE(REPLACE(CONCAT(',', \
+         @@SESSION.sql_mode, ','), ',NO_BACKSLASH_ESCAPES,', ','), ',ANSI_QUOTES,', ','))"
+            .into(),
+        "SET SESSION TRANSACTION READ ONLY".into(),
+    ]
+}
+
 fn opts(
     profile: &ConnProfile,
     password: Option<&str>,
     read_only: bool,
     tls: Option<SslOpts>,
 ) -> Opts {
-    let mut setup: Vec<String> = Vec::new();
-    if read_only {
-        setup.push("SET SESSION TRANSACTION READ ONLY".into());
-    }
+    let setup = if read_only { read_only_setup() } else { Vec::new() };
     let mut b = OptsBuilder::default()
         .user(Some(profile.user.clone()).filter(|u| !u.is_empty()))
         .pass(password.map(str::to_string))

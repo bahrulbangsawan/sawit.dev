@@ -119,6 +119,8 @@ fn get_legacy(service: &str, account: &str) -> Result<Option<String>> {
 }
 
 pub fn set(service: &str, account: &str, secret: &str) -> Result<()> {
+    check_name("service", service)?;
+    check_name("account", account)?;
     // Replaced rather than updated: updating an item another build saved
     // would ask for the password.
     delete(service, account)?;
@@ -153,6 +155,8 @@ pub fn exists(service: &str, account: &str) -> Result<bool> {
 }
 
 pub fn delete(service: &str, account: &str) -> Result<()> {
+    check_name("service", service)?;
+    check_name("account", account)?;
     let out = security(
         &["delete-generic-password", "-s", service, "-a", account],
         None,
@@ -161,6 +165,17 @@ pub fn delete(service: &str, account: &str) -> Result<()> {
         Some(0 | NOT_FOUND) => Ok(()),
         _ => Err(error(&out)),
     }
+}
+
+/// Refuses a name `security -i` would read as more than one word of one command: it reads one
+/// command per line, so a line break would start a second command.
+fn check_name(what: &str, s: &str) -> Result<()> {
+    if s.chars().any(char::is_control) {
+        return Err(CoreError::Config(format!(
+            "Keychain: the {what} can't contain line breaks or control characters."
+        )));
+    }
+    Ok(())
 }
 
 /// A word for `security -i`, which splits on spaces and honours `"` and `\`.
@@ -193,6 +208,14 @@ mod tests {
         assert_eq!(decode_hex(&encode_hex(bytes)).unwrap(), bytes);
         assert_eq!(decode_hex("7022C3A4").unwrap(), "p\"ä".as_bytes());
         assert!(decode_hex("7").is_err());
+    }
+
+    #[test]
+    fn names_with_control_characters_are_refused_before_security_runs() {
+        assert!(set("svc", "a\nb", "x").is_err());
+        assert!(set("s\rvc", "a", "x").is_err());
+        assert!(delete("svc", "a\u{0}b").is_err());
+        assert!(check_name("account", "user@host:5432/db").is_ok());
     }
 
     #[test]

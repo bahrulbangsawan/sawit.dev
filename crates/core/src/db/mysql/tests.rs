@@ -42,6 +42,25 @@ fn splits_statements_outside_strings_and_comments() {
 }
 
 #[test]
+fn read_only_connections_pin_sql_mode_and_others_do_not() {
+    let setup = read_only_setup();
+    assert!(setup.len() == 2 && setup[0].contains("NO_BACKSLASH_ESCAPES"));
+    assert!(setup[0].contains("ANSI_QUOTES") && setup[0].starts_with("SET SESSION sql_mode"));
+    assert!(setup[1].contains("READ ONLY"));
+    let (profile, _) = parse_database_url("mysql://root@127.0.0.1:3307/").unwrap();
+    assert_eq!(opts(&profile, None, true, None).setup(), setup.as_slice());
+    assert!(opts(&profile, None, false, None).setup().is_empty());
+}
+
+#[test]
+fn read_only_text_screen_refuses_read_write() {
+    assert!(changes_read_only_mode("SELECT 1; SET SESSION TRANSACTION READ WRITE"));
+    assert!(changes_read_only_mode("select 1;set transaction\n  read\t write"));
+    assert!(changes_read_only_mode("SET @@tx_read_only = 0"));
+    assert!(!changes_read_only_mode("SELECT 'read only' FROM t"));
+}
+
+#[test]
 fn read_only_screen() {
     for read in [
         "SELECT 1",
