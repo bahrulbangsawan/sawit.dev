@@ -143,6 +143,22 @@ fn a_bundled_runtime_is_known_by_its_folder() {
     );
 }
 
+/// A script or package whose name starts with a multi-byte letter is no agent,
+/// and looking at it must not panic: the app calls this on its UI thread.
+#[test]
+fn a_non_ascii_script_or_package_is_no_agent() {
+    assert_eq!(agent("/opt/homebrew/bin/node", &["node", "ñ.js"]), None);
+    assert_eq!(agent("/usr/bin/python3", &["python3", "日本.py"]), None);
+    assert_eq!(agent("/opt/homebrew/bin/bunx", &["bunx", "ü"]), None);
+    assert_eq!(
+        agent(
+            "/opt/homebrew/bin/node",
+            &["node", "/opt/homebrew/bin/npx", "é@1.0"]
+        ),
+        None
+    );
+}
+
 #[test]
 fn a_package_runner_is_known_by_the_package() {
     let node = "/opt/homebrew/bin/node";
