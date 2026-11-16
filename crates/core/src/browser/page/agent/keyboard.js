@@ -1,5 +1,31 @@
   // ---- Keyboard and text ----
 
+  // macOS gives each function key a character of its own in Unicode's private use area: ↑ ↓ ← →
+  // are U+F700–U+F703, Home, End, Page Up/Down and F1–F35 follow (NSUpArrowFunctionKey, …). They
+  // are keys, never text, but a key whose keydown a page cancelled (mesurer's comment box takes ↑
+  // and ↓) could still reach the field as typed text, a row of missing-glyph boxes. Typing one of
+  // them is refused here, in every field of every page, before it lands (`beforeinput`, and
+  // WebKit's older `textInput`); the key's own keydown and keyup go on as before.
+  const functionKeyText = (data) =>
+    typeof data === "string" &&
+    data.length > 0 &&
+    Array.from(data).every((c) => {
+      const n = c.codePointAt(0);
+      return n >= 0xf700 && n <= 0xf8ff;
+    });
+  for (const type of ["beforeinput", "textInput"]) {
+    window.addEventListener(
+      type,
+      (e) => {
+        if (functionKeyText(e.data)) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      },
+      true,
+    );
+  }
+
   const TEXT_INPUTS = new Set(["text", "search", "email", "url", "tel", "password", "number", ""]);
   const editable = (el) =>
     el.isContentEditable ||
