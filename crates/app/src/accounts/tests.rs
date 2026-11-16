@@ -181,7 +181,11 @@ fn an_unreadable_accounts_file_is_never_saved_over(cx: &mut TestAppContext) {
         assert!(m.load_error.is_some());
         assert!(m.accounts.accounts.is_empty());
         m.save();
-        assert!(m.error.as_deref().is_some_and(|e| e.contains("accounts.json")));
+        assert!(
+            m.error
+                .as_deref()
+                .is_some_and(|e| e.contains("accounts.json"))
+        );
     });
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
 }

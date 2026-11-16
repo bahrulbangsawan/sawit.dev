@@ -170,9 +170,11 @@ async fn live_read_only_session_drops_quoting_modes() {
     };
     profile.database.clear();
     let admin = Conn::connect(&profile, password.as_deref()).await.unwrap();
-    let cell = |out: crate::db::query::QueryOutcome| out.results[0].rows[0][0].clone().unwrap_or_default();
+    let cell =
+        |out: crate::db::query::QueryOutcome| out.results[0].rows[0][0].clone().unwrap_or_default();
     let before = cell(admin.run_sql("SELECT @@GLOBAL.sql_mode", 1).await.unwrap());
-    let set = "SET GLOBAL sql_mode = CONCAT(@@GLOBAL.sql_mode, ',NO_BACKSLASH_ESCAPES,ANSI_QUOTES')";
+    let set =
+        "SET GLOBAL sql_mode = CONCAT(@@GLOBAL.sql_mode, ',NO_BACKSLASH_ESCAPES,ANSI_QUOTES')";
     let seen = match admin.run_sql(set, 1).await {
         Ok(_) => match Conn::connect_server(&profile, password.as_deref()).await {
             Ok((_rw, ro, _schema, _version)) => ro
@@ -186,6 +188,9 @@ async fn live_read_only_session_drops_quoting_modes() {
     };
     let restore = format!("SET GLOBAL sql_mode = '{}'", before.replace('\'', "''"));
     admin.run_sql(&restore, 1).await.unwrap();
-    assert!(!seen.starts_with("error") && !seen.contains("NO_BACKSLASH_ESCAPES"), "{seen}");
+    assert!(
+        !seen.starts_with("error") && !seen.contains("NO_BACKSLASH_ESCAPES"),
+        "{seen}"
+    );
     assert!(!seen.contains("ANSI_QUOTES"), "{seen}");
 }

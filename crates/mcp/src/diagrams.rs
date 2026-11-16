@@ -142,7 +142,11 @@ impl Sawit {
         if a.source.trim().is_empty() {
             return fail("The diagram's source is empty.");
         }
-        let named = tri!(crate::new_output_path(tool, a.output_path.as_deref(), a.overwrite.unwrap_or(false)));
+        let named = tri!(crate::new_output_path(
+            tool,
+            a.output_path.as_deref(),
+            a.overwrite.unwrap_or(false)
+        ));
         let path = self.output_file(named, "diagram", "svg");
         let diagram = tri!(Self::render(a.source, a.theme).await);
         tri!(Self::write_file(path.clone(), diagram.svg.clone()).await);

@@ -152,7 +152,11 @@ fn opts(
     read_only: bool,
     tls: Option<SslOpts>,
 ) -> Opts {
-    let setup = if read_only { read_only_setup() } else { Vec::new() };
+    let setup = if read_only {
+        read_only_setup()
+    } else {
+        Vec::new()
+    };
     let mut b = OptsBuilder::default()
         .user(Some(profile.user.clone()).filter(|u| !u.is_empty()))
         .pass(password.map(str::to_string))
