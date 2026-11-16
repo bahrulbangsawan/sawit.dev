@@ -33,7 +33,13 @@ impl Drop for Cluster {
 
 async fn cluster() -> Option<(Cluster, ConnProfile)> {
     let roots = SearchRoots::detect(PathBuf::from("/nonexistent")).await;
-    let bins = discover(&roots).await.into_iter().next()?;
+    let Some(bins) = discover(&roots).await.into_iter().next() else {
+        assert!(
+            std::env::var_os("SAWIT_REQUIRE_DB").is_none(),
+            "SAWIT_REQUIRE_DB is set, but no PostgreSQL binaries were found"
+        );
+        return None;
+    };
     let dir = tempfile::tempdir().unwrap();
     let paths = AppPaths {
         root: dir.path().join("db"),

@@ -24,7 +24,12 @@ permissions:
   contents: write
 
 jobs:
+  # A release is published only after clippy and the tests pass.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: checks
     runs-on: macos-15
     env:
       TAG: ${{ inputs.tag || github.ref_name }}

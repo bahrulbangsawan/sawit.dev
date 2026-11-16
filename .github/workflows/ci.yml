@@ -1,0 +1,32 @@
+# Runs clippy (warnings are errors) and the whole test suite, on every pull request and every push
+# to main, and for release.yml, which waits for it before it publishes anything. The PostgreSQL
+# integration tests skip themselves when no PostgreSQL binaries exist, so the job installs
+# PostgreSQL and sets SAWIT_REQUIRE_DB, which turns such a skip into a failure.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      SAWIT_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: PostgreSQL for the database tests
+        run: brew install postgresql@17
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace

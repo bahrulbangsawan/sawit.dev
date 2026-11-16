@@ -2220,6 +2220,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Integration tests use whichever Postgres binaries are found (Homebrew, Postgres.app, `PATH`, or downloaded).
 If no binaries are found, the tests are skipped with a message.
+CI (`.github/workflows/ci.yml`) runs clippy and `cargo test --workspace` on every pull request and push to main, a release waits for it, and setting `SAWIT_REQUIRE_DB=1` turns the PostgreSQL tests' skip into a failure.
 
 ## Architecture & key decisions
 

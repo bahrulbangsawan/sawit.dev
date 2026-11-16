@@ -71,6 +71,10 @@ async fn list_instances_and_write_env() {
 async fn query_is_read_only() {
     let roots = SearchRoots::detect("/nonexistent".into()).await;
     let Some(bins) = discover(&roots).await.into_iter().next() else {
+        assert!(
+            std::env::var_os("SAWIT_REQUIRE_DB").is_none(),
+            "SAWIT_REQUIRE_DB is set, but no PostgreSQL binaries were found"
+        );
         eprintln!("skip: no PostgreSQL binaries");
         return;
     };

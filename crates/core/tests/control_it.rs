@@ -18,6 +18,10 @@ struct Fixture {
 async fn fixture() -> Option<Fixture> {
     let roots = SearchRoots::detect(PathBuf::from("/nonexistent")).await;
     let Some(bins) = discover(&roots).await.into_iter().next() else {
+        assert!(
+            std::env::var_os("SAWIT_REQUIRE_DB").is_none(),
+            "SAWIT_REQUIRE_DB is set, but no PostgreSQL binaries were found"
+        );
         eprintln!("skip: no PostgreSQL binaries found");
         return None;
     };
