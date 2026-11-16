@@ -128,7 +128,7 @@ impl Lite {
             DbKind::D1Remote => WriteRoute::Remote {
                 database: self.remote_name(),
             },
-            DbKind::Postgres | DbKind::Sqlite => match self.file() {
+            DbKind::Postgres | DbKind::Mysql | DbKind::Sqlite => match self.file() {
                 Ok(file) => WriteRoute::File(file),
                 Err(_) => WriteRoute::Busy { holders: vec![] },
             },

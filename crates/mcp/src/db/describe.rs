@@ -9,11 +9,15 @@ use super::TableArgs;
 use crate::{Sawit, fail, ok, tri};
 
 /// A table of a SQLite or D1 database, as `describe_table` tells it.
-async fn describe_lite_table(conn: &Conn, table: &str) -> Result<String, String> {
+async fn describe_lite_table(
+    conn: &Conn,
+    schema: Option<&str>,
+    table: &str,
+) -> Result<String, String> {
     let schemas = conn.load_schema().await.map_err(|e| e.to_string())?;
-    let (_, rel) = db::find_relation(&schemas, None, table).map_err(|e| e.to_string())?;
+    let (schema, rel) = db::find_relation(&schemas, schema, table).map_err(|e| e.to_string())?;
     let rows = conn
-        .row_count_matching(db::sqlite::MAIN, table, &Default::default())
+        .row_count_matching(schema, &rel.name, &Default::default())
         .await
         .ok()
         .flatten()
@@ -90,7 +94,7 @@ impl Sawit {
         schema: Option<&str>,
         database: Option<&str>,
     ) -> CallToolResult {
-        let schemas = match tri!(self.lite_conn(target, true)) {
+        let schemas = match tri!(self.conn_for(target, true, database).await) {
             Some(conn) => tri!(conn.load_schema().await.map_err(|e| e.to_string())),
             None => {
                 let client = tri!(self.connect_target(target, database).await);
@@ -145,8 +149,8 @@ impl Sawit {
     }
 
     pub async fn describe_table_tool(&self, a: TableArgs) -> CallToolResult {
-        if let Some(conn) = tri!(self.lite_conn(&a.target, true)) {
-            return match describe_lite_table(&conn, &a.table).await {
+        if let Some(conn) = tri!(self.conn_for(&a.target, true, a.database.as_deref()).await) {
+            return match describe_lite_table(&conn, a.schema.as_deref(), &a.table).await {
                 Ok(text) => ok(text),
                 Err(e) => fail(e),
             };

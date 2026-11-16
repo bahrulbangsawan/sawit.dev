@@ -23,11 +23,10 @@ pub use schema::{
     list_databases, load_schema, primary_key,
 };
 
+pub(super) use failure::classify_message;
 pub(super) use read::select_sql;
 
 #[cfg(test)]
 pub(super) use connect::rejects_startup_options;
-#[cfg(test)]
-pub(super) use failure::classify_message;
 #[cfg(test)]
 pub(super) use read_only::several_statements;

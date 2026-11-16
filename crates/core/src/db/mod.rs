@@ -1,6 +1,6 @@
 //! Connections: profiles, DATABASE_URL/.env import, Keychain passwords,
 //! schema browsing, paged table reads and ad-hoc SQL. PostgreSQL first;
-//! SQLite files and Cloudflare D1 (local and remote) through [`Conn`].
+//! MySQL and MariaDB, SQLite files and Cloudflare D1 (local and remote) through [`Conn`].
 
 mod admin;
 mod conn;
@@ -8,6 +8,7 @@ pub mod d1;
 pub mod diagram;
 pub mod explorer;
 mod export;
+pub mod mysql;
 mod profile;
 mod query;
 pub mod remote;

@@ -364,7 +364,7 @@ fn d1_databases_follow_saved_connections_local_first() {
 fn rows_name_their_kind_beside_the_logo() {
     let (mut store, name) = store();
     let (local, remote, _) = with_d1(&mut store);
-    store.versions.insert(name.clone(), 16);
+    store.versions.insert(name.clone(), "16".into());
     let nodes = flatten(&store, &HashSet::new(), "");
     let row = |key: &str| {
         nodes

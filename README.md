@@ -163,9 +163,26 @@ explained. A conflict on the same address can't be forced.
 - From the terminal: `sawit panen`, `sawit backup` and `sawit tanam`
   (see [Databases, ports and instances from the terminal](#databases-ports-and-instances-from-the-terminal)).
 
+#### MySQL and MariaDB
+
+- **+ › MySQL or MariaDB from a URL…** (or a `.env` whose `DATABASE_URL` is one) adds a MySQL or MariaDB server:
+  `mysql://`, `mariadb://`, `jdbc:mysql://`, SQLAlchemy's `mysql+pymysql://` and Go's
+  `user:pass@tcp(host:3306)/db` all work. The password goes to the Keychain, as for PostgreSQL.
+- **TLS** follows `ssl-mode` (`DISABLED`, `PREFERRED`, `REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`), `sslmode`, and
+  what PlanetScale, Prisma, Go and JDBC write (`sslaccept=strict`, `ssl={"rejectUnauthorized":true}`, `tls=true`,
+  `useSSL=false`); `ssl-ca`, `ssl-cert` and `ssl-key` take certificate files. `PREFERRED`, the default, connects
+  without TLS to a server that has none.
+- A server's **databases are the tree's schemas**: the URL's database alone, or every database but the server's own
+  when the URL names none. Tables and views show their columns, keys, foreign keys, CHECK constraints and indexes.
+- The **grid, filters, search, row changes, SQL editor, CSV and Excel export and schema diagram** work as for
+  PostgreSQL. Browsing runs on a read-only session (`TRANSACTION READ ONLY`); **Empty Table…** is `TRUNCATE`.
+  The row shows "MySQL 8.4" or "MariaDB 11.4". What only PostgreSQL has (`pg_dump`, Import CSV, instances,
+  cancelling a running query) isn't offered.
+
 #### Cloudflare D1 and SQLite
 
-- **Every connection shows its kind's logo** beside the status dot: PostgreSQL's elephant, Cloudflare D1, SQLite.
+- **Every connection shows its kind's logo** beside the status dot: PostgreSQL's elephant, MySQL's dolphin,
+  Cloudflare D1, SQLite.
   The tooltip and the accessible name say the kind too ("PostgreSQL 16 · kyzn", "Cloudflare D1 (local) · DB"), so
   the logo is never the only way to tell. **+** in the sidebar adds a PostgreSQL URL, a Workers project's D1
   databases, or a **SQLite file**, each with its logo.
@@ -1926,8 +1943,9 @@ work in the last 30 seconds, with its `id`, `name` (its label on screen), `color
 | Area | Tools |
 |---|---|
 | Instances | `list_instances`, `create_instance`, `start_instance` (refused with an explanation when the port is in use), `stop_instance`, `restart_instance`, `remove_instance`, `instance_logs`, `check_port`, `list_postgres_binaries` |
-| Databases | `list_connections`, `detect_databases` (with `project_dir`, the project's Cloudflare D1 databases too, each with its `kind`: `postgres`, `d1-local`, `d1-remote` or `sqlite`), `list_databases`, `create_database`, `drop_database`, `describe_schema`, `describe_table`, `query` (**always read-only**, up to 500 rows), `execute_sql` (read-write), `save_connection`, `remove_connection`, `write_env` |
+| Databases | `list_connections`, `detect_databases` (with `project_dir`, the project's Cloudflare D1 databases too, each with its `kind`: `postgres`, `mysql`, `d1-local`, `d1-remote` or `sqlite`), `list_databases`, `create_database`, `drop_database`, `describe_schema`, `describe_table`, `query` (**always read-only**, up to 500 rows), `execute_sql` (read-write), `save_connection`, `remove_connection`, `write_env` |
 | Export, backup, import | `export_table`, `export_query` (CSV or Excel), `backup_database` (`pg_dump`), `import_csv`, `drop_relation`, `truncate_table`, `refresh_materialized_view` |
+| MySQL, MariaDB | A saved MySQL connection (`save_connection` with a `mysql://` URL) is a `target` for `query` (a read-only session and transaction; only statements that read run), `execute_sql`, `describe_schema`, `describe_table`, `list_databases`, `create_database`, `drop_database`, `export_table`, `export_query` and `schema_diagram`. The PostgreSQL-only tools refuse it and say why |
 | Cloudflare D1, SQLite | `query`, `execute_sql`, `describe_schema`, `describe_table`, `list_databases`, `export_table`, `export_query` and `schema_diagram` take a D1 or SQLite id from `detect_databases` as `target` (`d1-local:DB@/path/to/project`, `d1-remote:shop@/path/to/project`, `sqlite:/path/to/file.sqlite`), with the same rules: `query` opens the file read-only; `execute_sql` writes through the running dev server's Local Explorer, else straight to the file, and says which; a write to a remote (production) D1 database needs `confirm: true`. The PostgreSQL-only tools refuse a D1 target and say why |
 | Diagrams | `render_diagram` (a diagram in Mermaid syntax, any type Pele draws, to SVG; `render_mermaid` is its deprecated old name), `schema_diagram` (Mermaid, DBML or SVG) |
 | Ports | `list_ports`, `stop_processes` |
@@ -2375,8 +2393,9 @@ The Mac was busy, so take the memory figures as rough.
   MIT). See [`NOTICE`](NOTICE).
 - Sawit opens SQLite files and Cloudflare D1's local databases with [rusqlite](https://github.com/rusqlite/rusqlite),
   Copyright (c) 2014 The rusqlite developers, licensed under MIT, which builds in [SQLite](https://www.sqlite.org)
-  (public domain). The database logos are PostgreSQL's (PostgreSQL Trademark Policy), Cloudflare D1's (CC BY 4.0)
-  and SQLite's (public domain); see [`assets/db_logos/SOURCES.md`](assets/db_logos/SOURCES.md) and
+  (public domain). Sawit talks to MySQL and MariaDB with [mysql_async](https://github.com/blackbeam/mysql_async),
+  licensed under MIT or Apache-2.0. The database logos are PostgreSQL's (PostgreSQL Trademark Policy), Cloudflare
+  D1's (CC BY 4.0), SQLite's (public domain) and MySQL's (Simple Icons, CC0); see [`assets/db_logos/SOURCES.md`](assets/db_logos/SOURCES.md) and
   [`NOTICE`](NOTICE).
 - The code editors parse with [tree-sitter](https://github.com/tree-sitter/tree-sitter), Copyright (c) 2018 Max
   Brunsfeld, and its grammars for Rust, TypeScript/TSX, JavaScript, JSON, Python, Go, Bash, TOML, YAML, Markdown,

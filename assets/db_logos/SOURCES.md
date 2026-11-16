@@ -25,6 +25,10 @@ comes with the logo, in the tooltip and the accessible name.
   the mark; no path is changed. SQLite is in the public domain
   (https://www.sqlite.org/copyright.html); the name is a trademark of Hipp,
   Wyrick & Company, Inc.
+- mysql.svg: the MySQL dolphin from Simple Icons 13.21.0
+  (https://github.com/simple-icons/simple-icons, icons/mysql.svg), released
+  under CC0 1.0; unmodified, one colour, drawn in MySQL's blue (#4479A1, Simple
+  Icons' colour for it). MariaDB servers show it too: Sawit opens them as
+  MySQL. MySQL is a trademark of Oracle and/or its affiliates.
 
-MySQL, MariaDB, Neon and Supabase have no logo here: Sawit doesn't detect those
-databases as kinds of their own (Neon and Supabase connect as PostgreSQL).
+Neon and Supabase have no logo here: they connect as PostgreSQL.

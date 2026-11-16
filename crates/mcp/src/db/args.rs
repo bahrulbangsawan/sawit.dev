@@ -108,7 +108,7 @@ pub struct SaveConnectionArgs {
     #[schemars(description = "Name for the connection")]
     pub name: String,
     #[schemars(
-        description = "postgres:// URL. A password in it goes to the macOS Keychain, never to profiles.toml"
+        description = "postgres:// or mysql:// URL. A password in it goes to the macOS Keychain, never to profiles.toml"
     )]
     pub url: String,
 }

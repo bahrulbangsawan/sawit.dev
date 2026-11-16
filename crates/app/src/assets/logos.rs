@@ -100,6 +100,10 @@ const DB_LOGOS: &[(&str, &[u8])] = &[
         "sqlite-color",
         include_bytes!("../../../../assets/db_logos/sqlite-color.svg"),
     ),
+    (
+        "mysql",
+        include_bytes!("../../../../assets/db_logos/mysql.svg"),
+    ),
 ];
 
 pub(super) fn db_logo(path: &str) -> Option<&'static [u8]> {

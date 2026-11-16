@@ -51,6 +51,51 @@ pub(super) fn english_via(via: &str) -> String {
 }
 
 impl Sawit {
+    /// Saved MySQL connections, and a MySQL DATABASE_URL in the `.env` of `project_dir` or a
+    /// folder above it (save it with save_connection to use it as a target).
+    fn mysql_places(&self, project_dir: Option<&str>) -> Vec<String> {
+        let line = |p: &ConnProfile, via: &str| {
+            format!(
+                "- {} · kind: mysql · {}:{} · db {} · user {} · via {via}",
+                p.name, p.host, p.port, p.database, p.user
+            )
+        };
+        let mut out: Vec<String> = self
+            .profiles()
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .iter()
+            .filter(|p| p.kind.is_mysql())
+            .map(|p| line(p, "saved connection"))
+            .collect();
+        let dirs = project_dir
+            .filter(|d| !d.trim().is_empty())
+            .map(|d| {
+                std::path::Path::new(d)
+                    .ancestors()
+                    .map(|a| a.join(".env"))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for env in dirs {
+            let Ok(Some(url)) = db::read_dotenv_database_url(&env) else {
+                continue;
+            };
+            if let Ok((p, _)) = db::parse_database_url(&url)
+                && p.kind.is_mysql()
+            {
+                out.push(format!(
+                    "{} (save it with save_connection to use it as a target)",
+                    line(
+                        &p,
+                        &format!(".env in {}", env.parent().unwrap_or(&env).display())
+                    )
+                ));
+            }
+        }
+        out
+    }
+
     pub async fn detect_databases_tool(&self, project_dir: Option<&str>) -> CallToolResult {
         let registry = self.registry().unwrap_or_default();
         let mut out = Vec::new();
@@ -91,6 +136,11 @@ impl Sawit {
         if !unique.is_empty() {
             out.push("Databases (running servers list every database):".to_string());
             out.extend(unique.iter().map(kebun_line));
+        }
+        let mysql = self.mysql_places(project_dir);
+        if !mysql.is_empty() {
+            out.push("MySQL (pass the first field as `target`):".to_string());
+            out.extend(mysql);
         }
         if !d1.local.is_empty() || !d1.remote.is_empty() {
             out.push(
@@ -141,8 +191,14 @@ impl Sawit {
                 _ => ok(lite_line(&p)),
             };
         }
-        let client = tri!(self.connect_admin(target, None).await);
-        match db::list_databases(&client).await {
+        let names = match tri!(self.conn_for(target, true, None).await) {
+            Some(conn) => conn.list_databases().await.map(Option::unwrap_or_default),
+            None => {
+                let client = tri!(self.connect_admin(target, None).await);
+                db::list_databases(&client).await
+            }
+        };
+        match names {
             Ok(names) if names.is_empty() => ok("No databases."),
             Ok(names) => ok(names
                 .iter()

@@ -1,8 +1,9 @@
 //! One handle for every kind of database, so the sidebar, table grid, SQL
 //! editor, diagrams, exports and `sawit-mcp` call the same operations
 //! whether the profile is PostgreSQL ([`Conn::Pg`], the code in `query/`
-//! as it was) or SQLite underneath ([`Conn::Lite`]: a `.sqlite` file, a D1
-//! binding's local file, or a remote D1 database through Wrangler).
+//! as it was), MySQL or MariaDB ([`Conn::My`]), or SQLite underneath
+//! ([`Conn::Lite`]: a `.sqlite` file, a D1 binding's local file, or a remote
+//! D1 database through Wrangler).
 //!
 //! Reads of a local file run on a short-lived read-only connection. Writes
 //! take the route [`Lite::write_route`] finds: a running dev server's Local
@@ -19,6 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio_postgres::{CancelToken, Client};
 
 use super::export::{ExportFormat, ExportSummary, RowWriter, kinds_for, write_file};
+use super::mysql::My;
 use super::profile::{ConnProfile, DbKind};
 use super::query::{ColumnInfo, QueryOutcome, ReadOnlyTry, ResultSet, RowCount, SchemaInfo};
 use super::rows::RowQuery;
@@ -33,6 +35,7 @@ pub use lite::{Lite, WriteRoute, holders};
 pub enum Conn {
     Pg(Arc<Client>),
     Lite(Arc<Lite>),
+    My(Arc<My>),
 }
 
 impl Conn {
@@ -41,18 +44,69 @@ impl Conn {
         Conn::Lite(Arc::new(Lite::new(profile, read_only)))
     }
 
+    /// A read-write and a read-only handle on `profile`'s server (PostgreSQL or MySQL), the
+    /// schema tree, and the server's version for the sidebar (`16`, `MySQL 8.4`).
+    pub async fn connect_server(
+        profile: &ConnProfile,
+        password: Option<&str>,
+    ) -> Result<(Conn, Conn, Vec<SchemaInfo>, Option<String>)> {
+        if profile.kind.is_mysql() {
+            let rw = My::connect(profile, password, false).await?;
+            let ro = My::connect(profile, password, true).await?;
+            let version = rw.version_label();
+            let schema = ro.load_schema().await?;
+            return Ok((
+                Conn::My(Arc::new(rw)),
+                Conn::My(Arc::new(ro)),
+                schema,
+                Some(version),
+            ));
+        }
+        let (client, ro, schema) = super::connect_all(profile, password).await?;
+        let version = super::server_major(&client)
+            .await
+            .ok()
+            .map(|v| v.to_string());
+        Ok((
+            Conn::Pg(client.into()),
+            Conn::Pg(ro.into()),
+            schema,
+            version,
+        ))
+    }
+
+    /// One read-only handle on `profile`'s server (exports, agents' reads).
+    pub async fn connect_read_only(profile: &ConnProfile, password: Option<&str>) -> Result<Conn> {
+        Ok(if profile.kind.is_mysql() {
+            Conn::My(Arc::new(My::connect(profile, password, true).await?))
+        } else {
+            Conn::Pg(Arc::new(super::connect_read_only(profile, password).await?))
+        })
+    }
+
+    /// One read-write handle on `profile`'s server.
+    pub async fn connect(profile: &ConnProfile, password: Option<&str>) -> Result<Conn> {
+        Ok(if profile.kind.is_mysql() {
+            Conn::My(Arc::new(My::connect(profile, password, false).await?))
+        } else {
+            Conn::Pg(Arc::new(super::connect(profile, password).await?))
+        })
+    }
+
     pub fn kind(&self) -> DbKind {
         match self {
             Conn::Pg(_) => DbKind::Postgres,
             Conn::Lite(l) => l.profile.kind,
+            Conn::My(_) => DbKind::Mysql,
         }
     }
 
-    /// The link dropped (PostgreSQL); a file never "drops".
+    /// The link dropped (PostgreSQL); a file never "drops", and MySQL's pool opens a new
+    /// connection when one did.
     pub fn is_closed(&self) -> bool {
         match self {
             Conn::Pg(c) => c.is_closed(),
-            Conn::Lite(_) => false,
+            Conn::Lite(_) | Conn::My(_) => false,
         }
     }
 
@@ -61,6 +115,7 @@ impl Conn {
         match self {
             Conn::Pg(c) => Arc::strong_count(c) > 1,
             Conn::Lite(l) => Arc::strong_count(l) > 1,
+            Conn::My(m) => Arc::strong_count(m) > 1,
         }
     }
 
@@ -68,7 +123,7 @@ impl Conn {
     pub fn cancel_token(&self) -> Option<CancelToken> {
         match self {
             Conn::Pg(c) => Some(c.cancel_token()),
-            Conn::Lite(_) => None,
+            Conn::Lite(_) | Conn::My(_) => None,
         }
     }
 
@@ -76,13 +131,23 @@ impl Conn {
     pub fn pg(&self) -> Option<&Arc<Client>> {
         match self {
             Conn::Pg(c) => Some(c),
-            Conn::Lite(_) => None,
+            Conn::Lite(_) | Conn::My(_) => None,
+        }
+    }
+
+    /// The databases on the server (PostgreSQL, MySQL); `None` for a file.
+    pub async fn list_databases(&self) -> Result<Option<Vec<String>>> {
+        match self {
+            Conn::Pg(c) => super::list_databases(c).await.map(Some),
+            Conn::My(m) => m.list_databases().await.map(Some),
+            Conn::Lite(_) => Ok(None),
         }
     }
 
     pub async fn load_schema(&self) -> Result<Vec<SchemaInfo>> {
         match self {
             Conn::Pg(c) => super::load_schema(c).await,
+            Conn::My(m) => m.load_schema().await,
             Conn::Lite(l) if l.profile.kind == DbKind::D1Remote => {
                 let schema = l.remote_schema(true).await?;
                 sqlite::load_schema(&remote::shadow(&schema)?)
@@ -94,6 +159,7 @@ impl Conn {
     pub async fn primary_key(&self, schema: &str, table: &str) -> Result<Vec<String>> {
         match self {
             Conn::Pg(c) => super::primary_key(c, schema, table).await,
+            Conn::My(m) => m.primary_key(schema, table).await,
             Conn::Lite(l) if l.profile.kind == DbKind::D1Remote => {
                 let copy = remote::shadow(&l.remote_schema(false).await?)?;
                 sqlite::primary_key(&copy, table)
@@ -118,6 +184,10 @@ impl Conn {
         match self {
             Conn::Pg(c) => {
                 super::fetch_rows(c, schema, table, order_by, query, offset, limit).await
+            }
+            Conn::My(m) => {
+                m.fetch_rows(schema, table, order_by, query, offset, limit)
+                    .await
             }
             Conn::Lite(l) if l.profile.kind == DbKind::D1Remote => {
                 let columns = l.remote_columns(table).await?;
@@ -147,6 +217,7 @@ impl Conn {
     ) -> Result<RowCount> {
         match self {
             Conn::Pg(c) => super::row_count_estimated(c, schema, table, estimate).await,
+            Conn::My(m) => m.row_count_estimated(schema, table, estimate).await,
             Conn::Lite(_) => Ok(self
                 .row_count_matching(schema, table, &RowQuery::default())
                 .await?
@@ -165,6 +236,7 @@ impl Conn {
     ) -> Result<Option<RowCount>> {
         match self {
             Conn::Pg(c) => super::row_count_matching(c, schema, table, query).await,
+            Conn::My(m) => m.row_count_matching(schema, table, query).await.map(Some),
             Conn::Lite(l) if l.profile.kind == DbKind::D1Remote => {
                 let columns = l.remote_columns(table).await?;
                 let filter = sqlite::where_sql(query, &columns)
@@ -192,6 +264,7 @@ impl Conn {
     pub async fn run_sql(&self, sql: &str, max_rows: usize) -> Result<QueryOutcome> {
         match self {
             Conn::Pg(c) => super::run_sql(c, sql, max_rows).await,
+            Conn::My(m) => m.run_sql(sql, max_rows).await,
             Conn::Lite(l) => match l.run_if_read_only(sql, max_rows).await? {
                 ReadOnlyTry::Read(outcome) => Ok(outcome),
                 ReadOnlyTry::Writes(_) | ReadOnlyTry::Several(_) => {
@@ -205,6 +278,7 @@ impl Conn {
     pub async fn run_read_only(&self, sql: &str, max_rows: usize) -> Result<QueryOutcome> {
         match self {
             Conn::Pg(c) => super::run_read_only(c, sql, max_rows).await,
+            Conn::My(m) => m.run_read_only(sql, max_rows).await,
             Conn::Lite(l) => {
                 if explorer::split_statements(sql).len() > 1 {
                     return Err(CoreError::Sql(
@@ -224,6 +298,7 @@ impl Conn {
     pub async fn run_if_read_only(&self, sql: &str, max_rows: usize) -> Result<ReadOnlyTry> {
         match self {
             Conn::Pg(c) => super::run_if_read_only(c, sql, max_rows).await,
+            Conn::My(m) => m.run_if_read_only(sql, max_rows).await,
             Conn::Lite(l) => l.run_if_read_only(sql, max_rows).await,
         }
     }
@@ -232,6 +307,7 @@ impl Conn {
     pub async fn run_bulk(&self, sql: &str) -> Result<u64> {
         match self {
             Conn::Pg(c) => super::run_bulk(c, sql).await,
+            Conn::My(m) => m.run_bulk(sql).await,
             Conn::Lite(l) => Ok(l.write(sql, 0).await?.0.affected.iter().sum()),
         }
     }
@@ -254,6 +330,12 @@ impl Conn {
             Conn::Pg(c) => {
                 super::export_rows(
                     c, schema, table, order_by, query, format, types, path, &progress, &stop,
+                )
+                .await
+            }
+            Conn::My(m) => {
+                m.export_rows(
+                    schema, table, order_by, query, format, types, path, &progress, &stop,
                 )
                 .await
             }

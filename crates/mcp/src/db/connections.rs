@@ -30,6 +30,7 @@ impl Sawit {
         if let Ok(p) = self.profiles() {
             lines.extend(p.items.iter().map(|p| match p.kind {
                 DbKind::Postgres => format!("- {} · {}", p.name, p.url()),
+                DbKind::Mysql => format!("- {} (MySQL) · {}", p.name, p.url()),
                 kind => format!("- {} ({}) · {}", p.name, kind.title(), p.location()),
             }));
         }

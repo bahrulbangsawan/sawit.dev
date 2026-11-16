@@ -97,7 +97,7 @@ pub(super) fn saved_places(paths: &AppPaths) -> Vec<Kebun> {
     profiles
         .items
         .into_iter()
-        // SQLite and D1 profiles have no server to find.
+        // SQLite and D1 profiles have no server to find; `sawit <db>` speaks PostgreSQL only.
         .filter(|profile| profile.kind.is_postgres())
         .map(|profile| Kebun {
             password: None,
@@ -119,6 +119,10 @@ pub(super) fn dotenv_places(cwd: &Path) -> Vec<Kebun> {
         .filter_map(|path| {
             let url = read_dotenv_database_url(&path).ok()??;
             let (profile, password) = parse_database_url(&url).ok()?;
+            // `sawit <db>` speaks PostgreSQL; a MySQL URL is the app's and the agents'.
+            if !profile.kind.is_postgres() {
+                return None;
+            }
             Some(Kebun {
                 password,
                 via: format!(".env di {}", tilde(path.parent()?)),

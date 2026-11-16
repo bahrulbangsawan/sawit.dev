@@ -1,9 +1,9 @@
-//! The statements each kind of database takes for the same change: PostgreSQL's, or SQLite's
-//! (which D1 speaks too).
+//! The statements each kind of database takes for the same change: PostgreSQL's, MySQL's, or
+//! SQLite's (which D1 speaks too).
 
 use crate::db::profile::DbKind;
 use crate::db::rows::{BulkChange, RowTarget};
-use crate::db::sqlite;
+use crate::db::{mysql, sqlite};
 
 /// The statement that applies `change` to `target`, in `kind`'s dialect; `columns` are the
 /// table's (SQLite's row search names each).
@@ -17,6 +17,7 @@ pub fn bulk_sql_for(
 ) -> String {
     match kind {
         DbKind::Postgres => crate::db::bulk_sql(schema, table, target, change),
+        DbKind::Mysql => mysql::bulk_sql(schema, table, columns, target, change),
         _ => sqlite::bulk_sql(table, columns, target, change),
     }
 }
@@ -29,6 +30,7 @@ pub fn relation_sql_for(kind: DbKind, schema: &str, table: &str) -> String {
             crate::db::quote_ident(schema),
             crate::db::quote_ident(table)
         ),
+        DbKind::Mysql => mysql::relation(schema, table),
         _ => sqlite::quote(table),
     }
 }
@@ -38,6 +40,7 @@ pub fn relation_sql_for(kind: DbKind, schema: &str, table: &str) -> String {
 pub fn empty_sql_for(kind: DbKind, schema: &str, table: &str) -> String {
     match kind {
         DbKind::Postgres => crate::db::truncate_sql(schema, table),
+        DbKind::Mysql => format!("TRUNCATE TABLE {}", mysql::relation(schema, table)),
         _ => format!("DELETE FROM {}", sqlite::quote(table)),
     }
 }
@@ -53,6 +56,16 @@ pub fn drop_sql_for(
 ) -> String {
     match kind {
         DbKind::Postgres => crate::db::drop_sql(schema, name, rel, cascade),
+        // MySQL takes CASCADE and ignores it; foreign keys still refuse a referenced table.
+        DbKind::Mysql => format!(
+            "DROP {} {}",
+            if rel == crate::db::RelKind::View {
+                "VIEW"
+            } else {
+                "TABLE"
+            },
+            mysql::relation(schema, name)
+        ),
         _ => format!(
             "DROP {} {}",
             if rel == crate::db::RelKind::View {

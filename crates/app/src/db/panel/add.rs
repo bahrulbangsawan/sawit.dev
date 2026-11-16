@@ -83,8 +83,8 @@ impl DatabasePanel {
     }
 }
 
-/// The "+" menu: a PostgreSQL URL, a SQLite file, or a Workers project's D1 databases, each
-/// with its kind's logo.
+/// The "+" menu: a PostgreSQL or MySQL URL, a SQLite file, or a Workers project's D1
+/// databases, each with its kind's logo.
 impl DatabasePanel {
     pub(super) fn add_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity().downgrade();
@@ -107,15 +107,24 @@ impl DatabasePanel {
                         let _ = view.update(cx, |this, cx| f(this, window, cx));
                     })
                 };
+                // Both take the same field: the URL says which.
+                let from_url = |this: &mut DatabasePanel,
+                                window: &mut Window,
+                                cx: &mut Context<DatabasePanel>| {
+                    this.settings = None;
+                    this.show_url = true;
+                    this.url_input.update(cx, |s, cx| s.focus(window, cx));
+                    cx.notify();
+                };
                 menu.item(item(
                     Some(DbKind::Postgres),
                     "PostgreSQL from a DATABASE_URL…",
-                    |this, window, cx| {
-                        this.settings = None;
-                        this.show_url = true;
-                        this.url_input.update(cx, |s, cx| s.focus(window, cx));
-                        cx.notify();
-                    },
+                    from_url,
+                ))
+                .item(item(
+                    Some(DbKind::Mysql),
+                    "MySQL or MariaDB from a URL…",
+                    from_url,
                 ))
                 .item(item(
                     None,

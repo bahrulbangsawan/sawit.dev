@@ -183,7 +183,7 @@ impl Sawit {
             &a.path,
             a.overwrite.unwrap_or(false)
         ));
-        if let Some(conn) = tri!(self.lite_conn(&a.target, true)) {
+        if let Some(conn) = tri!(self.conn_for(&a.target, true, a.database.as_deref()).await) {
             let schemas = tri!(conn.load_schema().await.map_err(|e| e.to_string()));
             let (schema, rel) = tri!(
                 db::find_relation(&schemas, a.schema.as_deref(), &a.table)
@@ -221,7 +221,7 @@ impl Sawit {
             &a.path,
             a.overwrite.unwrap_or(false)
         ));
-        if let Some(conn) = tri!(self.lite_conn(&a.target, true)) {
+        if let Some(conn) = tri!(self.conn_for(&a.target, true, a.database.as_deref()).await) {
             let format = tri!(db::ExportFormat::for_path(&path).map_err(|e| e.to_string()));
             let outcome = match conn.run_read_only(&a.sql, db::XLSX_MAX_ROWS as usize).await {
                 Ok(outcome) => outcome,

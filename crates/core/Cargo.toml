@@ -32,6 +32,9 @@ rquickjs = "0.14"
 # SQLite files: Cloudflare D1's local databases (Miniflare's .sqlite files) and plain .sqlite
 # files. `bundled` builds SQLite itself (public domain), so it never depends on the system's.
 rusqlite = { version = "0.41", features = ["bundled"] }
+# MySQL and MariaDB servers: pure Rust over Tokio, TLS through the same rustls (ring) as
+# PostgreSQL's, compression through miniz_oxide (already built for flate2).
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
 # SHA-256 and HMAC-SHA-256 for Miniflare's Durable Object ids (the D1 file names); already built
 # for rustls.
 ring = "0.17"

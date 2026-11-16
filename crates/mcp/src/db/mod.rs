@@ -1,11 +1,12 @@
 //! Databases: finding them, listing/creating/dropping, schemas, read-only
 //! and read-write SQL, saved connections and `.env` files.
 //!
+//! Saved MySQL and MariaDB connections are targets as PostgreSQL ones are.
 //! SQLite files and Cloudflare D1 databases (local and remote) are targets
 //! too, by the ids `detect_databases` gives (`d1-local:DB@/project`,
 //! `d1-remote:shop@/project`, `sqlite:/path`). The tools that read and write
-//! data work on them with the same read-only and confirm rules; the ones only
-//! a PostgreSQL server has say so.
+//! data work on all of them with the same read-only and confirm rules; the
+//! ones only a PostgreSQL server has say so.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -39,12 +40,20 @@ pub(crate) enum Target {
     Lite(Box<ConnProfile>),
 }
 
-/// Why a PostgreSQL-only tool won't take a SQLite or D1 target.
+/// Why a PostgreSQL-only tool won't take a MySQL, SQLite or D1 target.
 pub(crate) fn postgres_only(p: &ConnProfile) -> String {
+    let kind = match p.kind {
+        db::DbKind::Mysql => "MySQL".to_string(),
+        kind => format!("{} (SQLite)", kind.title()),
+    };
+    let more = if p.kind.is_mysql() {
+        ", create_database, drop_database"
+    } else {
+        ""
+    };
     format!(
-        "Refused: “{}” is {} (SQLite), and this tool works on PostgreSQL only. On it, use query, execute_sql, describe_schema, describe_table, list_databases, export_table, export_query or schema_diagram.",
+        "Refused: “{}” is {kind}, and this tool works on PostgreSQL only. On it, use query, execute_sql, describe_schema, describe_table, list_databases, export_table, export_query or schema_diagram{more}.",
         p.name,
-        p.kind.title()
     )
 }
 
@@ -139,6 +148,9 @@ impl Sawit {
         database: Option<&str>,
     ) -> Result<tokio_postgres::Client, String> {
         let (profile, password) = self.admin_login(target, database).await?;
+        if profile.kind.is_mysql() {
+            return Err(postgres_only(&profile));
+        }
         db::connect(&profile, password.as_deref())
             .await
             .map_err(|e| e.to_string())
@@ -154,6 +166,9 @@ impl Sawit {
         database: Option<&str>,
     ) -> Result<tokio_postgres::Client, String> {
         let (profile, password) = self.admin_login(target, database).await?;
+        if profile.kind.is_mysql() {
+            return Err(postgres_only(&profile));
+        }
         if let Target::Instance(inst) = self.resolve_target(target)? {
             let admin = ConnProfile::new("localhost", inst.port, "postgres", "postgres");
             let client = db::connect(&admin, None).await.map_err(|e| e.to_string())?;
@@ -173,11 +188,26 @@ impl Sawit {
             .map_err(|e| e.to_string())
     }
 
-    /// A handle on a SQLite or D1 target (`None` for PostgreSQL ones): read-only for the
-    /// tools that only read.
-    pub(crate) fn lite_conn(&self, target: &str, read_only: bool) -> Result<Option<Conn>, String> {
+    /// A handle on a MySQL, SQLite or D1 target (`None` for PostgreSQL ones, which the tools
+    /// reach with their own client): read-only for the tools that only read. A MySQL target
+    /// logs in with its saved credentials, on `database` when given (else the saved one's).
+    pub(crate) async fn conn_for(
+        &self,
+        target: &str,
+        read_only: bool,
+        database: Option<&str>,
+    ) -> Result<Option<Conn>, String> {
         match self.resolve_target(target)? {
             Target::Lite(p) => Ok(Some(Conn::lite(*p, read_only))),
+            Target::Profile(p) if p.kind.is_mysql() => {
+                let (profile, password) = self.admin_login(target, database).await?;
+                let conn = if read_only {
+                    Conn::connect_read_only(&profile, password.as_deref()).await
+                } else {
+                    Conn::connect(&profile, password.as_deref()).await
+                };
+                conn.map(Some).map_err(|e| e.to_string())
+            }
             _ => Ok(None),
         }
     }
@@ -193,7 +223,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Find every database reachable from this Mac: Sawit instances, saved connections, DATABASE_URL in a project's .env (optional project_dir), every database of any running local PostgreSQL (Homebrew, Postgres.app, Sawit), and with project_dir the Cloudflare D1 databases its Wrangler config binds (local SQLite files and remote databases). Each line starts with the id to pass as `target` and its kind: postgres, d1-local, d1-remote or sqlite"
+        description = "Find every database reachable from this Mac: Sawit instances, saved connections (PostgreSQL and MySQL), DATABASE_URL in a project's .env (optional project_dir), every database of any running local PostgreSQL (Homebrew, Postgres.app, Sawit), and with project_dir the Cloudflare D1 databases its Wrangler config binds (local SQLite files and remote databases). Each line starts with the id to pass as `target` and its kind: postgres, mysql, d1-local, d1-remote or sqlite"
     )]
     async fn detect_databases(&self, Parameters(a): Parameters<DetectArgs>) -> CallToolResult {
         self.detect_databases_tool(a.project_dir.as_deref()).await
@@ -207,7 +237,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Create a database on an instance (as the postgres superuser) or a saved connection (with its own credentials)"
+        description = "Create a database on an instance (as the postgres superuser) or a saved PostgreSQL or MySQL connection (with its own credentials)"
     )]
     async fn create_database(&self, Parameters(a): Parameters<CreateDbArgs>) -> CallToolResult {
         self.create_database_tool(a).await
@@ -236,7 +266,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Run one SQL statement READ-ONLY (writes are rejected) and return up to 500 rows as a text table. Use this for SELECTs; it cannot modify anything. On a local D1 or SQLite target the file is opened read-only"
+        description = "Run one SQL statement READ-ONLY (writes are rejected) and return up to 500 rows as a text table. Use this for SELECTs; it cannot modify anything. On a local D1 or SQLite target the file is opened read-only; on MySQL it runs in a read-only session and transaction"
     )]
     async fn query(&self, Parameters(a): Parameters<QueryArgs>) -> CallToolResult {
         self.query_tool(&a.target, &a.sql, a.database.as_deref(), a.max_rows)
@@ -251,7 +281,7 @@ impl Sawit {
     }
 
     #[tool(
-        description = "Save a connection from a postgres:// URL under a name (password goes to the macOS Keychain). Replaces a connection with the same name"
+        description = "Save a connection from a postgres:// or mysql:// URL under a name (password goes to the macOS Keychain). Replaces a connection with the same name"
     )]
     async fn save_connection(
         &self,

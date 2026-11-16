@@ -1,6 +1,6 @@
 ---
 name: sawit-databases
-description: Local databases through Sawit instead of Docker, docker compose, Postgres.app or brew services. Use it when a project needs a PostgreSQL database for development or tests, a DATABASE_URL in .env, a schema, migration or seed applied, rows read or changed, data exported, backed up or imported, or when it uses Cloudflare D1 or a SQLite file. Works through the sawit MCP server's database tools (create_instance, start_instance, query, execute_sql, write_env, detect_databases), without the app.
+description: Local databases through Sawit instead of Docker, docker compose, Postgres.app or brew services. Use it when a project needs a PostgreSQL database for development or tests, a DATABASE_URL in .env, a schema, migration or seed applied, rows read or changed, data exported, backed up or imported, or when it uses MySQL, MariaDB, Cloudflare D1 or a SQLite file. Works through the sawit MCP server's database tools (create_instance, start_instance, query, execute_sql, write_env, detect_databases), without the app.
 ---
 
 # Databases with Sawit
@@ -40,6 +40,10 @@ Each needs `confirm`, the name typed again: ask the user first, and name exactly
 ## D1 and SQLite
 
 `detect_databases` with `project_dir` lists a Cloudflare project's D1 databases as `d1-local:…` (the local file) and `d1-remote:…` (production), and SQLite files as `sqlite:/path/to/file.sqlite`. Pass that id as `target` to `query`, `execute_sql`, `describe_schema`, `describe_table`, `list_databases`, `export_table`, `export_query` and `schema_diagram`. A local D1 write goes through the running dev server when one runs. A `d1-remote:` write changes production and needs `confirm: true`: ask the user first.
+
+## MySQL and MariaDB
+
+Sawit doesn't run MySQL servers itself: it connects to one that runs (Homebrew, a cloud database such as PlanetScale, RDS or Aiven). `save_connection` takes a `mysql://user:password@host:3306/database` URL (also `mariadb://`, `jdbc:mysql://`, `mysql+pymysql://` and Go's `user:pass@tcp(host:3306)/db`); the password goes to the Keychain. Then pass the connection's name as `target` to `query` (a read-only session and transaction), `execute_sql`, `describe_schema`, `describe_table`, `list_databases`, `create_database`, `drop_database`, `export_table`, `export_query` and `schema_diagram`. A database is a schema there: a connection without a database shows every one. `detect_databases` lists saved MySQL connections and a MySQL DATABASE_URL in the project's .env. The PostgreSQL-only tools (instances, backups, CSV import, `drop_relation`, `truncate_table`) refuse a MySQL target and say why.
 
 ## Without the sawit MCP server
 

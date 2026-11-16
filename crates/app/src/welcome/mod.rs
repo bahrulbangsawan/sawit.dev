@@ -325,7 +325,8 @@ impl Welcome {
                             .text_color(cx.theme().muted_foreground)
                             .truncate()
                             .child(match p.kind {
-                                sawit_core::db::DbKind::Postgres => {
+                                sawit_core::db::DbKind::Postgres
+                                | sawit_core::db::DbKind::Mysql => {
                                     format!("{}:{}", p.host, p.port)
                                 }
                                 kind => kind.title().to_string(),

@@ -3,6 +3,7 @@
 
 mod dotenv;
 mod fields;
+mod mysql_url;
 mod password;
 mod url;
 
@@ -109,7 +110,9 @@ pub struct ConnProfile {
 
 /// The kinds of database Sawit opens. PostgreSQL has every feature; SQLite and Cloudflare D1
 /// share one backend ([`super::sqlite`]) and leave out what only a server has (instances,
-/// `pg_dump`, roles, materialized views).
+/// `pg_dump`, roles, materialized views); MySQL and MariaDB ([`super::mysql`]) are servers
+/// reached by URL, browsed, queried and exported as PostgreSQL is, without PostgreSQL's own
+/// tools (instances, `pg_dump`, CSV import, roles).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DbKind {
@@ -121,6 +124,8 @@ pub enum DbKind {
     D1Remote,
     /// Any other `.sqlite` file.
     Sqlite,
+    /// A MySQL or MariaDB server.
+    Mysql,
 }
 
 impl DbKind {
@@ -135,6 +140,7 @@ impl DbKind {
             DbKind::D1Local => "Cloudflare D1 (local)",
             DbKind::D1Remote => "Cloudflare D1 (remote)",
             DbKind::Sqlite => "SQLite",
+            DbKind::Mysql => "MySQL",
         }
     }
 
@@ -145,18 +151,31 @@ impl DbKind {
             DbKind::D1Local => "d1-local",
             DbKind::D1Remote => "d1-remote",
             DbKind::Sqlite => "sqlite",
+            DbKind::Mysql => "mysql",
         }
     }
 
     /// SQLite underneath: a file, or D1.
     pub fn is_lite(self) -> bool {
-        !self.is_postgres()
+        matches!(self, DbKind::D1Local | DbKind::D1Remote | DbKind::Sqlite)
     }
 
-    /// The schema the tree opens on its own: `public`, or SQLite's `main`.
+    /// A MySQL or MariaDB server.
+    pub fn is_mysql(self) -> bool {
+        self == DbKind::Mysql
+    }
+
+    /// A server reached with a user and password (PostgreSQL, MySQL), not a file.
+    pub fn is_server(self) -> bool {
+        matches!(self, DbKind::Postgres | DbKind::Mysql)
+    }
+
+    /// The schema the tree opens on its own: `public`, or SQLite's `main` (MySQL's is the
+    /// profile's database, [`ConnProfile::default_schema`]).
     pub fn default_schema(self) -> &'static str {
         match self {
             DbKind::Postgres => "public",
+            DbKind::Mysql => "",
             _ => super::sqlite::MAIN,
         }
     }
@@ -299,6 +318,23 @@ impl ConnProfile {
         }
     }
 
+    /// A MySQL or MariaDB server's profile.
+    pub fn mysql(host: &str, port: u16, database: &str, user: &str) -> ConnProfile {
+        ConnProfile {
+            kind: DbKind::Mysql,
+            ..ConnProfile::new(host, port, database, user)
+        }
+    }
+
+    /// The schema the tree opens on its own: the kind's ([`DbKind::default_schema`]), or the
+    /// MySQL profile's database.
+    pub fn default_schema(&self) -> &str {
+        match self.kind {
+            DbKind::Mysql => &self.database,
+            kind => kind.default_schema(),
+        }
+    }
+
     /// The database file of a SQLite or local D1 profile.
     pub fn file(&self) -> Option<&Path> {
         self.lite.as_ref()?.file.as_deref()
@@ -309,7 +345,7 @@ impl ConnProfile {
     pub fn location(&self) -> String {
         let lite = self.lite.as_ref();
         match self.kind {
-            DbKind::Postgres => self.connection_string(),
+            DbKind::Postgres | DbKind::Mysql => self.connection_string(),
             DbKind::D1Remote => format!(
                 "{} on Cloudflare, through Wrangler in {}",
                 lite.and_then(|l| l.database_name.as_deref())
@@ -331,6 +367,8 @@ impl ConnProfile {
     pub fn accessible_name(&self, version: Option<&str>) -> String {
         let kind = match version {
             Some(v) if self.kind.is_postgres() => format!("{} {v}", self.kind.title()),
+            // `MySQL 8.4`, `MariaDB 11.4` (super::mysql::version_label).
+            Some(v) if self.kind.is_mysql() => v.to_string(),
             _ => self.kind.title().to_string(),
         };
         let name = match (self.kind, &self.lite) {

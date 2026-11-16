@@ -3,8 +3,8 @@
 //! Besides the saved profiles, the store holds the Cloudflare D1 databases
 //! of the window's Workers projects ([`DbStore::detected`]), found again
 //! whenever the Database panel is shown and never saved. Every profile is
-//! opened as a [`Conn`]: a PostgreSQL client, or a SQLite file or D1
-//! database that holds nothing open between operations.
+//! opened as a [`Conn`]: a PostgreSQL client, a MySQL connection pool, or a
+//! SQLite file or D1 database that holds nothing open between operations.
 //!
 //! Each profile's connection follows [`ConnState`]: idle until something
 //! needs it, reconnected with backoff when it drops, and closed again after
@@ -53,8 +53,8 @@ pub struct DbStore {
     /// Where writes to each SQLite or D1 database go, as last looked at (on connect and
     /// reload); each write looks again.
     pub routes: HashMap<String, WriteRoute>,
-    /// Each PostgreSQL server's major version, once connected.
-    pub versions: HashMap<String, u32>,
+    /// The server's version, as the sidebar names it: `16` (PostgreSQL), `MySQL 8.4`.
+    pub versions: HashMap<String, String>,
     /// Kept while disconnected, so the tree stays browsable.
     pub schemas: HashMap<String, Vec<SchemaInfo>>,
     /// Bumped whenever `schemas` changes, so observers can skip other notifies.
@@ -210,7 +210,7 @@ impl DbStore {
     /// "PostgreSQL 16 · kyzn", "Cloudflare D1 (local) · DB": the tooltip's and accessible
     /// name's first line.
     pub fn accessible_name(&self, name: &str) -> String {
-        let version = self.versions.get(name).map(u32::to_string);
+        let version = self.versions.get(name).cloned();
         self.profile(name)
             .map(|p| p.accessible_name(version.as_deref()))
             .unwrap_or_else(|| name.to_string())

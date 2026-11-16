@@ -95,7 +95,7 @@ impl DbStore {
                 let schema = ro.load_schema().await?;
                 let route = match &rw {
                     Conn::Lite(lite) => Some(lite.write_route().await),
-                    Conn::Pg(_) => None,
+                    Conn::Pg(_) | Conn::My(_) => None,
                 };
                 return Ok::<_, sawit_core::CoreError>((rw, ro, schema, route, None));
             }
@@ -104,15 +104,10 @@ impl DbStore {
             let password = tokio::task::spawn_blocking(move || resolve_password(&lookup))
                 .await
                 .unwrap_or_default();
-            let (client, ro, schema) = db::connect_all(&profile, password.as_deref()).await?;
-            let version = db::server_major(&client).await.ok();
-            Ok((
-                Conn::Pg(client.into()),
-                Conn::Pg(ro.into()),
-                schema,
-                None,
-                version,
-            ))
+            // PostgreSQL or MySQL.
+            let (rw, ro, schema, version) =
+                Conn::connect_server(&profile, password.as_deref()).await?;
+            Ok((rw, ro, schema, None, version))
         });
         let name = name.to_string();
         cx.spawn(async move |this, cx| {
@@ -229,7 +224,7 @@ impl DbStore {
             let schema = client.load_schema().await;
             let route = match &client {
                 Conn::Lite(lite) => Some(lite.write_route().await),
-                Conn::Pg(_) => None,
+                Conn::Pg(_) | Conn::My(_) => None,
             };
             schema.map(|s| (s, route))
         });

@@ -54,6 +54,9 @@ impl ConnProfile {
 
     /// A URL without the password, for display and `.env` files.
     pub fn url(&self) -> String {
+        if self.kind.is_mysql() {
+            return self.mysql_url();
+        }
         if self.is_socket() {
             return format!(
                 "postgres://{}@:{}/{}?host={}",
@@ -82,7 +85,7 @@ impl ConnProfile {
     }
 }
 
-fn percent_decode(s: &str) -> String {
+pub(super) fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
     let mut out = Vec::with_capacity(bytes.len());
@@ -136,14 +139,22 @@ fn unwrap_pasted(input: &str) -> &str {
 /// `+driver` suffix (`postgresql+asyncpg`, Django's `postgis`).
 const PG_SCHEMES: [&str; 4] = ["postgres", "postgresql", "pgsql", "postgis"];
 
+/// URL schemes that mean MySQL or MariaDB, after dropping a `jdbc:` prefix and a `+driver`
+/// suffix (`mysql+pymysql`, `mysql+aiomysql`); `mysql2` is Rails', `mysqlx` the X protocol's
+/// (whose classic port Sawit uses).
+const MYSQL_SCHEMES: [&str; 4] = ["mysql", "mariadb", "mysql2", "mysqlx"];
+
 /// Why a URL for something else can't be used, in plain words.
 fn other_database(scheme: &str) -> Option<&'static str> {
     Some(match scheme {
-        "mysql" | "mariadb" => "This is a MySQL URL; Sawit connects to PostgreSQL.",
-        "mongodb" | "mongodb+srv" => "This is a MongoDB URL; Sawit connects to PostgreSQL.",
-        "redis" | "rediss" => "This is a Redis URL; Sawit connects to PostgreSQL.",
-        "sqlite" | "file" => "This is a SQLite path; Sawit connects to PostgreSQL.",
-        "sqlserver" | "mssql" => "This is a SQL Server URL; Sawit connects to PostgreSQL.",
+        "mongodb" | "mongodb+srv" => {
+            "This is a MongoDB URL; Sawit connects to PostgreSQL and MySQL."
+        }
+        "redis" | "rediss" => "This is a Redis URL; Sawit connects to PostgreSQL and MySQL.",
+        "sqlite" | "file" => "This is a SQLite path. Open the file with + › SQLite File… instead.",
+        "sqlserver" | "mssql" => {
+            "This is a SQL Server URL; Sawit connects to PostgreSQL and MySQL."
+        }
         "prisma" | "prisma+postgres" => {
             "This is a Prisma Accelerate URL. Use the direct database URL (often DIRECT_URL) instead."
         }
@@ -154,7 +165,7 @@ fn other_database(scheme: &str) -> Option<&'static str> {
 /// Splits `user:password@` off what follows `scheme://`. Passwords pasted
 /// without percent-encoding may contain `@ / ? #`, so the split is at the
 /// last `@` that isn't inside the query string.
-fn split_userinfo(rest: &str) -> (Option<&str>, &str) {
+pub(super) fn split_userinfo(rest: &str) -> (Option<&str>, &str) {
     let in_query = |prefix: &str| {
         prefix.match_indices('?').any(|(i, _)| {
             let after = &prefix[i + 1..];
@@ -176,7 +187,7 @@ fn split_userinfo(rest: &str) -> (Option<&str>, &str) {
 /// `host[:port]` items of a URL's host list (`h1:5432,[::1]:5433,h3`). A
 /// port is only split off when it is all digits, so Cloud SQL socket paths
 /// (`%2Fcloudsql%2Fproj:region:inst`) stay whole.
-fn split_hosts(list: &str) -> Result<(Vec<String>, Vec<String>)> {
+pub(super) fn split_hosts(list: &str) -> Result<(Vec<String>, Vec<String>)> {
     let (mut hosts, mut ports) = (Vec::new(), Vec::new());
     for item in list.split(',') {
         let (host, port) = if let Some(v6) = item.strip_prefix('[') {
@@ -227,21 +238,27 @@ pub fn parse_database_url(input: &str) -> Result<(ConnProfile, Option<String>)> 
         url.strip_prefix("jdbc:postgresql:")
             .map(|db| ("postgresql", db))
     }) else {
+        if let Some(dsn) = super::mysql_url::go_mysql_dsn(url) {
+            return dsn;
+        }
         if url.contains('=') {
             return parse_keyword_value(url);
         }
         return Err(parse_error(format!(
-            "Not a PostgreSQL connection string: {url}. Use postgres://user:password@host:5432/database."
+            "Not a connection string: {url}. Use postgres://user:password@host:5432/database or mysql://user:password@host:3306/database."
         )));
     };
     let scheme = scheme.to_ascii_lowercase();
     let scheme = scheme.strip_prefix("jdbc:").unwrap_or(&scheme);
     let base = scheme.split('+').next().unwrap_or_default();
+    if MYSQL_SCHEMES.contains(&base) {
+        return super::mysql_url::parse_mysql_url(rest);
+    }
     if !PG_SCHEMES.contains(&base) || scheme.starts_with("prisma") {
         return Err(parse_error(match other_database(scheme) {
             Some(why) => why.to_string(),
             None => format!(
-                "“{scheme}://” isn't a PostgreSQL URL. Use postgres://user:password@host:5432/database."
+                "“{scheme}://” isn't a PostgreSQL or MySQL URL. Use postgres://user:password@host:5432/database or mysql://user:password@host:3306/database."
             ),
         }));
     }

@@ -67,7 +67,12 @@ pub fn cell_kind(data_type: &str) -> CellKind {
     if t.ends_with(']') {
         return CellKind::Text;
     }
-    match t.split('(').next().unwrap_or(&t).trim() {
+    // MySQL writes `int unsigned`, `decimal(10,2) unsigned zerofill`.
+    let base = t.split('(').next().unwrap_or(&t).trim();
+    let base = base
+        .trim_end_matches(" zerofill")
+        .trim_end_matches(" unsigned");
+    match base {
         "smallint" | "integer" | "bigint" | "real" | "double precision" | "numeric" => {
             CellKind::Number
         }

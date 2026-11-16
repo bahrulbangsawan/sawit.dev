@@ -37,7 +37,7 @@ impl DatabasePanel {
         });
         let url = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("postgres://user@localhost:5432/db")
+                .placeholder("postgres:// or mysql://user@localhost/db")
                 .default_value(profile.connection_string())
         });
         let password = cx.new(|cx| {
@@ -148,11 +148,12 @@ impl DatabasePanel {
                 .child(Input::new(input).small())
                 .child(div().text_xs().text_color(muted).child(hint))
         };
+        // A server (PostgreSQL, MySQL) has a connection string and a password; a file doesn't.
         let postgres = self
             .store
             .read(cx)
             .profile(&form.profile)
-            .is_none_or(|p| p.kind.is_postgres());
+            .is_none_or(|p| p.kind.is_server());
         Some(
             v_flex()
                 .p_2()

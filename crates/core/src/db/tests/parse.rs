@@ -122,8 +122,8 @@ fn database_url_defaults() {
 }
 
 #[test]
-fn rejects_non_postgres_url() {
-    assert!(parse_database_url("mysql://root@localhost/db").is_err());
+fn rejects_urls_of_other_databases() {
+    assert!(parse_database_url("redis://localhost:6379").is_err());
     assert!(parse_database_url("not a url").is_err());
 }
 
@@ -180,7 +180,8 @@ fn parses_multiple_hosts_and_session_settings() {
 #[test]
 fn explains_strings_it_cannot_use() {
     let msg = |s: &str| parse_database_url(s).unwrap_err().to_string();
-    assert!(msg("mysql://root@h/db").contains("MySQL"));
+    assert!(msg("mysql://root@h:99999/db").contains("port"));
+    assert!(msg("mysql://root@h:0/db").contains("port"));
     assert!(msg("mongodb+srv://u@c.mongodb.net/db").contains("MongoDB"));
     assert!(msg("prisma+postgres://accelerate.prisma-data.net/?api_key=x").contains("DIRECT_URL"));
     assert!(msg("postgres://u@h:99999/d").contains("port"));
@@ -191,7 +192,7 @@ fn explains_strings_it_cannot_use() {
     assert!(msg("postgres://u@h1,,h3/d").contains("empty"));
     assert!(msg("postgres://u@[::1/d").contains("]"));
     assert!(msg("").contains("Paste"));
-    assert!(msg("just some text").contains("Not a PostgreSQL"));
+    assert!(msg("just some text").contains("Not a connection string"));
     assert!(msg("service=definitely-not-defined-anywhere").contains("Service"));
 }
 

@@ -150,7 +150,7 @@ impl Sawit {
             "schema_diagram",
             a.output_path.as_deref()
         ));
-        let schemas = match tri!(self.lite_conn(&a.target, true)) {
+        let schemas = match tri!(self.conn_for(&a.target, true, a.database.as_deref()).await) {
             Some(conn) => tri!(conn.load_schema().await.map_err(|e| e.to_string())),
             None => {
                 let client = tri!(self.connect_target(&a.target, a.database.as_deref()).await);

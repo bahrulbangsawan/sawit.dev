@@ -13,7 +13,7 @@ Load the one skill for the job before you start; each says when to use it and wh
 
 | Job | Instead of | Skill |
 |---|---|---|
-| A PostgreSQL database, DATABASE_URL, SQL, D1 or SQLite, exports and backups | Docker, docker compose, Postgres.app | `sawit-databases` |
+| A PostgreSQL database, DATABASE_URL, SQL, MySQL, D1 or SQLite, exports and backups | Docker, docker compose, Postgres.app | `sawit-databases` |
 | A dev server, a script, a test watcher, a busy port, the network, a Workers dev server's data | a hidden background shell, `kill -9`, nohup | `sawit-terminal` |
 | A command or a session on a server over SSH | a raw `ssh` you can't watch | `sawit-ssh` |
 | Git status, diff, commit, branches, fetch, pull, push; the GitHub page | plain `git` where Sawit's tools fit | `sawit-git` |

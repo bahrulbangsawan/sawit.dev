@@ -7,12 +7,14 @@
 //! file, empty or delete it. Those run in the background and report here.
 //!
 //! Each connection row shows its kind's logo beside the status dot, and says
-//! the kind in its tooltip and accessible name ("PostgreSQL 16 · kyzn"). The
+//! the kind in its tooltip and accessible name ("PostgreSQL 16 · kyzn",
+//! "MySQL 8.4 · shop"). MySQL and MariaDB servers connect from a URL as
+//! PostgreSQL ones do, and are browsed, queried and exported the same way. The
 //! D1 databases of the window's Workers projects follow the saved
 //! connections under "Cloudflare D1" (local first, then remote), and local D1
 //! files no binding names under "Unmatched local D1 databases". What only
-//! PostgreSQL has (`pg_dump` backups, CSV imports, materialized views,
-//! connection strings) isn't offered for SQLite or D1.
+//! PostgreSQL has (`pg_dump` backups, CSV imports, materialized views) isn't
+//! offered for MySQL, SQLite or D1; connection strings are for servers only.
 
 mod add;
 mod jobs;
@@ -98,7 +100,8 @@ impl DatabasePanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let url_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("postgres://user:pass@localhost:5432/db")
+            InputState::new(window, cx)
+                .placeholder("postgres://… or mysql://user:pass@localhost:3306/db")
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Filter tables"));
         let subscriptions = vec![

@@ -2,7 +2,7 @@
 //! and statements that drop or empty relations. Each runs on the Tokio
 //! runtime and answers through a receiver; `None` means the connection
 //! isn't up (and is being reconnected). Backups and CSV imports are
-//! PostgreSQL's only; their menu items aren't offered for SQLite or D1.
+//! PostgreSQL's only; their menu items aren't offered for MySQL, SQLite or D1.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -76,9 +76,8 @@ pub fn export_relation(
             let password = tokio::task::spawn_blocking(move || db::resolve_password(&lookup))
                 .await
                 .unwrap_or_default();
-            Conn::Pg(Arc::new(
-                db::connect_read_only(&profile, password.as_deref()).await?,
-            ))
+            // PostgreSQL or MySQL.
+            Conn::connect_read_only(&profile, password.as_deref()).await?
         };
         conn.export_rows(
             &schema, &table, &order, &query, format, &types, &path, rows, stop,

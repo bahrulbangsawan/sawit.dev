@@ -59,7 +59,7 @@ impl Sawit {
         max_rows: Option<usize>,
     ) -> CallToolResult {
         let limit = max_rows.unwrap_or(MAX_ROWS).clamp(1, MAX_ROWS);
-        if let Some(conn) = tri!(self.lite_conn(target, true)) {
+        if let Some(conn) = tri!(self.conn_for(target, true, database).await) {
             return match conn.run_read_only(sql, limit).await {
                 Ok(outcome) => ok(format_outcome(&outcome)),
                 Err(e) => fail(format!(
@@ -78,7 +78,14 @@ impl Sawit {
 
     pub async fn execute_sql_tool(&self, a: ExecuteArgs) -> CallToolResult {
         let limit = a.max_rows.unwrap_or(MAX_ROWS).clamp(1, MAX_ROWS);
-        if let Some(Conn::Lite(lite)) = tri!(self.lite_conn(&a.target, false)) {
+        let conn = tri!(self.conn_for(&a.target, false, a.database.as_deref()).await);
+        if let Some(conn @ Conn::My(_)) = &conn {
+            return match conn.run_sql(&a.sql, limit).await {
+                Ok(outcome) => ok(format_outcome(&outcome)),
+                Err(e) => fail(e.to_string()),
+            };
+        }
+        if let Some(Conn::Lite(lite)) = conn {
             // Reads run read-only on the file (or remotely); only writes take a write route.
             match lite.run_if_read_only(&a.sql, limit).await {
                 Ok(ReadOnlyTry::Read(outcome)) => return ok(format_outcome(&outcome)),
@@ -112,6 +119,18 @@ impl Sawit {
         if name.is_empty() {
             return fail("Give the new database a name.");
         }
+        if let Some(conn @ Conn::My(_)) = tri!(self.conn_for(&a.target, false, None).await) {
+            if a.owner.is_some() || a.template.is_some() {
+                return fail("MySQL databases have no owner or template; leave them out.");
+            }
+            return match conn
+                .run_bulk(&format!("CREATE DATABASE {}", db::mysql::quote(name)))
+                .await
+            {
+                Ok(_) => ok(format!("Created database {name} on {}.", a.target)),
+                Err(e) => fail(e.to_string()),
+            };
+        }
         let client = tri!(self.connect_admin(&a.target, None).await);
         let sql = create_database_sql(name, a.owner.as_deref(), a.template.as_deref());
         match client.batch_execute(&sql).await {
@@ -122,6 +141,15 @@ impl Sawit {
 
     pub async fn drop_database_tool(&self, a: DropDbArgs) -> CallToolResult {
         tri!(check_confirm(&a.name, &a.confirm, "drop database"));
+        if let Some(conn @ Conn::My(_)) = tri!(self.conn_for(&a.target, false, None).await) {
+            return match conn
+                .run_bulk(&format!("DROP DATABASE {}", db::mysql::quote(&a.name)))
+                .await
+            {
+                Ok(_) => ok(format!("Dropped database {} on {}.", a.name, a.target)),
+                Err(e) => fail(e.to_string()),
+            };
+        }
         // Not connected to the one being dropped.
         let (profile, _) = tri!(self.admin_login(&a.target, None).await);
         let via = (profile.database == a.name).then_some("postgres");

@@ -377,9 +377,9 @@ fn push_profile(
             if !query.is_empty() && matching.is_empty() {
                 continue;
             }
-            // `public`, or SQLite's `main`, starts open.
+            // `public`, SQLite's `main`, or the MySQL profile's database starts open.
             let sopen = !query.is_empty()
-                || (schema.name == profile.kind.default_schema()) != expanded.contains(&skey);
+                || (schema.name == profile.default_schema()) != expanded.contains(&skey);
             out.push(Node::Schema {
                 key: skey.clone(),
                 profile: name.clone(),

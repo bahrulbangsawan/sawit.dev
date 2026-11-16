@@ -12,13 +12,25 @@ pub const CLOUDFLARE: &str = "agent_logos/cloudflare-color.svg";
 /// Cloudflare's orange, which D1's one-colour product icon is drawn in.
 const CLOUDFLARE_ORANGE: u32 = 0xF6821F;
 
-/// The asset path of `kind`'s logo, and whether it has its own colours (else it is drawn in
-/// Cloudflare orange).
+/// MySQL's blue (Simple Icons' brand colour), which its one-colour dolphin is drawn in.
+const MYSQL_BLUE: u32 = 0x4479A1;
+
+/// The asset path of `kind`'s logo, and whether it has its own colours (else it is one colour,
+/// drawn in [`tint`]).
 pub fn logo_path(kind: DbKind) -> (&'static str, bool) {
     match kind {
         DbKind::Postgres => ("db_logos/postgresql-color.svg", true),
         DbKind::D1Local | DbKind::D1Remote => ("db_logos/d1.svg", false),
         DbKind::Sqlite => ("db_logos/sqlite-color.svg", true),
+        DbKind::Mysql => ("db_logos/mysql.svg", false),
+    }
+}
+
+/// The colour a one-colour logo is drawn in.
+fn tint(kind: DbKind) -> u32 {
+    match kind {
+        DbKind::Mysql => MYSQL_BLUE,
+        _ => CLOUDFLARE_ORANGE,
     }
 }
 
@@ -30,7 +42,7 @@ pub fn logo(kind: DbKind, size: f32) -> AnyElement {
             .path(path)
             .size(px(size))
             .flex_none()
-            .text_color(rgb(CLOUDFLARE_ORANGE))
+            .text_color(rgb(tint(kind)))
             .into_any_element(),
     }
 }
@@ -59,6 +71,7 @@ mod tests {
             DbKind::D1Local,
             DbKind::D1Remote,
             DbKind::Sqlite,
+            DbKind::Mysql,
         ] {
             let (path, _) = logo_path(kind);
             let svg = AppAssets
@@ -73,7 +86,7 @@ mod tests {
             "db_logos/postgresql-color.svg"
         );
         // No logo for kinds Sawit doesn't open.
-        assert!(AppAssets.load("db_logos/mysql.svg").is_err());
+        assert!(AppAssets.load("db_logos/mongodb.svg").is_err());
     }
 
     #[test]
@@ -98,5 +111,11 @@ mod tests {
         assert_eq!(remote.accessible_name(None), "Cloudflare D1 (remote) · DB");
         let file = ConnProfile::sqlite_file(std::path::Path::new("/tmp/notes.sqlite"));
         assert_eq!(file.accessible_name(None), "SQLite · notes.sqlite");
+        let my = ConnProfile::mysql("localhost", 3306, "shop", "root");
+        assert_eq!(
+            my.accessible_name(Some("MariaDB 11.4")),
+            "MariaDB 11.4 · root@localhost:3306/shop"
+        );
+        assert_eq!(my.accessible_name(None), "MySQL · root@localhost:3306/shop");
     }
 }
