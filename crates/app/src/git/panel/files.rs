@@ -204,14 +204,15 @@ impl GitPanel {
                             .flex_1()
                             .min_w_0()
                             .gap_1()
-                            .child(div().flex_none().max_w_full().truncate().child(name))
                             .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
+                                crate::states::truncated("git-file-name", name)
+                                    .flex_none()
+                                    .max_w_full(),
+                            )
+                            .child(
+                                crate::states::truncated("git-file-folder", folder)
                                     .text_xs()
-                                    .text_color(muted)
-                                    .child(folder),
+                                    .text_color(muted),
                             ),
                     )
                     .child(

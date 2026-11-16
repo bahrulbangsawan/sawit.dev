@@ -93,29 +93,22 @@ impl TerminalTab {
             .child(
                 self.rename_field(cx.entity().downgrade(), pane)
                     .unwrap_or_else(|| {
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
+                        crate::states::truncated(("pane-title", pane as usize), title)
                             .font_weight(style.title_weight)
-                            .child(title)
                             .into_any_element()
                     }),
             )
             .when(zoomed, |el| {
                 el.child(div().flex_none().text_color(muted).child("Zoomed"))
             })
-            .child(
-                div()
+            // The folder, cut to the header's width; the tooltip has the whole path.
+            .child(match folder {
+                Some(folder) => crate::states::truncated(("pane-folder", pane as usize), folder)
                     .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
                     .text_color(muted)
-                    .when_some(folder, |el, folder| el.child(folder)),
-            )
+                    .into_any_element(),
+                None => div().flex_1().into_any_element(),
+            })
             .child(
                 h_flex()
                     .flex_none()

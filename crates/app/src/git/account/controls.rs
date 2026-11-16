@@ -238,9 +238,13 @@ fn header(
                     )
                     .when_some(detail.clone(), |el, (text, warn)| {
                         el.child(
+                            // Wraps whole: a sign-in or network failure is read in full here.
                             div()
+                                .id("github-account-notice")
+                                .max_h(px(96.))
+                                .overflow_y_scroll()
                                 .text_xs()
-                                .line_clamp(3)
+                                .whitespace_normal()
                                 .text_color(if warn { cx.theme().warning } else { muted })
                                 .child(text),
                         )

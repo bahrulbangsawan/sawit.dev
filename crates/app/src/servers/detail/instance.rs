@@ -140,23 +140,42 @@ impl ServerDetail {
                         h_flex()
                             .gap_2()
                             .child(div().text_base().font_semibold().child(inst.name.clone()))
-                            .child(
+                            .child({
+                                // One line: a long status error ends in an ellipsis, and the
+                                // tooltip has all of it.
+                                let line = SharedString::from(format!(
+                                    "PostgreSQL {version} · port {} · {status_text}",
+                                    inst.port
+                                ));
+                                let tip = line.clone();
                                 div()
+                                    .id("instance-status")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(format!(
-                                        "PostgreSQL {version} · port {} · {status_text}",
-                                        inst.port
-                                    )),
-                            ),
+                                    .tooltip(move |window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                            .build(window, cx)
+                                    })
+                                    .child(line)
+                            }),
                     )
-                    .child(
+                    .child({
+                        let dir = SharedString::from(inst.data_dir.display().to_string());
+                        let tip = dir.clone();
                         div()
+                            .id("instance-data-dir")
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .truncate()
-                            .child(inst.data_dir.display().to_string()),
-                    ),
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                    .build(window, cx)
+                            })
+                            .child(dir)
+                    }),
             )
             .child(
                 Button::new("start")
@@ -274,6 +293,9 @@ impl ServerDetail {
             .when_some(notice, |el, n| {
                 el.child(
                     div()
+                        .id("instance-notice")
+                        .max_h(px(120.))
+                        .overflow_y_scroll()
                         .px_4()
                         .py_2()
                         .text_sm()
@@ -333,7 +355,7 @@ impl ServerDetail {
                     .text_xs()
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_color(cx.theme().muted_foreground)
-                    .truncate()
+                    .whitespace_normal()
                     .child(format!(
                         "{}:{}  {}  — {}",
                         o.listener.addr,
@@ -379,7 +401,15 @@ impl ServerDetail {
                     })),
             )
             .child(div().text_sm().whitespace_normal().child(report.explain()))
-            .children(owners)
+            // Every owner, its whole command line wrapped; many of them scroll.
+            .child(
+                v_flex()
+                    .id("port-owners")
+                    .gap_0p5()
+                    .max_h(px(120.))
+                    .overflow_y_scroll()
+                    .children(owners),
+            )
             .child(
                 h_flex()
                     .gap_2()

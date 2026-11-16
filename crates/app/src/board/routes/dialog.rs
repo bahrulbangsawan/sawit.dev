@@ -140,6 +140,11 @@ fn note(text: &str, color: Hsla) -> Div {
     div().text_sm().text_color(color).child(text.to_string())
 }
 
+/// A note that can run long (a crawl's error, every route skipped): it scrolls past five lines.
+fn long_note(id: &'static str, text: &str, color: Hsla) -> Stateful<Div> {
+    note(text, color).id(id).max_h(px(96.)).overflow_y_scroll()
+}
+
 /// The dev server: what it is, and a choice of the others the project runs.
 fn servers(dialog: &Dialog, cx: &mut Context<BoardView>) -> AnyElement {
     let muted = cx.theme().muted_foreground;
@@ -188,7 +193,7 @@ fn routes(dialog: &Dialog, cx: &mut Context<BoardView>) -> AnyElement {
             Some(error) => format!("No routes found: {error}."),
             None => "No routes found in its files or its links.".to_string(),
         };
-        return note(&why, muted).into_any_element();
+        return long_note("routes-why", &why, muted).into_any_element();
     }
     let rows = found.routes.iter().enumerate().map(|(index, route)| {
         let path = route.path.clone();
@@ -260,7 +265,9 @@ fn routes(dialog: &Dialog, cx: &mut Context<BoardView>) -> AnyElement {
                 .overflow_y_scroll()
                 .children(rows),
         )
-        .children(notes.into_iter().map(|text| note(&text, muted).text_xs()))
+        .children(notes.into_iter().enumerate().map(|(ix, text)| {
+            long_note(["routes-note-0", "routes-note-1"][ix.min(1)], &text, muted).text_xs()
+        }))
         .into_any_element()
 }
 

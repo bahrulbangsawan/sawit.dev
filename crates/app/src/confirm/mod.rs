@@ -316,7 +316,11 @@ impl Render for ConfirmView {
                     .child(self.title_text()),
             )
             .children(self.confirm.detail.clone().map(|detail| {
+                // A long detail scrolls, so the buttons below it stay on screen.
                 div()
+                    .id("confirm-detail")
+                    .max_h(px(240.))
+                    .overflow_y_scroll()
                     .text_sm()
                     .text_color(theme.muted_foreground)
                     .child(detail)

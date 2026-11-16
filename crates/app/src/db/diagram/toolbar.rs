@@ -111,7 +111,19 @@ impl DiagramView {
                     .font_semibold()
                     .child(self.title.clone()),
             )
-            .child(div().truncate().child(status))
+            .child({
+                // Shrinks to one line beside the title; the tooltip has a long error whole.
+                let status = SharedString::from(status);
+                let tip = status.clone();
+                div()
+                    .id("diagram-status")
+                    .min_w_0()
+                    .truncate()
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                    })
+                    .child(status)
+            })
             .child(div().flex_1())
             .when(!self.show_dbml, |el| {
                 el.child(

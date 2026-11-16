@@ -273,3 +273,56 @@ impl BrowserView {
             .into_any_element()
     }
 }
+
+/// Whether a footer note reports a failure ("Couldn't save…", "Unable to…"), by the app's own
+/// wording: it gets a red mark instead of a check, and stays until the next note.
+pub fn is_failure(note: &str) -> bool {
+    ["Couldn't", "Unable", "Can't", "Failed"]
+        .iter()
+        .any(|lead| note.starts_with(lead))
+}
+
+/// A panel's footer note: a check (or a red mark for a failure) and the note, wrapped, scrolling
+/// past four lines so a long error is read whole without taking the panel.
+pub fn footer_note(id: &'static str, note: SharedString, cx: &App) -> impl IntoElement + use<> {
+    let failed = is_failure(&note);
+    h_flex()
+        .flex_none()
+        .min_h(px(32.))
+        .px_3()
+        .py_1()
+        .gap_2()
+        .items_start()
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .child(div().pt(px(2.)).child(if failed {
+            Icon::new(Lucide::CircleAlert)
+                .xsmall()
+                .text_color(cx.theme().danger)
+        } else {
+            glyph(Lucide::Check, cx)
+        }))
+        .child(note_text(
+            id,
+            note,
+            if failed {
+                cx.theme().danger
+            } else {
+                cx.theme().muted_foreground
+            },
+        ))
+}
+
+/// A note's text: wrapped, scrolling past four lines, so a long error is read whole.
+pub fn note_text(id: &'static str, note: SharedString, color: Hsla) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_1()
+        .min_w_0()
+        .max_h(px(64.))
+        .overflow_y_scroll()
+        .whitespace_normal()
+        .text_xs()
+        .text_color(color)
+        .child(note)
+}

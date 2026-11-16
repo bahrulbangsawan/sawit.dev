@@ -76,13 +76,13 @@ impl SshPanel {
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(div().text_sm().truncate().child(name))
+                    .child(crate::states::truncated("ssh-host-name", name).text_sm())
                     .child(
                         h_flex()
                             .gap_1()
                             .text_xs()
                             .text_color(muted)
-                            .child(div().min_w_0().truncate().child(address))
+                            .child(crate::states::truncated("ssh-host-address", address))
                             .when_some(latency, |el, l| el.child("·").child(l)),
                     ),
             )

@@ -47,7 +47,19 @@ impl BrowserView {
                         .truncate()
                         .child(title),
                 )
-                .children(detail.map(|d| div().text_color(muted).truncate().child(d)))
+                .children(detail.map(|d| {
+                    // One line in the bar; the tooltip has all of it (a long encoder error).
+                    let tip = d.clone();
+                    div()
+                        .id("browser-capture-detail")
+                        .text_color(muted)
+                        .truncate()
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                .build(window, cx)
+                        })
+                        .child(d)
+                }))
         };
         let close = Button::new("browser-capture-close")
             .ghost()

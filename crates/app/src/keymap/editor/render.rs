@@ -282,12 +282,22 @@ impl Render for KeymapEditor {
                 window.dispatch_action(Box::new(OpenKeymapFile), cx)
             })
             .child(self.render_toolbar(cx))
-            .children(errors.into_iter().enumerate().map(|(ix, error)| {
-                div()
-                    .px_2()
-                    .pb_1()
-                    .child(Banner::error(("keymap-error", ix), error))
-            }))
+            // keymap.json's errors, however many: they scroll above the table, which stays.
+            .when(!errors.is_empty(), |el| {
+                el.child(
+                    v_flex()
+                        .id("keymap-errors")
+                        .flex_none()
+                        .max_h(px(160.))
+                        .overflow_y_scroll()
+                        .children(errors.into_iter().enumerate().map(|(ix, error)| {
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .child(Banner::error(("keymap-error", ix), error))
+                        })),
+                )
+            })
             .children(self.error.clone().map(|error| {
                 div()
                     .px_2()

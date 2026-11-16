@@ -276,6 +276,9 @@ impl Render for FileEditor {
             .when_some(self.notice.clone(), |el, n| {
                 el.child(
                     div()
+                        .id("editor-notice")
+                        .max_h(px(96.))
+                        .overflow_y_scroll()
                         .px_3()
                         .py_1p5()
                         .text_xs()

@@ -11,6 +11,11 @@ use gpui_kit::*;
 
 type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
+/// How tall a [`Banner`]'s message grows before it scrolls: about six lines of `text_xs`.
+const BANNER_MAX_H: f32 = 96.;
+/// An error longer than this (a line's worth) gets a Copy button in its banner.
+const BANNER_COPY_AFTER: usize = 60;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tone {
     Muted,
@@ -179,7 +184,8 @@ impl RenderOnce for Placeholder {
 }
 
 /// One-line notice (error or info) above content that still works, with an
-/// optional dismiss button. Long messages wrap.
+/// optional dismiss button. Long messages wrap, then scroll past six lines; a long error can be
+/// copied.
 #[derive(IntoElement)]
 pub struct Banner {
     id: ElementId,
@@ -248,18 +254,39 @@ impl RenderOnce for Banner {
                     .child(Icon::new(icon).xsmall().text_color(tint)),
             )
             .child(
+                // A long message (a server's error naming every table) scrolls inside the banner
+                // instead of pushing the panel's content off screen; Copy takes all of it.
                 div()
+                    .id("banner-message")
                     .flex_1()
                     .min_w_0()
+                    .max_h(px(BANNER_MAX_H))
+                    .overflow_y_scroll()
                     .whitespace_normal()
                     .text_color(if self.tone == Tone::Danger {
                         theme.danger
                     } else {
                         theme.foreground
                     })
-                    .child(self.message),
+                    .child(self.message.clone()),
             )
             .children(self.actions)
+            .when(
+                self.tone == Tone::Danger && self.message.len() > BANNER_COPY_AFTER,
+                |el| {
+                    let text = self.message.clone();
+                    el.child(
+                        Button::new("banner-copy")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Copy)
+                            .tooltip("Copy Error")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))
+                            }),
+                    )
+                },
+            )
             .when_some(self.on_dismiss, |el, handler| {
                 el.child(
                     Button::new("banner-dismiss")
@@ -271,4 +298,17 @@ impl RenderOnce for Banner {
                 )
             })
     }
+}
+
+/// One line of `text` that ends in an ellipsis when it doesn't fit, with its whole value in a
+/// tooltip: for paths, names and messages cut to a row's width.
+pub fn truncated(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Stateful<Div> {
+    let text = text.into();
+    let tip = text.clone();
+    div()
+        .id(id)
+        .min_w_0()
+        .truncate()
+        .tooltip(move |window, cx| tooltip::Tooltip::new(tip.clone()).build(window, cx))
+        .child(text)
 }

@@ -57,7 +57,10 @@ fn a_failed_save_shows_its_error_for_a_while(cx: &mut TestAppContext) {
     std::fs::remove_file(&blocker).unwrap();
     view.update(cx, |view, _| view.flush());
     assert_eq!(saved_layers(&path), 1);
-    cx.executor().advance_clock(TOAST_TIME);
+    // A long error stays longer than a short note, to be read; then it goes.
+    let up_for = crate::board::toast::toast_time(&toast.unwrap());
+    assert!(up_for >= TOAST_TIME);
+    cx.executor().advance_clock(up_for);
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.toast.is_none()));
 }

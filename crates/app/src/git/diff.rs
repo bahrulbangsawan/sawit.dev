@@ -129,15 +129,15 @@ impl Render for DiffView {
                 cx,
             ))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .child(match &self.file.from {
+                crate::states::truncated(
+                    "diff-path",
+                    match &self.file.from {
                         Some(from) => format!("{from} → {}", self.file.path),
                         None => self.file.path.clone(),
-                    }),
+                    },
+                )
+                .flex_1()
+                .text_sm(),
             )
             .child(
                 div()

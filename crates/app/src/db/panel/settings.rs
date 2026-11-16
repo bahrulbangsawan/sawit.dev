@@ -190,7 +190,16 @@ impl DatabasePanel {
                     )
                 })
                 .when_some(form.error.clone(), |el, e| {
-                    el.child(div().text_xs().text_color(cx.theme().danger).child(e))
+                    el.child(
+                        div()
+                            .id("db-settings-error")
+                            .max_h(px(96.))
+                            .overflow_y_scroll()
+                            .whitespace_normal()
+                            .text_xs()
+                            .text_color(cx.theme().danger)
+                            .child(e),
+                    )
                 })
                 .child(
                     h_flex()

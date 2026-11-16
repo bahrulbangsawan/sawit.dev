@@ -167,13 +167,11 @@ fn what(work: &Work, look: RowLook, ink: &Ink) -> impl IntoElement + use<> {
             } else {
                 FontWeight::NORMAL
             };
+            // A failure's reason runs long: the tooltip has all of it.
             row.child(
-                div()
-                    .min_w_0()
-                    .truncate()
+                crate::states::truncated("presence-said", text)
                     .font_weight(weight)
-                    .text_color(color)
-                    .child(text),
+                    .text_color(color),
             )
         })
 }

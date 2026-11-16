@@ -68,8 +68,12 @@ fn field(label: &'static str, child: impl IntoElement) -> impl IntoElement {
         .child(child)
 }
 
+/// A server's error, in red: a long one (pg_ctl's whole log) scrolls past ten lines.
 fn error_box(message: String, cx: &App) -> impl IntoElement {
     div()
+        .id("server-error")
+        .max_h(px(200.))
+        .overflow_y_scroll()
         .p_2()
         .rounded(cx.theme().radius)
         .border_1()

@@ -381,12 +381,8 @@ impl AnnotatePanel {
                     .gap_2()
                     .items_center()
                     .child(
-                        div()
-                            .debug_selector(|| "annotate-note".into())
-                            .flex_1()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(note),
+                        panel::note_text("annotate-note", note, muted)
+                            .debug_selector(|| "annotate-note".into()),
                     )
                     .when(undo, |el| {
                         el.child(

@@ -175,8 +175,11 @@ impl SeoPanel {
     }
 
     fn set_note(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.note = Some(text.into());
-        self._note_timer = Some(note_timer(cx, |this: &mut Self| this.note = None));
+        let text = text.into();
+        // A failure stays until the next note: it may take longer than a moment to read.
+        self._note_timer =
+            (!panel::is_failure(&text)).then(|| note_timer(cx, |this: &mut Self| this.note = None));
+        self.note = Some(text);
         cx.notify();
     }
 
@@ -433,31 +436,15 @@ pub(super) fn scanned_ago(secs: u64) -> String {
 
 impl Render for SeoPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted = cx.theme().muted_foreground;
         let body = self.body(cx);
         v_flex()
             .size_full()
             .child(self.tabs(cx))
             .child(panel::scroll("seo-body").child(body))
-            .children(self.note.clone().map(|note| {
-                h_flex()
-                    .flex_none()
-                    .min_h(px(32.))
-                    .px_3()
-                    .gap_2()
-                    .items_center()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(panel::glyph(Lucide::Check, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(note),
-                    )
-            }))
+            .children(
+                self.note
+                    .clone()
+                    .map(|note| panel::footer_note("seo-note", note, cx)),
+            )
     }
 }

@@ -62,7 +62,10 @@ impl ThreadView {
                                     .font_family(mono.clone())
                                     .child(sha.clone()),
                             )
-                            .child(div().min_w_0().truncate().child(message.clone()))
+                            .child(crate::states::truncated(
+                                SharedString::from(format!("commit-message-{sha}")),
+                                message.clone(),
+                            ))
                     }))
                     .into_any_element();
                 event_row(

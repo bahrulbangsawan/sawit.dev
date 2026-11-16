@@ -40,7 +40,10 @@ impl Workspace {
                             .hover(|el| el.bg(cx.theme().list_hover))
                     })
                     .child(div().size(px(8.)).rounded_full().bg(color))
-                    .child(div().max_w(px(160.)).truncate().child(project_name(&root)))
+                    .child(
+                        crate::states::truncated("project-name", project_name(&root))
+                            .max_w(px(160.)),
+                    )
                     .child(
                         Button::new(("close-project", ix))
                             .ghost()

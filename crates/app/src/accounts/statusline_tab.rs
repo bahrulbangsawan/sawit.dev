@@ -430,11 +430,20 @@ impl AccountsPage {
                                             .when(!problems.is_empty(), |el| {
                                                 el.child(
                                                     h_flex()
+                                                        .items_start()
                                                         .gap_1()
                                                         .text_xs()
                                                         .text_color(cx.theme().danger)
-                                                        .child(Icon::new(Lucide::CircleX).xsmall())
-                                                        .child(problems.join(" ")),
+                                                        .child(div().pt(px(1.)).flex_none().child(
+                                                            Icon::new(Lucide::CircleX).xsmall(),
+                                                        ))
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .min_w_0()
+                                                                .whitespace_normal()
+                                                                .child(problems.join(" ")),
+                                                        ),
                                                 )
                                             }),
                                     )

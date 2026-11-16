@@ -374,60 +374,73 @@ impl PromptsPanel {
             .when_some(self.github.message.clone(), |el, (text, error)| {
                 el.child(
                     div()
+                        .id("prompts-github-message")
+                        .max_h(px(96.))
+                        .overflow_y_scroll()
                         .text_xs()
                         .whitespace_normal()
                         .text_color(if error { cx.theme().danger } else { muted })
                         .child(text),
                 )
             })
-            .children(self.github.conflicts.iter().map(|c| {
-                let (mine, theirs) = (c.id.clone(), c.id.clone());
-                let title = if c.title.is_empty() {
-                    c.id.clone()
-                } else {
-                    c.title.clone()
-                };
+            // Every conflict, however many: the list scrolls in the footer.
+            .child(
                 v_flex()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().warning)
-                            .truncate()
-                            .child(format!("“{title}” changed here and on GitHub")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
+                    .id("prompts-github-conflicts")
+                    .gap_2()
+                    .max_h(px(200.))
+                    .overflow_y_scroll()
+                    .children(self.github.conflicts.iter().map(|c| {
+                        let (mine, theirs) = (c.id.clone(), c.id.clone());
+                        let title = if c.title.is_empty() {
+                            c.id.clone()
+                        } else {
+                            c.title.clone()
+                        };
+                        v_flex()
+                            .gap_0p5()
                             .child(
-                                Button::new(SharedString::from(format!(
-                                    "prompt-keep-mine-{}",
-                                    c.id
-                                )))
-                                .ghost()
-                                .xsmall()
-                                .label("Keep Mine")
-                                .tooltip("Back Up This Mac's Version over GitHub's")
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| this.back_up(vec![mine.clone()], cx),
-                                )),
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().warning)
+                                    .truncate()
+                                    .child(format!("“{title}” changed here and on GitHub")),
                             )
                             .child(
-                                Button::new(SharedString::from(format!(
-                                    "prompt-keep-github-{}",
-                                    c.id
-                                )))
-                                .ghost()
-                                .xsmall()
-                                .label("Keep GitHub's")
-                                .tooltip("Replace This Mac's Version with GitHub's")
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        this.restore(vec![theirs.clone()], window, cx)
-                                    },
-                                )),
-                            ),
-                    )
-            }))
+                                h_flex()
+                                    .gap_1()
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "prompt-keep-mine-{}",
+                                            c.id
+                                        )))
+                                        .ghost()
+                                        .xsmall()
+                                        .label("Keep Mine")
+                                        .tooltip("Back Up This Mac's Version over GitHub's")
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.back_up(vec![mine.clone()], cx)
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "prompt-keep-github-{}",
+                                            c.id
+                                        )))
+                                        .ghost()
+                                        .xsmall()
+                                        .label("Keep GitHub's")
+                                        .tooltip("Replace This Mac's Version with GitHub's")
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.restore(vec![theirs.clone()], window, cx)
+                                            }),
+                                        ),
+                                    ),
+                            )
+                    })),
+            )
     }
 }

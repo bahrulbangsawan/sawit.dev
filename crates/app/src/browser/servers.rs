@@ -110,7 +110,7 @@ fn servers_list(scan: Option<&Scan>, view: &WeakEntity<BrowserView>, cx: &App) -
                     .py_1()
                     .justify_start()
                     .accessibility_label(format!("{host} · {detail}"))
-                    .tooltip(format!("Open http://{host}/ in this tab"))
+                    .tooltip(format!("Open http://{host}/ in this tab\n{detail}"))
                     .child(
                         v_flex()
                             .min_w_0()
@@ -149,7 +149,16 @@ fn servers_list(scan: Option<&Scan>, view: &WeakEntity<BrowserView>, cx: &App) -
                 .text_color(muted)
                 .child("Local Servers"),
         )
-        .children(body)
+        // Many servers, or a long scan error, scroll under the heading instead of running
+        // the popover off the window.
+        .child(
+            v_flex()
+                .id("browser-servers-body")
+                .gap(px(2.))
+                .max_h(px(360.))
+                .overflow_y_scroll()
+                .children(body),
+        )
 }
 
 /// What runs a server, and its project: `bun run dev · shop`.
