@@ -6,6 +6,11 @@ publish.workspace = true
 
 [dependencies]
 futures.workspace = true
+# The agent runtime (src/orchestra): async provider traits, structured cancellation and its
+# logging; all three already in the tree (rmcp, wry, gpui).
+async-trait = "0.1"
+tokio-util = "0.7"
+log = "0.4"
 # Excel export (crates/core/src/db/export/); already built for postgresql_archive.
 crc32fast = "1.5"
 # COPY FROM STDIN chunks (tokio-postgres's own byte type).
@@ -62,3 +67,5 @@ flate2 = "1.1"
 
 [dev-dependencies]
 tempfile = "3"
+# The mock ACP agent the orchestra tests run as a child process speaks on stdin and stdout.
+tokio = { workspace = true, features = ["io-std"] }

@@ -40,6 +40,7 @@ pub mod mermaid;
 pub mod network;
 pub mod new_project;
 pub mod nyawit;
+pub mod orchestra;
 pub mod owners;
 pub mod package_manager;
 pub mod pdf;

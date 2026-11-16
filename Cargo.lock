@@ -7692,6 +7692,7 @@ name = "sawit-core"
 version = "0.0.11"
 dependencies = [
  "alacritty_terminal",
+ "async-trait",
  "bytes",
  "crc32fast",
  "flate2",
@@ -7699,6 +7700,7 @@ dependencies = [
  "html5ever 0.27.0",
  "image",
  "libc",
+ "log",
  "markup5ever_rcdom",
  "mysql_async",
  "objc2-core-foundation",
@@ -7722,6 +7724,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
+ "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.22.27",
  "url",
