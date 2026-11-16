@@ -117,7 +117,8 @@ impl AccountsPage {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
-        let answer = window.prompt(
+        let answer = crate::notice::prompt(
+            window,
             PromptLevel::Info,
             "Import from Claude Pool?",
             Some(&detail),

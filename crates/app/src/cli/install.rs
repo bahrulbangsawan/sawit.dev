@@ -76,7 +76,8 @@ pub fn install_cli(cx: &mut App) {
             };
             if let Some((handle, _)) = frontmost(cx) {
                 let _ = handle.update(cx, |_, window, cx| {
-                    window.prompt(level, title, Some(&detail), &["OK"], cx)
+                    crate::notice::prompt(
+window, level, title, Some(&detail), &["OK"], cx)
                 });
             }
         });

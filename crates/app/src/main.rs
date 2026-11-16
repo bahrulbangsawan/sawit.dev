@@ -31,6 +31,7 @@ mod menus;
 mod native_cover;
 mod network;
 mod new_project_page;
+mod notice;
 mod orchestra;
 mod package_managers;
 mod permissions_page;

@@ -141,7 +141,8 @@ impl AccountsPage {
             },
             shell::snippet(&m.root)
         );
-        let answer = window.prompt(
+        let answer = crate::notice::prompt(
+            window,
             PromptLevel::Info,
             "Start claude as the active account?",
             Some(&detail),

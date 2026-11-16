@@ -116,7 +116,8 @@ impl Workspace {
             return;
         };
         if let Err(e) = self.rename_canvas(&rename.file, &name, cx) {
-            drop(window.prompt(
+            drop(crate::notice::prompt(
+                window,
                 PromptLevel::Warning,
                 "The canvas wasn't renamed",
                 Some(&e),

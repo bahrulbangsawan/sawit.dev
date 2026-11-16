@@ -208,7 +208,8 @@ impl SkillsPage {
             Ok(lines) => lines,
             // Nothing of its own there (another pack's plugin brings its skills): say why.
             Err(why) => {
-                let answer = window.prompt(
+                let answer = crate::notice::prompt(
+                    window,
                     PromptLevel::Info,
                     &format!("Nothing to remove for {}", pack.name),
                     Some(&why),

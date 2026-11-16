@@ -204,7 +204,8 @@ fn ask(
     }
     // Unsaved files: Save, Don't Save or Cancel (not destructive in itself), as macOS asks.
     let save = if files.len() == 1 { "Save" } else { "Save All" };
-    let answer = window.prompt(
+    let answer = crate::notice::prompt(
+        window,
         PromptLevel::Warning,
         &save_question(&files, ending),
         Some(&save_detail(&files, running, tools, ending)),

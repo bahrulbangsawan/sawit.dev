@@ -46,7 +46,8 @@ impl ShellConfigPanel {
             // Say what's about to leave this Mac when it looks like a secret.
             if let Some((title, detail)) = secrets_question(&plan) {
                 let Ok(answer) = this.update_in(cx, |_, window, cx| {
-                    window.prompt(
+                    crate::notice::prompt(
+                        window,
                         PromptLevel::Warning,
                         &title,
                         Some(&detail),

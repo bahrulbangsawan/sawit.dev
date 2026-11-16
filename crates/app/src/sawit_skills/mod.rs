@@ -125,7 +125,8 @@ pub fn run(job: Job, project: Option<PathBuf>, window: AnyWindowHandle, cx: &mut
         (Job::Project, Some(dir)) => Scope::Project(dir),
         (Job::Project, None) => {
             let _ = window.update(cx, |_, window, cx| {
-                let answer = window.prompt(
+                let answer = crate::notice::prompt(
+                    window,
                     PromptLevel::Info,
                     "No project is open",
                     Some("Open a project's folder in this window, then add Sawit Skills to it."),
@@ -197,7 +198,7 @@ fn show(job: Job, result: Result<Outcome, String>, window: AnyWindowHandle, cx: 
         ),
     };
     let _ = window.update(cx, |_, window, cx| {
-        let answer = window.prompt(level, &title, Some(&detail), &["OK"], cx);
+        let answer = crate::notice::prompt(window, level, &title, Some(&detail), &["OK"], cx);
         cx.spawn(async move |_| {
             let _ = answer.await;
         })

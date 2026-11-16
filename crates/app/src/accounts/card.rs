@@ -39,7 +39,8 @@ impl AccountsPage {
             before.as_ref().map(show).unwrap_or_else(|| "(none)".into()),
             show(&after)
         );
-        let answer = window.prompt(
+        let answer = crate::notice::prompt(
+            window,
             PromptLevel::Info,
             &format!("Track usage of “{}”?", a.name),
             Some(&detail),
