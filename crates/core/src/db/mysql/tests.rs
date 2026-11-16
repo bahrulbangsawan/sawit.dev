@@ -2,7 +2,7 @@
 //! `information_schema` rows and MySQL connection strings, without a server (the live test is
 //! in `live_tests.rs`).
 
-use super::run::write_reason;
+use super::run::{changes_read_only_mode, write_reason};
 use super::schema::assemble;
 use super::*;
 use crate::db::query::{ConstraintKind, RelKind};
@@ -54,8 +54,12 @@ fn read_only_connections_pin_sql_mode_and_others_do_not() {
 
 #[test]
 fn read_only_text_screen_refuses_read_write() {
-    assert!(changes_read_only_mode("SELECT 1; SET SESSION TRANSACTION READ WRITE"));
-    assert!(changes_read_only_mode("select 1;set transaction\n  read\t write"));
+    assert!(changes_read_only_mode(
+        "SELECT 1; SET SESSION TRANSACTION READ WRITE"
+    ));
+    assert!(changes_read_only_mode(
+        "select 1;set transaction\n  read\t write"
+    ));
     assert!(changes_read_only_mode("SET @@tx_read_only = 0"));
     assert!(!changes_read_only_mode("SELECT 'read only' FROM t"));
 }
