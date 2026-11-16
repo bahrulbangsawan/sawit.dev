@@ -17,9 +17,10 @@ const LINE_HEIGHT: f32 = 1.3;
 
 /// Families tried, in order, for a character the terminal's font has no glyph for: Menlo covers
 /// box drawing, block elements and most symbols TUIs print (Monaco, an older default, lacks
-/// `▀ ▄ ▌ ▐`), Apple Symbols the Braille spinners and arrows, then emoji. Without a cascade a
-/// missing glyph drew as a box with a question mark.
-const FALLBACK_FAMILIES: [&str; 4] = ["Menlo", "SF Mono", "Apple Symbols", "Apple Color Emoji"];
+/// `▀ ▄ ▌ ▐ ✔ ❯ ● ╭`), Apple Symbols the Braille spinners (`⠋`). Without a cascade a missing
+/// glyph drew as a box with a question mark. Kept to two: every family here is loaded with the
+/// font, and SF Mono can't be named (it resolves to Helvetica).
+const FALLBACK_FAMILIES: [&str; 2] = ["Menlo", "Apple Symbols"];
 
 /// The terminal's font: the theme's monospace family, with [`FALLBACK_FAMILIES`] behind it.
 pub(in crate::terminal) fn terminal_font(cx: &App) -> Font {
