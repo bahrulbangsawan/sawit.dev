@@ -173,7 +173,15 @@ impl Outcome {
                 out.push(format!("  · {}: {}", s.label, s.why));
             }
         }
-        out.extend(self.notes.iter().cloned());
+        // The notes name paths too: the home folder as `~` there as well.
+        let home_dir = format!("{}/", home.display());
+        out.extend(self.notes.iter().map(|n| {
+            if home.as_os_str().is_empty() {
+                n.clone()
+            } else {
+                n.replace(&home_dir, "~/")
+            }
+        }));
         out
     }
 

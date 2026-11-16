@@ -195,3 +195,27 @@ fn a_linked_profile_file_is_one_file() {
         )]
     );
 }
+
+#[test]
+fn kept_copies_name_their_folder_once() {
+    use std::path::PathBuf;
+    let kept_note = super::super::install::kept_note;
+    assert_eq!(kept_note(&[]), None);
+    let one = PathBuf::from("/b/skill-backups/codex/sawit");
+    assert!(
+        kept_note(std::slice::from_ref(&one))
+            .unwrap()
+            .ends_with(": /b/skill-backups/codex/sawit")
+    );
+    let note = kept_note(&[
+        one,
+        PathBuf::from("/b/skill-backups/claude-code/sawit"),
+        PathBuf::from("/b/skill-backups/claude-code/sawit-databases"),
+    ])
+    .unwrap();
+    assert_eq!(
+        note,
+        "Kept 3 skill copies that differed from this Sawit's version, in /b/skill-backups: \
+         codex/sawit, claude-code/sawit, claude-code/sawit-databases"
+    );
+}

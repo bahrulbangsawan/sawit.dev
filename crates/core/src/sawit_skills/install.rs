@@ -158,17 +158,10 @@ async fn install_skills(paths: &AppPaths, out: &mut Outcome) {
         Action::Install
     };
     let ran = run_script(pack, action, &places, &env).await;
-    out.notes.extend(
-        skills::kept(pack, &places, &env)
-            .into_iter()
-            .filter(|_| ran.is_ok())
-            .map(|b| {
-                format!(
-                    "Kept the copy of a skill that differed from this Sawit's version: {}",
-                    b.display()
-                )
-            }),
-    );
+    if ran.is_ok() {
+        out.notes
+            .extend(kept_note(&skills::kept(pack, &places, &env)));
+    }
     let after = skills::report();
     for (target, _) in places {
         let now = after
@@ -241,4 +234,32 @@ fn skills_outcome(target: &skills::Target, result: Result<String, String>) -> Sk
 /// The `sawit-mcp` beside `exe` (the app's binary, or `sawit`): what the MCP page installs.
 pub fn server_beside(exe: &Path) -> PathBuf {
     exe.with_file_name("sawit-mcp")
+}
+
+/// The copies a run kept (the skills that differed from this Sawit's version), as one note: the
+/// folder once, then each copy inside it, instead of the whole path on every line.
+pub(super) fn kept_note(kept: &[PathBuf]) -> Option<String> {
+    let lead = "Kept the copy of a skill that differed from this Sawit's version";
+    match kept {
+        [] => None,
+        [one] => Some(format!("{lead}: {}", one.display())),
+        _ => {
+            let mut root = kept[0].parent().unwrap_or(Path::new("/")).to_path_buf();
+            while !kept.iter().all(|k| k.starts_with(&root)) {
+                if !root.pop() {
+                    break;
+                }
+            }
+            let names = kept
+                .iter()
+                .map(|k| k.strip_prefix(&root).unwrap_or(k).display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!(
+                "Kept {} skill copies that differed from this Sawit's version, in {}: {names}",
+                kept.len(),
+                root.display()
+            ))
+        }
+    }
 }
