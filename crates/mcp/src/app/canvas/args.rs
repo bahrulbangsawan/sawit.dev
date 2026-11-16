@@ -175,6 +175,8 @@ pub struct CanvasExportArgs {
         description = "Absolute path (or ~/…) to write the file to; default the project's .nyawit/exports folder (Sawit's cache folder outside a project)"
     )]
     pub output_path: Option<String>,
+    #[schemars(description = "Replace the file if it exists (default false)")]
+    pub overwrite: Option<bool>,
     #[schemars(
         description = "false leaves out the design lint's summary of the page (errors, warnings and the first findings), which comes by default"
     )]
@@ -346,6 +348,8 @@ pub struct CanvasScreenExportArgs {
         description = "Absolute path (or ~/…) of the .html or .tsx file to write; default the project's .nyawit/exports folder"
     )]
     pub path: Option<String>,
+    #[schemars(description = "Replace the file if it exists (default false)")]
+    pub overwrite: Option<bool>,
     #[schemars(description = CANVAS_FILE)]
     pub file: Option<String>,
     #[schemars(description = CANVAS_TAB)]

@@ -72,7 +72,7 @@ pub mod tabs;
 
 use hints::hints;
 pub(crate) use paths::{
-    agent_path, agent_project, existing_dir, expand_home, output_path, project_dir,
+    agent_path, agent_project, existing_dir, expand_home, new_output_path, output_path, project_dir,
     refuse_canvas_file, tilde,
 };
 pub use ssh::askpass;

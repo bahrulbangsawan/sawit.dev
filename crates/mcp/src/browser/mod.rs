@@ -234,9 +234,10 @@ impl Sawit {
         if a.sized() {
             return self.sized_screenshot(a).await;
         }
-        let named = tri!(crate::output_path(
+        let named = tri!(crate::new_output_path(
             "browser_screenshot",
-            a.output_path.as_deref()
+            a.output_path.as_deref(),
+            a.overwrite.unwrap_or(false)
         ));
         let path = named.unwrap_or_else(|| screenshot_path(&self.paths.cache_dir()));
         let op = BrowserOp::Screenshot {

@@ -158,3 +158,34 @@ async fn live_round_trip() {
 
     admin.run_sql("DROP DATABASE sawit_test", 1).await.unwrap();
 }
+
+/// A read-only connection reads SQL as the statement check does, whatever the server's
+/// `sql_mode`: the session drops `NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES`. The global mode is
+/// put back afterwards, whatever happens in between.
+#[tokio::test]
+async fn live_read_only_session_drops_quoting_modes() {
+    use crate::db::Conn;
+    let Some((mut profile, password)) = live() else {
+        return;
+    };
+    profile.database.clear();
+    let admin = Conn::connect(&profile, password.as_deref()).await.unwrap();
+    let cell = |out: crate::db::query::QueryOutcome| out.results[0].rows[0][0].clone().unwrap_or_default();
+    let before = cell(admin.run_sql("SELECT @@GLOBAL.sql_mode", 1).await.unwrap());
+    let set = "SET GLOBAL sql_mode = CONCAT(@@GLOBAL.sql_mode, ',NO_BACKSLASH_ESCAPES,ANSI_QUOTES')";
+    let seen = match admin.run_sql(set, 1).await {
+        Ok(_) => match Conn::connect_server(&profile, password.as_deref()).await {
+            Ok((_rw, ro, _schema, _version)) => ro
+                .run_sql("SELECT @@SESSION.sql_mode", 1)
+                .await
+                .map(cell)
+                .unwrap_or_else(|e| format!("error: {e}")),
+            Err(e) => format!("error: {e}"),
+        },
+        Err(e) => format!("error: {e}"),
+    };
+    let restore = format!("SET GLOBAL sql_mode = '{}'", before.replace('\'', "''"));
+    admin.run_sql(&restore, 1).await.unwrap();
+    assert!(!seen.starts_with("error") && !seen.contains("NO_BACKSLASH_ESCAPES"), "{seen}");
+    assert!(!seen.contains("ANSI_QUOTES"), "{seen}");
+}

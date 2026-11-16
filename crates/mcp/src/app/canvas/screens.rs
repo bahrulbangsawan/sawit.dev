@@ -188,7 +188,11 @@ impl Sawit {
         if let Err(e) = names_one(&op) {
             return fail(format!("canvas_screen_export: {e} (or an artboard's `id`)"));
         }
-        let named = match crate::output_path("canvas_screen_export", a.path.as_deref()) {
+        let named = match crate::new_output_path(
+            "canvas_screen_export",
+            a.path.as_deref(),
+            a.overwrite.unwrap_or(false),
+        ) {
             Ok(named) => named,
             Err(e) => return fail(e),
         };
@@ -229,7 +233,11 @@ impl Sawit {
         id: String,
         react: bool,
     ) -> CallToolResult {
-        let named = match crate::output_path("canvas_screen_export", a.path.as_deref()) {
+        let named = match crate::new_output_path(
+            "canvas_screen_export",
+            a.path.as_deref(),
+            a.overwrite.unwrap_or(false),
+        ) {
             Ok(named) => named,
             Err(e) => return fail(e),
         };

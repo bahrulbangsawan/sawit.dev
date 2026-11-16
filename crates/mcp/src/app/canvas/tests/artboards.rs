@@ -13,6 +13,7 @@ fn export(project: &Path, id: &str, format: &str) -> CanvasScreenExportArgs {
         id: Some(id.into()),
         format: Some(format.into()),
         path: None,
+        overwrite: None,
         file: None,
         tab: None,
         project: project_arg(project),

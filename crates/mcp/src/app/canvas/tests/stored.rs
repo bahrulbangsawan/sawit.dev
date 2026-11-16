@@ -311,6 +311,7 @@ fn an_agent_in_a_subfolder_draws_on_its_projects_canvas() {
                 let args = crate::diagrams::RenderArgs {
                     source: "flowchart LR\n  a --> b".into(),
                     output_path: None,
+                    overwrite: None,
                     theme: crate::diagrams::Theme::Light,
                     inline: false,
                 };
