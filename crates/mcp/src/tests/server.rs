@@ -219,6 +219,14 @@ fn every_tool_is_routed() {
         "keymap_list",
         "keymap_bind",
         "keymap_unbind",
+        // agent runtime
+        "list_agents",
+        "send_message",
+        "delegate_task",
+        "get_task_status",
+        "list_agent_tasks",
+        "cancel_task",
+        "manage_runtime_agent",
         // code mode
         "search_api",
         "run",

@@ -73,7 +73,7 @@ The UI is GPU-rendered with [GPUI](https://gpui.rs), and its look follows Zed (t
 | 🎨 **Canvas to code** | A whiteboard and design canvas in tabs. Turn an HTML screen into editable layers, preview it at any device size or present it, export an artboard as HTML or React and send it to your coding agent. Watch agents build on it live, each with its own cursor, logo and name, while the view follows them; a design lint keeps their work on your tokens and components. |
 | 🧰 **Dev tools in one click** | Install Homebrew, Bun, uv, Node.js, Rust, Claude Code, Codex and more with their official scripts, prerequisites first, and upgrade them when a newer release is out. |
 | ⌨️ **psql-style CLI** | `sawit kyzn leads "phone is null"` queries a database, `sawit list` shows everything, `sawit bakar ports` stops dev servers, `sawit panen` exports, `sawit backup` dumps, `sawit pupuk` upgrades dev tools and `sawit account use work` switches Claude Code accounts. |
-| 🤖 **Ready for AI agents** | The `sawit-mcp` server (186 tools, or a code mode of two that takes about 600 tokens) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
+| 🤖 **Ready for AI agents** | The `sawit-mcp` server (193 tools, or a code mode of two that takes about 600 tokens) and a catalog of MCP servers (GitHub on Sawit's own sign-in, AWS, Cloudflare, Neon, Figma, …), installed into Claude Code, Codex, Cursor, Zed and more with one click. |
 | 🌱 **New projects from a stack** | Pick a TypeScript stack from Better-T-Stack's builder (TanStack, Next.js, Hono, Convex, Drizzle, Better Auth, …); Sawit shows what doesn't fit and why, runs `create-better-t-stack` in its terminal and opens the project, and offers the upgrade when a newer release is out. |
 | ✨ **Agent skills** | Sawit Skills, ten skills that teach your agents every Sawit tool, Sawit's own Canvas Design, Superpowers, shadcn/ui and shadcn's improve, Cloudflare's skills, HyperFrames, MCP Apps, unslop, Design to Code and more from their official sources, installed into Claude Code (every profile), Codex, Cursor and the other agents on your Mac, with npm, pnpm, Bun or Yarn. |
 
@@ -1916,12 +1916,12 @@ sawit account move client up                 # its place in the list, and so its
 
 <img src="https://files.sawit.dev/media/mcp.png" alt="MCP page: the built-in Sawit server and remote servers such as AWS, Cloudflare, Neon, Postman and Figma, each with its address, sign-in and install status" width="100%">
 
-The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 186 tools work **without the app**,
+The `sawit-mcp` binary (stdio) lets AI agents do what a person can do in Sawit. Its 193 tools work **without the app**,
 except the app-control ones, which drive the running app (`launch_app` starts it). Those act on the window that has
 the agent's project open (or the one `project` names), else the frontmost window. An agent's browser and canvas are
 its own project's, even while you look at another project of that window.
 
-**Code mode.** All 186 tools' schemas come to about 229 KB, some 57,000 tokens, in every session's context. Set
+**Code mode.** All 193 tools' schemas come to about 229 KB, some 57,000 tokens, in every session's context. Set
 `SAWIT_MCP_TOOLS=code` in the server's entry in your AI client's MCP config and `tools/list` lists two tools
 instead, about 2 KB, some 600 tokens: `search_api` finds the functions for a job and shows their typed signatures,
 and `run` runs a short JavaScript that calls them (`await sawit.terminal_run({...})`), chaining several calls and
@@ -2054,6 +2054,32 @@ by the app's absolute path (`/Applications/Sawit.app/Contents/MacOS/sawit`):
 - **What this exposes:** any program that can run `sawit github token` as you gets the token. That is the same
   exposure as the Keychain item it comes from, which any program of yours can read with macOS's `security` tool
   without being asked.
+
+### Agent runtime
+
+Sawit runs coding agents of its own and lets them work together (`sawit_core::orchestra`). An agent is a
+persistent profile: a name, a role, the folder it works in, what it may do without asking (`deny`, `read_only`,
+`ask`, `allow`) and the ACP agent it runs on: OpenCode (`opencode acp`), Gemini CLI (`gemini --experimental-acp`),
+or Claude Code and Codex through Zed's ACP adapters (`claude-code-acp`, `codex-acp`). Its process starts the first
+time it gets work and stops when idle.
+
+Work is a durable queue in `orchestra.sqlite` in Sawit's data folder. The app's scheduler claims tasks atomically,
+one turn at a time per conversation, within each agent's limit and its provider's (an agent that can't run turns
+at once never gets two), round-robin across agents. Agents that share a folder take turns in it; an agent set to
+`worktree` works in a git worktree of its own per conversation. A task that was running when Sawit quit runs again
+only if it couldn't have changed anything (`read_only`); otherwise it waits for you as `interrupted`.
+
+Agents reach each other through the `sawit-mcp` tools the runtime gives their sessions: `list_agents`,
+`send_message`, `delegate_task`, `get_task_status`, `list_agent_tasks` and `cancel_task`. A delegated task's result
+comes back to the conversation that asked for it, which then resumes. Who may see, message and delegate to whom,
+how deep delegation goes (3), and how much work one request may have out are enforced by the runtime, and a
+delegated task never gets more permissions than the task that asked for it. From your own AI client, the same
+`delegate_task` hands an agent new work, and `manage_runtime_agent` creates and changes agents:
+
+```text
+manage_runtime_agent {"action": "create", "name": "backend", "preset": "opencode", "workdir": "/Users/me/shop"}
+delegate_task {"recipient": "backend", "title": "Auth API", "instructions": "Add login and token refresh."}
+```
 
 ## Build & run
 

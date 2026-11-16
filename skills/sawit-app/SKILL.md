@@ -1,6 +1,6 @@
 ---
 name: sawit-app
-description: Drive the Sawit app itself: start it, read what it shows (windows, tabs, terminals, browser, sign-ins, agents at work), open files and folders, panels, pages and tabs, change the layout, read and change key bindings, search a folder's text, and manage Claude Code accounts and what agents may do (permissions). Use it to show the user something in Sawit or change how Sawit is set up (app_state, app_open, app_open_page, keymap_bind, list_agent_accounts, edit_permission).
+description: Drive the Sawit app itself: start it, read what it shows (windows, tabs, terminals, browser, sign-ins, agents at work), open files and folders, panels, pages and tabs, change the layout, read and change key bindings, search a folder's text, and manage Claude Code accounts, what agents may do (permissions) and the agent runtime's agents and tasks. Use it to show the user something in Sawit or change how Sawit is set up (app_state, app_open, app_open_page, keymap_bind, list_agent_accounts, edit_permission).
 ---
 
 # The Sawit app
@@ -43,6 +43,14 @@ Most Sawit tools work without the app; the `app_*` and `keymap_*` tools need it.
 
 - `list_permissions`: Claude Code's allow, ask and deny rules in each settings file, which Sawit tools need `confirm`, the other agents' permission settings and the macOS permissions Sawit has.
 - `edit_permission` adds, removes or moves one rule (`file`: user, user:<profile>, project or local; `action`; `rule`; `to`). Without `confirm` it returns the diff; ask the user before you pass `confirm: true`, and never widen what you may do on your own.
+
+## Agent runtime
+
+Sawit runs ACP coding agents of its own (OpenCode, Gemini CLI, Claude Code and Codex through ACP adapters) from a durable task queue, and they work together. These tools work with the app closed; the app's scheduler runs what they queue.
+
+- `manage_runtime_agent` (`action`: list, show, create, update, enable, disable, delete): an agent's name, role, `preset` (opencode, gemini, claude-code, codex) or `command` and `args`, `workdir`, `permission` (deny, ask, allow, or read-only; the tool's schema spells each), `isolation` (shared, worktree, free) and who it may reach. Ask the user before you create one with `allow` or delete one.
+- `delegate_task` (`recipient`, `title`, `instructions`): from you, new work for a runtime agent; from a runtime agent, a task whose result comes back to the task that asked. `send_message` (`recipient`, `content`, `correlation_id` to answer one) stores a message the recipient takes in as a task.
+- `list_agents` shows who may be contacted; `get_task_status`, `list_agent_tasks` (`agent`, `status`) and `cancel_task` (it cancels what the task delegated too) follow the work. A task that is `interrupted` waits for the user to look at what it changed.
 
 ## Without the sawit MCP server
 

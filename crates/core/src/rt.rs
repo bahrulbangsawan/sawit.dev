@@ -36,6 +36,11 @@ impl Runtime {
         }
     }
 
+    /// The runtime's handle, for services that spawn their own long-lived tasks on it.
+    pub fn handle(&self) -> &Handle {
+        &self.handle
+    }
+
     /// Runs `fut` on the Tokio runtime; the receiver resolves with its output.
     pub fn spawn<F, T>(&self, fut: F) -> oneshot::Receiver<T>
     where

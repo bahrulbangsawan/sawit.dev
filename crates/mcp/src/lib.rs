@@ -58,6 +58,7 @@ pub mod local_explorer;
 pub mod mcp_servers;
 pub mod network;
 pub mod new_project;
+pub mod orchestra;
 mod paths;
 pub mod permissions;
 pub mod ports;
@@ -290,6 +291,7 @@ impl Sawit {
             + Self::agent_accounts_manage_router()
             + Self::prompt_backup_router()
             + Self::permissions_router()
+            + Self::orchestra_router()
             // App-control tools (need the app running).
             + Self::app_router()
             + Self::browser_router()

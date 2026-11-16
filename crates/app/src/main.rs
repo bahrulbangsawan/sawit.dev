@@ -31,6 +31,7 @@ mod menus;
 mod native_cover;
 mod network;
 mod new_project_page;
+mod orchestra;
 mod package_managers;
 mod permissions_page;
 mod pomodoro;
@@ -217,6 +218,8 @@ fn main() -> std::process::ExitCode {
         terminal::init(cx);
         theme::apply_zed_one_dark(cx);
         cx.set_global(rt::Rt(runtime));
+        // The agent runtime: after the Tokio runtime it runs on.
+        orchestra::init(cx);
         // The saved GitHub sign-in, before any window shows it. It never starts a sign-in.
         git::account::init(cx);
         accounts::init(cx);
