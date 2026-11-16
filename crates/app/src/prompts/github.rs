@@ -212,6 +212,10 @@ impl PromptsPanel {
                 match outcome {
                     Ok(Ok((done, restored))) => {
                         this.apply_restored(&done, restored, cx);
+                        if let Some(base) = done.restored_base.clone() {
+                            this.store
+                                .update(cx, |s, cx| s.save_restored(base, state_path(), cx));
+                        }
                         this.github.synced_library = Some(this.store.read(cx).library.clone());
                         this.done(&done, "Restored", cx);
                     }

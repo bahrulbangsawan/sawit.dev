@@ -198,3 +198,45 @@ fn settings_default_to_a_private_sawit_prompts() {
     s.save(&path).unwrap();
     assert_eq!(BackupSettings::load(&path), s);
 }
+
+/// Why a restore's sync state must be saved only after its library is: GitHub has a prompt this
+/// Mac lacks. Planned against the old state it comes from GitHub (safe); with the state a restore
+/// records, but planned against the library as it still is on disk (the restore's save never
+/// happened), the same prompt reads as deleted here, and the next backup would delete it on GitHub.
+#[test]
+fn a_restore_state_ahead_of_the_saved_library_reads_as_deleted_here() {
+    let full = library();
+    let files = library_files(&full);
+    let tree = RemoteTree {
+        commit: "c1".into(),
+        files: files
+            .iter()
+            .map(|(p, b)| (p.clone(), blob_sha(b)))
+            .collect(),
+    };
+    let mut on_disk = full.clone();
+    let lost = on_disk.items[0].id.clone();
+    on_disk.items.remove(0);
+    let lost_path = format!("prompts/{lost}.md");
+
+    let old_base = SyncBase::default();
+    let plan = plan_prompts(&on_disk, &tree, &old_base);
+    let row = plan.iter().find(|p| p.path == lost_path).unwrap();
+    assert_eq!(row.state, FileState::OnlyOnGitHub);
+    assert!(row.state.downloads());
+
+    // The restore, on a clone of the library: it records the prompt as synced.
+    let mut restored = on_disk.clone();
+    let (_, synced) = apply_restore(&mut restored, &plan, &files, &[]).unwrap();
+    assert!(restored.get(&lost).is_some());
+    let mut ahead = old_base.clone();
+    ahead.record("c1", 1, &synced);
+
+    // The state saved, the library not: the hazard.
+    let plan = plan_prompts(&on_disk, &tree, &ahead);
+    let row = plan.iter().find(|p| p.path == lost_path).unwrap();
+    assert_eq!(row.state, FileState::DeletedHere);
+    // Saved in the safe order (library first), the library has it and nothing is deleted.
+    let plan = plan_prompts(&restored, &tree, &ahead);
+    assert!(plan.iter().all(|p| p.state == FileState::Same));
+}

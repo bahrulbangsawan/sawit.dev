@@ -55,8 +55,7 @@ impl BackupSettings {
         }
         let text =
             serde_json::to_string_pretty(self).map_err(|e| CoreError::Parse(e.to_string()))?;
-        std::fs::write(path, text)?;
-        Ok(())
+        crate::files::write_atomic(path, text.as_bytes())
     }
 }
 
@@ -269,6 +268,10 @@ pub struct SyncOutcome {
     /// Only planned ([`Options::dry_run`]): `synced` and `deleted` say what would change.
     pub dry_run: bool,
     pub created_repo: bool,
+    /// A restore's new sync state (not on a dry run): save it with [`SyncBase::save`] only after
+    /// the library is saved, or the next backup reads the prompts it brought in as deleted here.
+    #[serde(skip)]
+    pub restored_base: Option<SyncBase>,
 }
 
 /// How a backup or a restore runs.
@@ -406,7 +409,8 @@ pub async fn back_up(
 
 /// Brings in the prompts changed on GitHub (and those only there) to `library`, keeping their
 /// use counts here. `keep_github`: ids changed on both sides whose GitHub version wins. The
-/// caller saves the library.
+/// caller saves the library, then `restored_base` (never before: the state may not be ahead of
+/// the prompts it describes).
 pub async fn restore(
     token: &str,
     library: &mut Library,
@@ -456,7 +460,7 @@ pub async fn restore(
     out.repo = format!("{login}/{}", settings.repo);
     let mut base = base;
     base.record(&backup.tree.commit, github::now(), &synced);
-    base.save(state)?;
+    out.restored_base = Some(base);
     Ok(out)
 }
 
