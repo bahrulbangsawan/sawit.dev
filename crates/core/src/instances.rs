@@ -177,16 +177,27 @@ impl Registry {
         }
     }
 
-    /// Writes atomically (temp file + rename).
+    /// Writes atomically (private temp file, fsync, rename).
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let text = toml::to_string_pretty(self).map_err(|e| CoreError::Config(e.to_string()))?;
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(tmp, path)?;
+        crate::files::write_atomic(path, text.as_bytes())?;
         Ok(())
+    }
+
+    /// Reads the list at `path` again, applies `change` and saves it: what another process
+    /// (`sawit-mcp`) saved since this one last read is kept, and a file that can't be read is
+    /// never saved over (its error is returned).
+    pub fn update<T>(
+        path: &Path,
+        change: impl FnOnce(&mut Registry) -> Result<T>,
+    ) -> Result<(Registry, T)> {
+        let mut registry = Registry::load(path)?;
+        let out = change(&mut registry)?;
+        registry.save(path)?;
+        Ok((registry, out))
     }
 
     pub fn add(&mut self, inst: Instance) -> Result<()> {
@@ -302,6 +313,32 @@ mod tests {
             listen: ListenScope::Localhost,
             managed: true,
         }
+    }
+
+    #[test]
+    fn update_refuses_an_unreadable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("instances.toml");
+        std::fs::write(&file, "not = [toml").unwrap();
+        let out = Registry::update(&file, |r| r.add(inst("a", 5433)));
+        assert!(out.is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "not = [toml");
+    }
+
+    #[test]
+    fn update_keeps_what_another_writer_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("instances.toml");
+        let mut mine = Registry::default();
+        mine.add(inst("a", 5433)).unwrap();
+        mine.save(&file).unwrap();
+        let stale = Registry::load(&file).unwrap();
+        let mut other = stale.clone();
+        other.add(inst("b", 5434)).unwrap();
+        other.save(&file).unwrap();
+        let (now, ()) = Registry::update(&file, |r| r.add(inst("c", 5435))).unwrap();
+        assert_eq!(now.instances.len(), 3);
+        assert_eq!(Registry::load(&file).unwrap(), now);
     }
 
     #[test]

@@ -249,6 +249,7 @@ impl DbStore {
                 return;
             }
         };
+        self.load_error = None;
         let stale: Vec<String> = self
             .profiles
             .items

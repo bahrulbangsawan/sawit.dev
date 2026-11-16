@@ -79,6 +79,9 @@ pub struct AccountsModel {
     pub plan: HashMap<String, String>,
     /// What went wrong last (shown on the page until the next action).
     pub error: Option<String>,
+    /// Set when accounts.json exists but can't be read: nothing is written then, so a damaged
+    /// file is never replaced by an empty list.
+    pub load_error: Option<String>,
     /// What the last action did.
     pub notice: Option<String>,
     /// The analytics: per account and model, the period and the one before.
@@ -142,6 +145,7 @@ impl AccountsModel {
             usage: HashMap::new(),
             plan: HashMap::new(),
             error: None,
+            load_error: None,
             notice: None,
             checking_usage: None,
             shared: None,
@@ -183,8 +187,14 @@ impl AccountsModel {
     /// Reads the accounts and their usage from disk.
     pub fn reload(&mut self) {
         match Accounts::load(&self.root) {
-            Ok(a) => self.accounts = a,
-            Err(e) => self.error = Some(e.to_string()),
+            Ok(a) => {
+                self.accounts = a;
+                self.load_error = None;
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
+                self.load_error = Some(e.to_string());
+            }
         }
         self.usage = self
             .accounts
@@ -196,7 +206,7 @@ impl AccountsModel {
 
     /// With no accounts yet, the existing `~/.claude` is the default one (nothing is written to it).
     fn seed_default(&mut self) {
-        if !self.accounts.accounts.is_empty() {
+        if self.load_error.is_some() || !self.accounts.accounts.is_empty() {
             return;
         }
         let dir = AgentKind::ClaudeCode.default_dir(&self.home);
@@ -208,11 +218,12 @@ impl AccountsModel {
 
     fn read_usage(&mut self, cx: &mut Context<Self>) {
         // `sawit account` and the import change the file too: read it again when it did.
-        if let Ok(on_disk) = Accounts::load(&self.root)
-            && on_disk != self.accounts
-        {
-            self.accounts = on_disk;
-            cx.notify();
+        if let Ok(on_disk) = Accounts::load(&self.root) {
+            self.load_error = None;
+            if on_disk != self.accounts {
+                self.accounts = on_disk;
+                cx.notify();
+            }
         }
         let before = self.usage.clone();
         for a in &self.accounts.accounts {
@@ -227,6 +238,13 @@ impl AccountsModel {
     }
 
     pub fn save(&mut self) {
+        if self.load_error.is_some() {
+            self.error = Some(
+                "The accounts can't be saved until accounts.json can be read. Fix or remove the file, then restart Sawit."
+                    .to_string(),
+            );
+            return;
+        }
         if let Err(e) = self.accounts.save(&self.root) {
             self.error = Some(format!("Couldn't save the accounts: {e}"));
         }

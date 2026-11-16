@@ -16,6 +16,8 @@ use sawit_core::probe::{PortReport, check_port};
 
 use crate::rt;
 
+mod registry;
+
 /// Shortest gap between two log updates.
 const LOG_FLUSH: std::time::Duration = std::time::Duration::from_millis(100);
 const MAX_LOG_LINES: usize = 5_000;
@@ -60,10 +62,10 @@ pub struct ServerStore {
 impl ServerStore {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let paths = AppPaths::default_macos();
-        let registry = Registry::load(&paths.instances_file()).unwrap_or_else(|e| {
-            eprintln!("registry: {e}");
-            Registry::default()
-        });
+        let loaded = Registry::load(&paths.instances_file());
+        let notice =
+            (loaded.as_ref().err()).map(|e| format!("Unable to read the instance list. {e}"));
+        let registry = loaded.unwrap_or_default();
         let selected = registry.instances.first().map(|i| i.name.clone());
         let poll = cx.spawn(async move |this, cx| {
             loop {
@@ -87,7 +89,7 @@ impl ServerStore {
             log: vec![],
             blocked: HashMap::new(),
             errors: HashMap::new(),
-            notice: None,
+            notice,
             _log_task: None,
             _poll_task: poll,
         };
@@ -335,20 +337,6 @@ impl ServerStore {
         cx.notify();
     }
 
-    pub fn forget(&mut self, name: &str, cx: &mut Context<Self>) {
-        self.registry.remove(name);
-        if let Err(e) = self.registry.save(&self.paths.instances_file()) {
-            self.notice = Some(format!("Unable to save the instance list. {e}"));
-        }
-        self.statuses.remove(name);
-        if self.selected.as_deref() == Some(name) {
-            self.selected = None;
-            self._log_task = None;
-            self.log.clear();
-        }
-        cx.notify();
-    }
-
     /// Lowest port from 5432 that no instance uses and nothing listens on.
     pub fn suggest_port(&self, cx: &mut Context<Self>) -> futures::channel::oneshot::Receiver<u16> {
         let taken: HashSet<u16> = self.registry.instances.iter().map(|i| i.port).collect();
@@ -413,10 +401,7 @@ impl ServerStore {
             let inst = rx.await.map_err(|_| "cancelled".to_string())??;
             this.update(cx, |this, cx| {
                 let name = inst.name.clone();
-                this.registry.add(inst).map_err(|e| e.to_string())?;
-                this.registry
-                    .save(&this.paths.instances_file())
-                    .map_err(|e| e.to_string())?;
+                this.update_registry(|r| r.add(inst))?;
                 this.rediscover_binaries(cx);
                 this.select(&name, cx);
                 this.refresh_statuses(cx);
@@ -483,10 +468,7 @@ impl ServerStore {
             }
             this.update(cx, |this, cx| {
                 let name = inst.name.clone();
-                this.registry.add(inst).map_err(|e| e.to_string())?;
-                this.registry
-                    .save(&this.paths.instances_file())
-                    .map_err(|e| e.to_string())?;
+                this.update_registry(|r| r.add(inst))?;
                 this.select(&name, cx);
                 this.refresh_statuses(cx);
                 Ok(())

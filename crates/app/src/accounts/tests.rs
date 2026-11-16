@@ -165,3 +165,23 @@ fn sharing_runs_when_turned_on(cx: &mut TestAppContext) {
     let work = std::fs::read_to_string(home.join(".claude-work/.claude.json")).unwrap();
     assert!(work.contains("neon"), "{work}");
 }
+
+/// An accounts.json that can't be read is never replaced: no default account is seeded over it,
+/// and a change is refused.
+#[gpui_kit::test]
+fn an_unreadable_accounts_file_is_never_saved_over(cx: &mut TestAppContext) {
+    let tmp = tempfile::tempdir().unwrap();
+    let (root, home) = (tmp.path().join("sawit"), tmp.path().join("home"));
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    let file = aa::Accounts::path(&root);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{ not json").unwrap();
+    let m = cx.update(|cx| cx.new(|cx| AccountsModel::new(root, home, cx)));
+    m.update(cx, |m, _| {
+        assert!(m.load_error.is_some());
+        assert!(m.accounts.accounts.is_empty());
+        m.save();
+        assert!(m.error.as_deref().is_some_and(|e| e.contains("accounts.json")));
+    });
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
+}
