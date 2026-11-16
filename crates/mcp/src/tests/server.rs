@@ -312,6 +312,12 @@ fn the_readme_and_the_site_give_the_tool_count() {
         .unwrap_or_else(|e| panic!("{} can't be read: {e}", home.display()))
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "tsx"))
+        // macOS's `._` metadata files beside sources on a non-Apple disk (exFAT).
+        .filter(|path| {
+            !path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("._"))
+        })
         .collect();
     sections.sort();
     let site = [vec![repo.join("site/src/routes/index.tsx")], sections].concat();
