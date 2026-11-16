@@ -14,6 +14,8 @@
 
 mod connection;
 mod profiles;
+#[cfg(test)]
+mod tests;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -71,12 +73,18 @@ pub struct DbStore {
     /// reload that failed).
     pub notices: HashMap<String, String>,
     pub notice: Option<String>,
+    /// Set when the file exists but can't be read: nothing is written then,
+    /// so a damaged file is never replaced by an empty list of connections.
+    pub load_error: Option<String>,
 }
 
 impl DbStore {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let file = AppPaths::default_macos().root.join("profiles.toml");
-        let profiles = Profiles::load(&file).unwrap_or_default();
+        let (profiles, load_error) = match Profiles::load(&file) {
+            Ok(p) => (p, None),
+            Err(e) => (Profiles::default(), Some(e.to_string())),
+        };
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(TICK).await;
@@ -86,7 +94,12 @@ impl DbStore {
             }
         })
         .detach();
-        Self::with_profiles(file, profiles)
+        let mut store = Self::with_profiles(file, profiles);
+        if let Some(e) = &load_error {
+            store.notice = Some(format!("Unable to read connections. {e}"));
+        }
+        store.load_error = load_error;
+        store
     }
 
     fn with_profiles(file: PathBuf, profiles: Profiles) -> Self {
@@ -109,6 +122,7 @@ impl DbStore {
             background_since: None,
             notices: HashMap::new(),
             notice: None,
+            load_error: None,
         }
     }
 
@@ -119,6 +133,13 @@ impl DbStore {
     }
 
     fn save(&mut self) {
+        if self.load_error.is_some() {
+            self.notice = Some(
+                "Connections can't be saved until profiles.toml can be read. Fix or remove the file, then restart Sawit."
+                    .to_string(),
+            );
+            return;
+        }
         if let Err(e) = self.profiles.save(&self.file) {
             self.notice = Some(format!("Unable to save connections. {e}"));
         }

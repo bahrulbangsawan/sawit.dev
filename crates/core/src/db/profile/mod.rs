@@ -425,9 +425,7 @@ impl Profiles {
             std::fs::create_dir_all(parent)?;
         }
         let text = toml::to_string_pretty(self).map_err(|e| CoreError::Config(e.to_string()))?;
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(tmp, path)?;
+        crate::files::write_atomic(path, text.as_bytes())?;
         Ok(())
     }
 

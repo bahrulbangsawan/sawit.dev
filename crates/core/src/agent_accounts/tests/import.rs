@@ -219,3 +219,22 @@ fn another_home_never_sees_the_macs_claude_pool() {
     assert_eq!(import::link_dirs(&home), [home.join(".local/bin")]);
     assert!(import::found(&home).is_none());
 }
+
+/// An accounts file that can't be read is left as it is, not replaced by the imported accounts.
+#[test]
+fn import_never_saves_over_an_unreadable_accounts_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = Accounts::path(tmp.path());
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{ not json").unwrap();
+    let plan = import::Plan {
+        accounts: vec![],
+        settings: Default::default(),
+        copies: vec![],
+        repoints: vec![],
+        active: None,
+        shell_file: None,
+    };
+    assert!(import::apply(&plan, tmp.path(), 1_793_961_302).is_err());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
+}

@@ -284,7 +284,7 @@ pub fn plan(home: &Path, root: &Path, login_shell: &str) -> Result<Plan> {
 /// not moved. Returns what it did.
 pub fn apply(plan: &Plan, root: &Path, now: i64) -> Result<Vec<String>> {
     let mut done = Vec::new();
-    let mut all = Accounts::load(root).unwrap_or_default();
+    let mut all = Accounts::load(root)?;
     // An account Sawit listed by itself for the same folder gives way to Claude Pool's.
     all.accounts
         .retain(|a| !plan.accounts.iter().any(|p| p.dir == a.dir));
