@@ -171,11 +171,19 @@ impl Sawit {
                 .await
                 .map_err(|e| e.to_string())
         );
-        if done.dry_run || (done.synced.is_empty() && done.deleted.is_empty()) {
+        if done.dry_run {
             return ok(said("restore", &done));
         }
-        if let Err(e) = self.save_library(&lib).await {
-            return fail(e);
+        if !(done.synced.is_empty() && done.deleted.is_empty()) {
+            if let Err(e) = self.save_library(&lib).await {
+                return fail(e);
+            }
+        }
+        // The state only after the library is on disk, never ahead of it.
+        if let Some(base) = &done.restored_base {
+            if let Err(e) = base.save(&state) {
+                return fail(e.to_string());
+            }
         }
         ok(said("restore", &done))
     }

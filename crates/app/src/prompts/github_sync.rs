@@ -114,19 +114,25 @@ impl PromptsPanel {
             };
             let _ = this.update(cx, |this, cx| {
                 this.github.repo_exists = exists;
-                if let Some((done, restored)) = pulled
-                    && (!done.synced.is_empty() || !done.deleted.is_empty())
-                {
-                    this.apply_restored(&done, restored, cx);
-                    this.github.synced_library = Some(this.store.read(cx).library.clone());
-                    let n = done.synced.len() + done.deleted.len();
-                    this.github.message = Some((
-                        match n {
-                            1 => "Brought in 1 change from GitHub.".to_string(),
-                            n => format!("Brought in {n} changes from GitHub."),
-                        },
-                        false,
-                    ));
+                if let Some((done, restored)) = pulled {
+                    let changed = !done.synced.is_empty() || !done.deleted.is_empty();
+                    if changed {
+                        this.apply_restored(&done, restored, cx);
+                        this.github.synced_library = Some(this.store.read(cx).library.clone());
+                        let n = done.synced.len() + done.deleted.len();
+                        this.github.message = Some((
+                            match n {
+                                1 => "Brought in 1 change from GitHub.".to_string(),
+                                n => format!("Brought in {n} changes from GitHub."),
+                            },
+                            false,
+                        ));
+                    }
+                    if let Some(base) = done.restored_base.clone() {
+                        let state = AppPaths::default_macos().root.join(prompt_sync::SYNC_STATE);
+                        this.store
+                            .update(cx, |s, cx| s.save_restored(base, state, cx));
+                    }
                 }
                 cx.notify();
             });

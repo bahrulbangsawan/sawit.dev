@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::{Context, EventEmitter};
+use sawit_core::github::SyncBase;
 use sawit_core::instances::AppPaths;
 use sawit_core::prompts::{Library, Prompt, now};
 
@@ -148,6 +149,31 @@ impl PromptStore {
     pub fn put(&mut self, prompt: Prompt, cx: &mut Context<Self>) {
         sawit_core::prompt_sync::merge(&mut self.library, prompt);
         self.changed(cx);
+    }
+
+    /// Saves the library now (no debounce) and then, once it is on disk, `base` at `state`: a
+    /// restore's sync state must never be ahead of prompts.json. Nothing is saved while the
+    /// library failed to load.
+    pub fn save_restored(&mut self, base: SyncBase, state: PathBuf, cx: &mut Context<Self>) {
+        if let Some(e) = &self.load_error {
+            self.notice = Some(format!("Unable to save prompts. {e}"));
+            cx.notify();
+            return;
+        }
+        let (library, file) = (self.library.clone(), self.file.clone());
+        let rx = rt::spawn(cx, async move {
+            library.save(&file)?;
+            base.save(&state)
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Err(e)) = rx.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.notice = Some(format!("Unable to save prompts. {e}"));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     pub fn mark_used(&mut self, id: &str, cx: &mut Context<Self>) {

@@ -90,8 +90,7 @@ impl SyncBase {
         }
         let text =
             serde_json::to_string_pretty(self).map_err(|e| CoreError::Parse(e.to_string()))?;
-        std::fs::write(path, text)?;
-        Ok(())
+        crate::files::write_atomic(path, text.as_bytes())
     }
 
     /// After a sync of `files` (path, hash; `None` for one that is gone on both sides) at
