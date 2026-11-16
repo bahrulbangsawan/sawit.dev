@@ -156,8 +156,10 @@ impl NonEmptyOr for str {
 
 /// The tool a command line runs: its program, or for an interpreter
 /// running a launcher script (`node /opt/homebrew/bin/pnpm dev`), that
-/// launcher. A bare word after it is a subcommand (`deno task dev`), not
-/// a script.
+/// launcher. An npm-installed yarn is such a script too
+/// (`node …/yarn/bin/yarn.js dev`): a trailing `.js`, `.cjs` or `.mjs`
+/// is not part of the launcher's name. A bare word after the
+/// interpreter is a subcommand (`deno task dev`), not a script.
 pub fn tool(args: &str) -> &str {
     let name = program(args);
     if INTERPRETERS.contains(&name)
@@ -165,6 +167,10 @@ pub fn tool(args: &str) -> &str {
         && script.contains('/')
     {
         let script = program(script);
+        let script = [".js", ".cjs", ".mjs"]
+            .iter()
+            .find_map(|ext| script.strip_suffix(ext))
+            .unwrap_or(script);
         if LAUNCHERS.contains(&script) && !INTERPRETERS.contains(&script) {
             return script;
         }
@@ -184,7 +190,8 @@ pub(super) fn is_launcher(args: &str) -> bool {
 
 /// A command line made readable: paths shortened to file names, and an
 /// interpreter in front of a launcher dropped (`pnpm dev`, not
-/// `node /opt/homebrew/bin/pnpm dev`).
+/// `node /opt/homebrew/bin/pnpm dev`), with the launcher under its tool
+/// name (`yarn dev`, not `yarn.js dev`).
 pub fn short_command(args: &str) -> String {
     let words: Vec<&str> = if is_shell_command(args) {
         // `sh -c vite --port 3000` → `vite --port 3000`
@@ -201,10 +208,13 @@ pub fn short_command(args: &str) -> String {
     // The program, and an interpreter's script, by file name; other
     // arguments (data directories, config files) as given.
     let shortened = if interpreted && skip == 0 { 2 } else { 1 };
+    let joined = words.join(" ");
+    let launcher = tool(&joined);
     words[skip..]
         .iter()
         .enumerate()
         .map(|(ix, w)| match w.rsplit_once('/') {
+            _ if ix == 0 && skip == 1 => launcher,
             Some((_, name)) if ix < shortened => name,
             _ => w,
         })

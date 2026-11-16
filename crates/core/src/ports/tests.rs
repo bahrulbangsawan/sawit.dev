@@ -148,8 +148,15 @@ fn tools_and_short_commands() {
     assert_eq!(tool("node /opt/homebrew/bin/pnpm dev"), "pnpm");
     assert_eq!(
         tool("node /usr/local/lib/node_modules/yarn/bin/yarn.js dev"),
-        "node"
+        "yarn"
     );
+    assert_eq!(
+        short_command("node /usr/local/lib/node_modules/yarn/bin/yarn.js dev"),
+        "yarn dev"
+    );
+    assert_eq!(tool("node /x/server.js"), "node");
+    assert_eq!(short_command("node /x/server.js"), "node server.js");
+    assert_eq!(tool("node /p/node_modules/pnpm/bin/pnpm.cjs dev"), "pnpm");
     assert_eq!(tool("/usr/bin/python3.12 manage.py runserver"), "python");
     assert_eq!(tool("-zsh"), "zsh");
     assert_eq!(tool("node22 x.js"), "node");
