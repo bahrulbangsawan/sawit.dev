@@ -121,18 +121,35 @@ pub async fn backup(
         return Ok(());
     }
     let _ = std::fs::remove_file(path);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let message = stderr
-        .lines()
-        .map(|l| l.trim_start_matches("pg_dump: ").trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let message = dump_message(&String::from_utf8_lossy(&out.stderr));
     Err(CoreError::Sql(if message.is_empty() {
         format!("pg_dump failed ({}).", out.status)
     } else {
         message
     }))
+}
+
+/// What `pg_dump`'s `stderr` says, made readable: its `pg_dump: ` prefixes and the echo of its own
+/// query ("detail: Query was: LOCK TABLE …", which names every table) go, and a permission error
+/// says what to do about it.
+pub fn dump_message(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(|l| l.trim_start_matches("pg_dump: ").trim())
+        .filter(|l| !l.is_empty() && !l.starts_with("detail: Query was:"))
+        .collect();
+    let mut message = lines.join("\n");
+    let denied = lines.iter().find_map(|l| {
+        let (_, rest) = l.split_once("permission denied for ")?;
+        Some(rest.trim().to_string())
+    });
+    if let Some(what) = denied {
+        message.push_str(&format!(
+            "\nThe user this connection signs in as can't read {what}. Back up as its owner or a \
+             superuser, or back up a schema or table this user can read."
+        ));
+    }
+    message
 }
 
 /// The first record of a CSV file: its column names.
@@ -279,6 +296,25 @@ mod tests {
             ["id", "full, name", "say \"hi\""]
         );
         assert_eq!(csv_header("\"multi\nline\",x\ny"), ["multi\nline", "x"]);
+    }
+
+    #[test]
+    fn dump_message_drops_the_query_echo_and_says_what_to_do() {
+        let stderr = "pg_dump: error: query failed: ERROR:  permission denied for table processed_batches\n\
+                      pg_dump: detail: Query was: LOCK TABLE public.a, public.b IN ACCESS SHARE MODE\n";
+        let m = dump_message(stderr);
+        assert!(!m.contains("LOCK TABLE"), "{m}");
+        assert!(
+            m.starts_with(
+                "error: query failed: ERROR:  permission denied for table processed_batches"
+            ),
+            "{m}"
+        );
+        assert!(m.contains("can't read table processed_batches"), "{m}");
+        assert_eq!(
+            dump_message("pg_dump: error: connection refused\n"),
+            "error: connection refused"
+        );
     }
 
     #[test]
