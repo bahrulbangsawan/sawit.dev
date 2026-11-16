@@ -5,6 +5,7 @@
 
 mod activity;
 mod agent;
+mod blocks;
 mod copy_out;
 mod find;
 mod keys;

@@ -8,13 +8,13 @@ use gpui_kit::*;
 use sawit_core::terminal::{GridSize, MouseAction, MouseButton as TermButton};
 
 use super::mouse::{RightClick, pointer_moved_for_drop, right_click_target, to_term_button};
-use super::paint::{FONT_SIZE, Painter, cell_size, hsla, paint_screen};
+use super::paint::{FONT_SIZE, Painter, cell_size, hsla, paint_screen, terminal_font};
 use super::{PAD_X, TerminalEvent, TerminalView};
 use crate::files::DraggedFile;
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let font = font(cx.theme().mono_font_family.clone());
+        let font = terminal_font(cx);
         let cell = cell_size(window, cx);
         let session = self.session.clone();
         let palette = self.palette.clone();

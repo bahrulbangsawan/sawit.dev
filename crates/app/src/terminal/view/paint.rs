@@ -10,12 +10,29 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use sawit_core::terminal::{CellView, CursorView, Found, Palette, Rgb, Session, Snapshot};
 
+use super::blocks::{self, Block};
+
 pub(super) const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
 
+/// Families tried, in order, for a character the terminal's font has no glyph for: Menlo covers
+/// box drawing, block elements and most symbols TUIs print (Monaco, an older default, lacks
+/// `▀ ▄ ▌ ▐`), Apple Symbols the Braille spinners and arrows, then emoji. Without a cascade a
+/// missing glyph drew as a box with a question mark.
+const FALLBACK_FAMILIES: [&str; 4] = ["Menlo", "SF Mono", "Apple Symbols", "Apple Color Emoji"];
+
+/// The terminal's font: the theme's monospace family, with [`FALLBACK_FAMILIES`] behind it.
+pub(in crate::terminal) fn terminal_font(cx: &App) -> Font {
+    let mut font = font(cx.theme().mono_font_family.clone());
+    font.fallbacks = Some(FontFallbacks::from_fonts(
+        FALLBACK_FAMILIES.iter().map(|f| f.to_string()).collect(),
+    ));
+    font
+}
+
 /// The size of one grid cell: the mono font's advance by its line height.
 pub(in crate::terminal) fn cell_size(window: &Window, cx: &App) -> Size<Pixels> {
-    let font = font(cx.theme().mono_font_family.clone());
+    let font = terminal_font(cx);
     let font_id = window.text_system().resolve_font(&font);
     let font_size = px(FONT_SIZE);
     let cell_width = window
@@ -75,6 +92,8 @@ struct Look {
 /// kept once worked out, to find the row again when the screen scrolls it.
 struct Row {
     backgrounds: Vec<(Range<usize>, Hsla)>,
+    /// Block elements, drawn as rectangles rather than glyphs ([`blocks`]).
+    blocks: Vec<Block>,
     text: Option<ShapedLine>,
     hash: Option<u64>,
 }
@@ -102,6 +121,7 @@ pub(super) fn paint_screen(
             );
             window.paint_quad(fill(bounds, *color));
         }
+        blocks::paint(&row.blocks, point(origin.x, y), cell, window);
         if let Some(text) = &row.text {
             let _ = text.paint(
                 point(origin.x, y),
@@ -214,6 +234,7 @@ fn row_hash(cells: &[CellView]) -> u64 {
 fn make_row(cells: &[CellView], hash: Option<u64>, p: &Painter, window: &Window) -> Row {
     Row {
         backgrounds: backgrounds(cells, p),
+        blocks: block_cells(cells),
         text: shape(cells, p, window),
         hash,
     }
@@ -270,12 +291,34 @@ fn backgrounds(cells: &[CellView], p: &Painter) -> Vec<(Range<usize>, Hsla)> {
     out
 }
 
-/// A row's text shaped as one line, a run per style change; `None` when there is nothing to
-/// draw. Trailing blanks (most of a typical row) are not shaped at all.
-fn shape(cells: &[CellView], p: &Painter, window: &Window) -> Option<ShapedLine> {
-    let last = cells
+/// The row's block elements, each in its cell's text colour.
+fn block_cells(cells: &[CellView]) -> Vec<Block> {
+    cells
         .iter()
-        .rposition(|c| (!c.spacer && c.ch != ' ') || c.underline || c.strikeout)?;
+        .enumerate()
+        .filter(|(_, c)| !c.spacer)
+        .filter_map(|(col, c)| {
+            Some(Block {
+                col,
+                parts: blocks::parts(c.ch)?,
+                color: hsla(c.fg),
+            })
+        })
+        .collect()
+}
+
+/// Drawn by [`blocks`], so left out of the shaped text.
+fn is_block(ch: char) -> bool {
+    ('\u{2580}'..='\u{259F}').contains(&ch)
+}
+
+/// A row's text shaped as one line, a run per style change; `None` when there is nothing to
+/// draw. Trailing blanks (most of a typical row) are not shaped at all; block elements are
+/// blanks here, drawn as rectangles instead.
+fn shape(cells: &[CellView], p: &Painter, window: &Window) -> Option<ShapedLine> {
+    let last = cells.iter().rposition(|c| {
+        (!c.spacer && c.ch != ' ' && !is_block(c.ch)) || c.underline || c.strikeout
+    })?;
     let line = &cells[..=last];
     let mut text = String::with_capacity(line.len());
     let mut runs: Vec<TextRun> = Vec::new();
@@ -283,7 +326,11 @@ fn shape(cells: &[CellView], p: &Painter, window: &Window) -> Option<ShapedLine>
     // Arc clones) per cell was most of the paint time.
     let mut run_key = None;
     for c in line {
-        let ch = if c.spacer { ' ' } else { c.ch };
+        let ch = if c.spacer || is_block(c.ch) {
+            ' '
+        } else {
+            c.ch
+        };
         let len = ch.len_utf8();
         text.push(ch);
         let key = (c.fg, c.bold, c.italic, c.underline, c.strikeout);
