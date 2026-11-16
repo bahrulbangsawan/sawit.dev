@@ -3,6 +3,12 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.13] - 2026-11-17
+
+### Fixes
+
+- **ports**: a dev server started by an npm-installed yarn (node …/yarn.js dev) is labeled yarn dev, not node yarn.js dev
+
 ## [0.0.12] - 2026-11-17
 
 ### Features
