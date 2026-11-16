@@ -162,8 +162,9 @@ pub(super) fn by_command(word: &str, args: &[String]) -> Option<AgentKind> {
 /// `@anthropic-ai/claude-code@latest`, `npm:@google/gemini-cli`, `aider-chat`.
 pub(super) fn by_package(spec: &str) -> Option<AgentKind> {
     let spec = spec.strip_prefix("npm:").unwrap_or(spec);
-    let spec = match spec[1.min(spec.len())..].find('@') {
-        Some(at) => &spec[..at + 1],
+    let first = spec.chars().next().map_or(0, char::len_utf8);
+    let spec = match spec[first..].find('@') {
+        Some(at) => &spec[..first + at],
         None => spec,
     };
     let spec = spec.to_ascii_lowercase();
