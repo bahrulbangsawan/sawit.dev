@@ -3,6 +3,25 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.12] - 2026-11-17
+
+### Features
+
+- **app**: a notice with a long detail opens in the window, where the detail scrolls and Copy takes all of it, instead of a system alert taller than the screen
+- **agents**: a native multi-agent runtime: agent profiles and lifecycle, an ACP client over stdio, a persistent SQLite task queue with a fair scheduler and crash recovery, and agent-to-agent messaging and delegation through seven new MCP tools
+
+### Fixes
+
+- **databases**: the MySQL read-only screen's test imports changes_read_only_mode
+- **ui**: long errors, paths and messages wrap and scroll instead of being cut off: panel footers, banners, toasts, the confirm dialog, port owners, instance details and prompt conflicts, with Copy on long errors
+- **skills**: the install report names the folder of kept skill copies once and writes the home folder as ~ in its notes
+- **databases**: a failed PostgreSQL backup drops pg_dump's echo of its own query, which named every table, and says what to do about a permission error
+- **terminal**: telling agents apart no longer panics on a script or package name that starts with a multi-byte letter
+- **storage**: an accounts, connections or instance list that can't be read is never saved over, and the instance list is re-read before each change so another process's edits are kept
+- **mcp**: single-file exports refuse to replace an existing file unless overwrite=true; MySQL read-only sessions drop NO_BACKSLASH_ESCAPES and ANSI_QUOTES and refuse READ WRITE; Keychain names with line breaks are refused
+- **terminal**: copying the output of a command that still runs reads up to the end of the screen instead of overflowing the row mark
+- **prompts**: a restore saves its sync state only after prompts.json is on disk, and the prompt files are written atomically, so the next backup never reads restored prompts as deleted
+
 ## [0.0.11] - 2026-11-16
 
 ### Features
