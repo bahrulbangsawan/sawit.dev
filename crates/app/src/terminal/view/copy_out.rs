@@ -89,4 +89,26 @@ mod tests {
             "Copied 3 lines, 1 error"
         );
     }
+
+    /// While the command still runs (no prompt yet) its output so far is read: from the row
+    /// after the command to the end of the screen.
+    #[gpui_kit::test]
+    fn the_output_of_a_command_that_still_runs_is_read(cx: &mut TestAppContext) {
+        cx.update(init);
+        let (_, panel) = open_panel(cx);
+        let view = cx.update(|cx| panel.read(cx).tab(0).read(cx).focused_view().clone());
+        ready(cx, &view);
+        let command = "printf 'one\\ntwo\\n'; sleep 30";
+        cx.update(|cx| {
+            view.read(cx)
+                .write(sawit_core::terminal::run_bytes(command))
+        });
+        wait_until(cx, "the command printed", |cx| {
+            let v = view.read(cx);
+            !v.at_prompt() && v.text_tail(20).contains("two")
+        });
+        let out = cx.update(|cx| view.read(cx).last_output());
+        cx.update(|cx| view.read(cx).write(b"\x03".to_vec()));
+        assert_eq!(out, "one\ntwo");
+    }
 }
