@@ -127,13 +127,17 @@ impl Session {
 
     /// The text from row mark `from` up to (not including) row mark `to` ([`Self::cursor_mark`]),
     /// as plain text: soft-wrapped rows joined into one line, trailing spaces and blank lines at
-    /// the end dropped. A screen holds characters, never escape codes, so none are copied.
+    /// the end dropped. A screen holds characters, never escape codes, so none are copied. A `to`
+    /// past the screen (`usize::MAX`) reads through its end.
     pub fn text_from(&self, from: usize, to: usize) -> String {
         let term = self.term.lock();
         let grid = term.grid();
-        let history = grid.history_size() as i32;
-        let last = grid.screen_lines() as i32 - 1;
-        let row_of = |mark: usize| (mark as i32 - history).clamp(-history, last + 1);
+        let history = grid.history_size() as i64;
+        let last = grid.screen_lines() as i64 - 1;
+        let row_of = |mark: usize| {
+            let mark = i64::try_from(mark).unwrap_or(i64::MAX);
+            mark.saturating_sub(history).clamp(-history, last + 1) as i32
+        };
         let (start, end) = (row_of(from), row_of(to));
         if start >= end {
             return String::new();
