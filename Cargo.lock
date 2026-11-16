@@ -7606,7 +7606,7 @@ checksum = "ece8e78b2f38ec51c51f5d475df0a7187ba5111b2a28bdc761ee05b075d40a71"
 
 [[package]]
 name = "sawit"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "block2 0.6.2",
  "env_logger",
@@ -7663,7 +7663,7 @@ dependencies = [
 
 [[package]]
 name = "sawit-board"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "base64 0.22.1",
  "figcraft-color",
@@ -7689,7 +7689,7 @@ dependencies = [
 
 [[package]]
 name = "sawit-core"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "alacritty_terminal",
  "bytes",
@@ -7729,7 +7729,7 @@ dependencies = [
 
 [[package]]
 name = "sawit-mcp"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "figcraft-format",
  "futures",

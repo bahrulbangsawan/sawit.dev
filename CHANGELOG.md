@@ -3,6 +3,21 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.11] - 2026-11-16
+
+### Features
+
+- **databases**: MySQL and MariaDB: connect from a URL, browse the tree, page and filter tables, edit rows, run SQL, export CSV or Excel and draw the schema; agents query and change them through the MCP tools
+
+### Fixes
+
+- **browser**: arrow keys no longer type missing-glyph boxes into Annotate's comment box or any page field
+- **terminal**: block elements fill their cells, so QR codes (Expo Go, qrcode-terminal) and bars draw solid, and missing glyphs fall back to Menlo and Apple Symbols
+
+### Performance
+
+- **terminal**: the font fallback cascade is Menlo and Apple Symbols only
+
 ## [0.0.10] - 2026-11-08
 
 ### Features
