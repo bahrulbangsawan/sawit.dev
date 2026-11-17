@@ -34,10 +34,45 @@ const UPPER_RIGHT: Part = part(0.5, 0., 1., 0.5);
 const LOWER_LEFT: Part = part(0., 0.5, 0.5, 1.);
 const LOWER_RIGHT: Part = part(0.5, 0.5, 1., 1.);
 
-/// The parts `ch` fills, when it is a block element.
+/// Block elements, and the sextants of Symbols for Legacy Computing (U+1FB00–U+1FB3B).
+const BLOCKS: std::ops::RangeInclusive<char> = '\u{2580}'..='\u{259F}';
+const SEXTANTS: std::ops::RangeInclusive<char> = '\u{1FB00}'..='\u{1FB3B}';
+
+/// Whether `ch` is drawn here as rectangles, not shaped as text.
+pub(super) fn is_block(ch: char) -> bool {
+    BLOCKS.contains(&ch) || SEXTANTS.contains(&ch)
+}
+
+/// A sextant's sixths: a 2×3 grid of the cell, bit 0 the top left, bit 1 the top right, down to
+/// bit 5 the bottom right. Unicode numbers the 64 patterns in order but leaves out the four
+/// drawn elsewhere: empty (space), the left half `▌` (sextant-135), the right half `▐`
+/// (sextant-246) and full `█`. Expo (SDK 58+) prints its QR codes with them.
+fn sextant(c: u32) -> Vec<Part> {
+    let mut bits = c - 0x1FB00 + 1;
+    if bits >= 0b010101 {
+        bits += 1;
+    }
+    if bits >= 0b101010 {
+        bits += 1;
+    }
+    let third = 1. / 3.;
+    (0..6)
+        .filter(|i| bits & (1 << i) != 0)
+        .map(|i| {
+            let x = (i % 2) as f32 * 0.5;
+            let y = (i / 2) as f32 * third;
+            part(x, y, x + 0.5, if i / 2 == 2 { 1. } else { y + third })
+        })
+        .collect()
+}
+
+/// The parts `ch` fills, when it is a block element or a sextant.
 pub(super) fn parts(ch: char) -> Option<Vec<Part>> {
+    if SEXTANTS.contains(&ch) {
+        return Some(sextant(ch as u32));
+    }
     let c = ch as u32;
-    if !(0x2580..=0x259F).contains(&c) {
+    if !BLOCKS.contains(&ch) {
         return None;
     }
     let eighth = |n: u32| n as f32 / 8.;
@@ -130,6 +165,42 @@ mod tests {
         assert_eq!(parts('▚').unwrap().len(), 2);
         assert!(parts('a').is_none());
         assert!(parts('─').is_none());
+    }
+
+    /// Expo (SDK 58+) prints its QR code in sextants: each cell a 2×3 grid of sixths.
+    #[test]
+    fn sextants_fill_their_sixths() {
+        let third = 1. / 3.;
+        // 🬀 sextant-1: the top left sixth.
+        let p = one('\u{1FB00}');
+        assert_eq!((p.x0, p.y0, p.x1), (0., 0., 0.5));
+        assert!((p.y1 - third).abs() < 1e-6);
+        // 🬓 sextant-35 (U+1FB13) is the last before the skipped ▌ (sextant-135).
+        let ps = parts('\u{1FB13}').unwrap();
+        assert_eq!(ps.len(), 2);
+        assert!(ps.iter().all(|p| p.x0 == 0. && p.y0 > 0.));
+        // 🬔 sextant-235 (U+1FB14) is the first after it.
+        let ps = parts('\u{1FB14}').unwrap();
+        assert_eq!(ps.len(), 3);
+        assert!(ps.iter().any(|p| p.x0 == 0.5 && p.y0 == 0.));
+        // 🬻 sextant-23456 (U+1FB3B), the last, after the skipped ▐ (sextant-246).
+        let ps = parts('\u{1FB3B}').unwrap();
+        assert_eq!(ps.len(), 5);
+        assert!(!ps.iter().any(|p| p.x0 == 0. && p.y0 == 0.));
+        assert!(super::is_block('\u{1FB00}') && super::is_block('\u{1FB3B}'));
+        assert!(super::is_block('▀') && !super::is_block('\u{1FB3C}'));
+        assert!(parts('\u{1FB3C}').is_none());
+    }
+
+    #[test]
+    fn every_sextant_is_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        for c in 0x1FB00..=0x1FB3B_u32 {
+            let ps = parts(char::from_u32(c).unwrap()).unwrap();
+            let key: Vec<_> = ps.iter().map(|p| (p.x0.to_bits(), p.y0.to_bits())).collect();
+            assert!(!ps.is_empty() && ps.len() < 6);
+            assert!(seen.insert(key), "{c:X}");
+        }
     }
 
     #[test]

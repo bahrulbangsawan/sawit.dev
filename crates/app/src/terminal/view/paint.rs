@@ -310,7 +310,7 @@ fn block_cells(cells: &[CellView]) -> Vec<Block> {
 
 /// Drawn by [`blocks`], so left out of the shaped text.
 fn is_block(ch: char) -> bool {
-    ('\u{2580}'..='\u{259F}').contains(&ch)
+    blocks::is_block(ch)
 }
 
 /// A row's text shaped as one line, a run per style change; `None` when there is nothing to
