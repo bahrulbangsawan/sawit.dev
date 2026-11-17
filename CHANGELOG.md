@@ -3,6 +3,12 @@
 Every change to Sawit, by version. Each push to `main` is a new release: the patch version is bumped and
 its section is written automatically by `.githooks/pre-push` (`scripts/release.sh`) from the commit messages.
 
+## [0.0.14] - 2026-11-17
+
+### Fixes
+
+- **terminal**: sextants fill their sixths, so Expo SDK 58's QR code scans
+
 ## [0.0.13] - 2026-11-17
 
 ### Fixes
